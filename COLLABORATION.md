@@ -1,6 +1,6 @@
 # Claude 협업 안내
 
-이 저장소에서 식질 품질 개선 작업을 시작할 때는 먼저 [`MANGA_TRANSLATOR_OPTIMIZATION_PLAN.md`](./MANGA_TRANSLATOR_OPTIMIZATION_PLAN.md)를 읽는다.
+이 저장소에서 식질 품질 개선 작업을 시작할 때는 먼저 [`무추론 투스탭 번역기에 대한 기능 업데이트 대작전.md`](./무추론%20투스탭%20번역기에%20대한%20기능%20업데이트%20대작전.md)를 읽는다.
 
 ## 목표
 
@@ -49,11 +49,15 @@
 - 검증 방법
 - 아직 구현하지 않을 항목
 
-상세 판단 기준과 Codex용 실행 프롬프트는 모두 [`MANGA_TRANSLATOR_OPTIMIZATION_PLAN.md`](./MANGA_TRANSLATOR_OPTIMIZATION_PLAN.md)에 있다. 이 파일은 빠른 진입점이며, 상세 문서를 대체하지 않는다.
+상세 판단 기준과 Codex용 실행 프롬프트는 모두 [`무추론 투스탭 번역기에 대한 기능 업데이트 대작전.md`](./무추론%20투스탭%20번역기에%20대한%20기능%20업데이트%20대작전.md)에 있다. 이 파일은 빠른 진입점이며, 상세 문서를 대체하지 않는다.
 
 ## 작업 로그
 
 작업을 마칠 때마다 아래에 새 항목을 맨 위에 추가한다 (날짜, 작업자, 요약, 변경 파일).
+
+- 2026-08-07 (Claude): 일본어 방점(傍点) 강조 처리. 모델이 방점을 정확히 감지하는데 표현 통로가 없어 `·`를 본문에 삽입하던 문제(세로쓰기에서 점이 독립 글자 칸을 차지해 글자 수가 배로 늘고 폰트가 작아짐). 렌더러의 `**...**` 인라인 강조 + `emphasis_font_dir`는 이미 구현돼 있었으나 프롬프트가 마커 존재를 안 알려주고 `emphasis_font_pack`도 비어 있어 통로 전체가 잠들어 있었음. `emphasis_font_pack`을 `Nanum_Gothic`(bold 슬롯이 ExtraBold로 잡힘)으로 설정하고, 지침에 방점→`**...**` 규칙을 6번 섹션으로 추가. 코드 변경 없음. 변경 파일: 라이브 `%LOCALAPPDATA%\MangaTranslator\config.json`, `config.public.json` (`.bak_before_emphasis` 백업 있음).
+  - 68페이지 실측 검증 완료: 방점 있는 `히·나·양!!!!`→`**히나**!!!!`, `...히·나·?`→`...**히나**?`, 방점 **없는** `히나`엔 별표 안 붙음(오탐 없음). 세션 파일에서 두 강조 항목 모두 `emphasis_font_dir` 적용 확인.
+  - 후속: 말풍선 밖(OSB) 태그는 `outside_text_osb_emphasis_font_pack`이라는 별도 설정을 쓰는데 비어 있어서 강조가 무시되고 있었음(`placeholders.py:110`). 같은 값(`Nanum_Gothic`)으로 설정. 백업 `.bak_before_osb_emphasis`. OSB 방점은 아직 실측 미검증.
 
 - 2026-08-06 (Claude): `core/pipeline.py`의 `detect_panels()` 중복 호출 제거. 패널 정렬 사용 시 이미지 1장당 `detect_panels()`가 두 번(사전 정렬용 + 최종 정렬용) 호출되던 것을, 첫 호출 결과(`_panels_detected_early`)를 재사용하도록 수정. `ENABLE_COMPONENT_ORDER_DEBUG` 디버그 경로는 건드리지 않음(그쪽은 여전히 별도로 재탐지). 변경 파일: `core/pipeline.py`.
 
