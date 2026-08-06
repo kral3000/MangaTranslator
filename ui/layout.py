@@ -4,35 +4,10 @@ from typing import Any
 
 import gradio as gr
 
-from utils.model_metadata import (
-    FLUX_SDCPP_DIFFUSION_QUANTS,
-    flux_sdcpp_text_encoder_default,
-    flux_sdcpp_text_encoder_quants,
-    flux_sdcpp_valid_text_encoder_quant,
-    flux_valid_backend,
-)
+from core.tag_styles import TAG_DEFINITIONS, TAG_STYLE_COLUMNS, tag_styles_to_table
+from . import callbacks, korean, settings_manager, utils
 
-from . import callbacks, settings_manager, utils
-
-_FLUX_BACKEND_CHOICES_KLEIN = [
-    ("sd.cpp", "sdcpp"),
-    ("SDNQ", "sdnq"),
-]
-_FLUX_BACKEND_CHOICES_KONTEXT = [
-    ("sd.cpp", "sdcpp"),
-    ("SDNQ", "sdnq"),
-    ("Nunchaku (CUDA)", "nunchaku"),
-]
-_FLUX_BACKEND_CHOICES_DEFAULT = [("SDNQ", "sdnq")]
-
-
-def _flux_backend_choices(method: str):
-    if method in ("flux_klein_9b", "flux_klein_4b"):
-        return _FLUX_BACKEND_CHOICES_KLEIN
-    if method == "flux_kontext":
-        return _FLUX_BACKEND_CHOICES_KONTEXT
-    return _FLUX_BACKEND_CHOICES_DEFAULT
-
+korean.install_gradio_korean(gr)
 
 _ALPHABETICAL_LANGUAGES = [
     "Afrikaans",
@@ -148,6 +123,202 @@ function() {
 }
 """
 
+js_folder_upload = r"""
+function() {
+    const uploadElementIds = ['batch_folder_upload'];
+    const encodedPathPrefix = '__MT_RELATIVE_PATH__';
+    const supportedImage = /\.(?:jpe?g|png|webp|bmp|tiff?)$/i;
+
+    const encodeRelativePath = (relativePath) => {
+        const bytes = new TextEncoder().encode(relativePath.replaceAll('\\', '/'));
+        let binary = '';
+        for (const byte of bytes) {
+            binary += String.fromCharCode(byte);
+        }
+        return btoa(binary)
+            .replaceAll('+', '-')
+            .replaceAll('/', '_')
+            .replace(/=+$/, '');
+    };
+
+    const preserveRelativePath = (file, relativePath) => {
+        const extensionMatch = file.name.match(/\.[^.]+$/);
+        const extension = extensionMatch ? extensionMatch[0] : '';
+        const encodedName = `${encodedPathPrefix}${encodeRelativePath(relativePath)}${extension}`;
+        return new File([file], encodedName, {
+            type: file.type,
+            lastModified: file.lastModified,
+        });
+    };
+
+    const replaceUploadDisplayNames = (root, replacements) => {
+        const apply = () => {
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            const textNodes = [];
+            while (walker.nextNode()) {
+                textNodes.push(walker.currentNode);
+            }
+            for (const node of textNodes) {
+                let text = node.nodeValue || '';
+                for (const [encodedName, displayName] of replacements.entries()) {
+                    if (text.includes(encodedName)) {
+                        text = text.replaceAll(encodedName, displayName);
+                    }
+                }
+                node.nodeValue = text;
+            }
+            for (const element of root.querySelectorAll('[title], [aria-label]')) {
+                for (const attr of ['title', 'aria-label']) {
+                    const value = element.getAttribute(attr);
+                    if (!value) {
+                        continue;
+                    }
+                    let replaced = value;
+                    for (const [encodedName, displayName] of replacements.entries()) {
+                        replaced = replaced.replaceAll(encodedName, displayName);
+                    }
+                    if (replaced !== value) {
+                        element.setAttribute(attr, replaced);
+                    }
+                }
+            }
+        };
+        setTimeout(apply, 100);
+        setTimeout(apply, 500);
+        setTimeout(apply, 1500);
+    };
+
+    const readDirectory = async (directoryEntry) => {
+        const reader = directoryEntry.createReader();
+        const entries = [];
+        while (true) {
+            const batch = await new Promise((resolve, reject) => {
+                reader.readEntries(resolve, reject);
+            });
+            if (!batch.length) {
+                break;
+            }
+            entries.push(...batch);
+        }
+
+        const files = [];
+        for (const entry of entries) {
+            if (entry.isDirectory) {
+                files.push(...await readDirectory(entry));
+            } else if (entry.isFile && supportedImage.test(entry.name)) {
+                const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+                files.push({
+                    file,
+                    relativePath: entry.fullPath.replace(/^\/+/, ''),
+                });
+            }
+        }
+        return files;
+    };
+
+    const setInputFiles = (input, filesWithPaths) => {
+        const transfer = new DataTransfer();
+        const replacements = new Map();
+        for (const {file, relativePath} of filesWithPaths) {
+            const preservedFile = preserveRelativePath(file, relativePath);
+            replacements.set(preservedFile.name, relativePath.replaceAll('\\', '/'));
+            transfer.items.add(preservedFile);
+        }
+        input.files = transfer.files;
+        input.dataset.mtFolderPrepared = '1';
+        input.dispatchEvent(new Event('change', {bubbles: true}));
+        delete input.dataset.mtFolderPrepared;
+        replaceUploadDisplayNames(input.closest('[id]') || input.parentElement || document.body, replacements);
+    };
+
+    const setupFolderUpload = (uploadElementId) => {
+        const root = document.getElementById(uploadElementId);
+        if (!root || root.dataset.mtFolderUploadReady === '1') {
+            return Boolean(root);
+        }
+        root.dataset.mtFolderUploadReady = '1';
+
+        root.addEventListener('change', (event) => {
+            const input = event.target;
+            if (!(input instanceof HTMLInputElement) || input.type !== 'file') {
+                return;
+            }
+            if (input.dataset.mtFolderPrepared === '1') {
+                return;
+            }
+
+            const folderFiles = Array.from(input.files || [])
+                .filter((file) => file.webkitRelativePath && supportedImage.test(file.name))
+                .map((file) => ({file, relativePath: file.webkitRelativePath}));
+            if (!folderFiles.length) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            setInputFiles(input, folderFiles);
+        }, true);
+
+        root.addEventListener('drop', async (event) => {
+            const entries = Array.from(event.dataTransfer?.items || [])
+                .map((item) => item.webkitGetAsEntry?.())
+                .filter(Boolean);
+            if (!entries.some((entry) => entry.isDirectory)) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            const input = root.querySelector('input[type="file"]');
+            if (!input) {
+                return;
+            }
+
+            const filesWithPaths = [];
+            for (const entry of entries) {
+                if (entry.isDirectory) {
+                    filesWithPaths.push(...await readDirectory(entry));
+                } else if (entry.isFile && supportedImage.test(entry.name)) {
+                    const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+                    filesWithPaths.push({
+                        file,
+                        relativePath: entry.fullPath.replace(/^\/+/, ''),
+                    });
+                }
+            }
+            if (filesWithPaths.length) {
+                setInputFiles(input, filesWithPaths);
+            }
+        }, true);
+
+        return true;
+    };
+
+    const setupAllFolderUploads = () => {
+        let foundAny = false;
+        let missingAny = false;
+        for (const uploadElementId of uploadElementIds) {
+            const found = setupFolderUpload(uploadElementId);
+            foundAny = foundAny || found;
+            missingAny = missingAny || !found;
+        }
+        return {foundAny, missingAny};
+    };
+
+    const initial = setupAllFolderUploads();
+    if (initial.missingAny) {
+        const observer = new MutationObserver(() => {
+            const state = setupAllFolderUploads();
+            if (!state.missingAny) {
+                observer.disconnect();
+            }
+        });
+        observer.observe(document.body, {childList: true, subtree: true});
+    }
+}
+"""
+
+
 js_status_fade = """
 () => {
     // Find the specific config status element by its ID
@@ -190,7 +361,7 @@ js_refresh_button_reset = """
     setTimeout(() => {
         const refreshButton = document.querySelector('.config-refresh-button button');
          if (refreshButton) {
-            refreshButton.textContent = 'Refresh Models / Fonts';
+            refreshButton.textContent = '모델 / 글꼴 새로고침';
             refreshButton.disabled = false;
         }
     }, 100); // Small delay to ensure Gradio update cycle completes
@@ -201,7 +372,7 @@ js_refresh_button_processing = """
 () => {
     const refreshButton = document.querySelector('.config-refresh-button button');
     if (refreshButton) {
-        refreshButton.textContent = 'Refreshing...';
+        refreshButton.textContent = '새로고침 중...';
         refreshButton.disabled = true;
     }
     return []; // Required for JS function input/output
@@ -235,12 +406,17 @@ def create_layout(
     with gr.Blocks(
         title="MangaTranslator", js=js_credits, css_paths=str(css_path)
     ) as app:
+
         gr.Markdown("# MangaTranslator")
 
         font_choices, initial_default_font = utils.get_available_font_packs(
             fonts_base_dir
         )
         saved_settings = settings_manager.get_saved_settings()
+        output_browser_root = (
+            Path(__file__).resolve().anchor
+            or str(Path(__file__).resolve().parents[1])
+        )
 
         saved_font_pack = saved_settings.get("font_pack")
         default_font = (
@@ -255,9 +431,23 @@ def create_layout(
             else (initial_default_font if initial_default_font else None)
         )
 
+        saved_emphasis_font_pack = saved_settings.get("emphasis_font_pack", "")
+        if saved_emphasis_font_pack not in ([""] + font_choices):
+            saved_emphasis_font_pack = ""
+
+        saved_tag_style_rows = tag_styles_to_table(
+            saved_settings.get("tag_styles", saved_settings.get("tag_style_table"))
+        )
+
         saved_osb_font_pack = saved_settings.get("outside_text_osb_font_pack", "")
         if saved_osb_font_pack not in ([""] + font_choices):
             saved_osb_font_pack = ""
+
+        saved_osb_emphasis_font_pack = saved_settings.get(
+            "outside_text_osb_emphasis_font_pack", ""
+        )
+        if saved_osb_emphasis_font_pack not in ([""] + font_choices):
+            saved_osb_emphasis_font_pack = ""
 
         initial_provider = saved_settings.get(
             "provider", settings_manager.DEFAULT_SETTINGS["provider"]
@@ -305,6 +495,7 @@ def create_layout(
                             label="Text Font",
                             value=default_font,
                             filterable=False,
+                            visible=False,
                         )
                         with gr.Accordion("Translation Settings", open=True):
                             # Hidden state to store original language selection before manga-ocr forces Japanese
@@ -327,8 +518,8 @@ def create_layout(
                             label="Special Instructions",
                             placeholder="Give the LLM optional context, formatting instructions, etc.",
                             value=saved_settings.get("special_instructions", ""),
-                            lines=1,
-                            max_lines=10,
+                            lines=8,
+                            max_lines=20,
                             elem_id="translator_special_instructions",
                         )
                     with gr.Column(scale=1):
@@ -344,20 +535,84 @@ def create_layout(
                             elem_id="translator_status_message",
                         )
                         with gr.Row():
+                            translator_saved_file = gr.File(
+                                label="저장된 결과 파일",
+                                interactive=False,
+                                visible=True,
+                            )
+                            translator_plain_file = gr.File(
+                                label="일반 이미지 사본",
+                                interactive=False,
+                                visible=True,
+                            )
+                        editor_session_state = gr.State(value="")
+                        with gr.Row():
                             translate_button = gr.Button("Translate", variant="primary")
                             clear_button = gr.Button("Clear")
                             cancel_button = gr.Button(
                                 "Cancel", variant="stop", visible=False
                             )
+                            open_advanced_editor_button = gr.Button(
+                                "고급 편집기 열기", visible=False
+                            )
+
+            with gr.TabItem("고급 이미지 편집기"):
+                with gr.Row(equal_height=False):
+                    with gr.Column(scale=1):
+                        image_editor_folder_path = gr.Textbox(
+                            label="편집할 폴더 경로",
+                            value=saved_settings.get(
+                                "image_editor_source_path", ""
+                            ),
+                            placeholder=r"C:\편집할 이미지 폴더",
+                            info=(
+                                "Windows 폴더 선택창에서 실제 이미지 폴더를 선택합니다. "
+                                "하위 폴더의 이미지도 함께 불러오며, 편집기에서 원본 덮어쓰기를 사용할 수 있습니다."
+                            ),
+                            interactive=False,
+                        )
+                        image_editor_folder_button = gr.Button(
+                            "편집할 폴더 선택", variant="secondary"
+                        )
+                        image_editor_font_dropdown = gr.Dropdown(
+                            choices=font_choices,
+                            label="추가 텍스트 글꼴",
+                            value=default_font,
+                            filterable=False,
+                            visible=False,
+                        )
+                        with gr.Row():
+                            image_editor_create_button = gr.Button(
+                                "편집 세션 만들기", variant="primary"
+                            )
+                            image_editor_clear_button = gr.Button("초기화")
+                    with gr.Column(scale=1):
+                        image_editor_session_select = gr.Dropdown(
+                            choices=[],
+                            label="편집할 이미지",
+                            visible=False,
+                            interactive=True,
+                            filterable=False,
+                        )
+                        image_editor_open_button = gr.Button(
+                            "고급 편집기 열기",
+                            visible=False,
+                        )
+                        image_editor_status = gr.Textbox(
+                            label="상태",
+                            interactive=False,
+                            elem_id="image_editor_status_message",
+                        )
 
             with gr.TabItem("Batch"):
                 with gr.Row():
                     with gr.Column(scale=1):
                         input_files = gr.File(
-                            label="Upload Images or Folder",
+                            label="Upload Entire Folder",
                             file_count="directory",
                             file_types=["image"],
                             type="filepath",
+                            elem_id="batch_folder_upload",
                         )
                         input_zip = gr.File(
                             label="Upload ZIP Archive (preserves directory structure)",
@@ -370,6 +625,7 @@ def create_layout(
                             label="Text Font",
                             value=batch_default_font,
                             filterable=False,
+                            visible=False,
                         )
                         with gr.Accordion("Translation Settings", open=True):
                             # Hidden state to store original language selection before manga-ocr forces Japanese
@@ -398,31 +654,26 @@ def create_layout(
                             label="Special Instructions",
                             placeholder="Give the LLM optional context, formatting instructions, etc.",
                             value=saved_settings.get("batch_special_instructions", ""),
-                            lines=1,
-                            max_lines=10,
+                            lines=8,
+                            max_lines=20,
                             elem_id="batch_special_instructions",
                         )
                         batch_parallel_requests = gr.Slider(
                             minimum=1,
-                            maximum=20,
+                            maximum=10,
                             value=int(saved_settings.get("batch_parallel_requests", 1)),
                             step=1,
                             label="Parallel Requests",
-                            info=(
-                                "Controls the number of parallel workers, "
-                                "one per page. Does not affect translation "
-                                "quality."
-                            ),
+                            info="Number of images to process simultaneously. Does not affect translation quality.",
                         )
-                        batch_parallel_within_pages = gr.Checkbox(
-                            label="Use Parallel Requests Within Pages",
-                            value=bool(
-                                saved_settings.get("batch_parallel_within_pages", False)
+                        batch_retry_failed_once = gr.Checkbox(
+                            value=saved_settings.get(
+                                "batch_retry_failed_once", False
                             ),
+                            label="Retry Failed Files Once",
                             info=(
-                                "Allows parallel workers to be shared with "
-                                "independent LLM and Flux work within each "
-                                "page."
+                                "After the batch finishes, retry files that failed once "
+                                "before creating download ZIPs."
                             ),
                         )
                         batch_previous_context_image_count = gr.Slider(
@@ -467,6 +718,22 @@ def create_layout(
                                 "reference. Might improve translation quality."
                             ),
                         )
+                        batch_previous_context_text_mode = gr.Dropdown(
+                            choices=[
+                                ("Wait for previous OCR (quality)", "strict"),
+                                ("Use ready OCR only (parallel)", "available"),
+                            ],
+                            value=saved_settings.get(
+                                "batch_previous_context_text_mode", "strict"
+                            ),
+                            label="Previous OCR Context Mode",
+                            info=(
+                                "Strict waits for previous pages before translation. "
+                                "Ready-only uses completed previous OCR without waiting, "
+                                "so API requests can run in parallel but may send fewer "
+                                "previous pages."
+                            ),
+                        )
                     with gr.Column(scale=1):
                         batch_output_gallery = gr.Gallery(
                             label="Translated Images",
@@ -482,12 +749,33 @@ def create_layout(
                             elem_id="batch_status_message",
                         )
                         with gr.Row():
+                            batch_success_zip_file = gr.File(
+                                label="Successful Files ZIP",
+                                interactive=False,
+                                visible=True,
+                            )
+                            batch_failed_zip_file = gr.File(
+                                label="Failed Files ZIP",
+                                interactive=False,
+                                visible=True,
+                            )
+                        batch_editor_session_select = gr.Dropdown(
+                            choices=[],
+                            label="고급 편집기 세션",
+                            visible=False,
+                            interactive=True,
+                            filterable=False,
+                        )
+                        with gr.Row():
                             batch_process_button = gr.Button(
                                 "Start Batch Translating", variant="primary"
                             )
                             batch_clear_button = gr.Button("Clear")
                             batch_cancel_button = gr.Button(
                                 "Cancel", variant="stop", visible=False
+                            )
+                            batch_advanced_editor_button = gr.Button(
+                                "고급 편집기 열기", visible=False
                             )
 
             with gr.TabItem("Config", elem_id="settings-tab-container"):
@@ -527,6 +815,10 @@ def create_layout(
                             "Rendering", elem_classes="nav-button"
                         )
                         nav_buttons.append(nav_button_rendering)
+                        nav_button_tag_styles = gr.Button(
+                            "태그별 렌더링", elem_classes="nav-button"
+                        )
+                        nav_buttons.append(nav_button_tag_styles)
                         nav_button_outside_text = gr.Button(
                             "OSB Text", elem_classes="nav-button"
                         )
@@ -665,6 +957,78 @@ def create_layout(
                                     "Lower helps clean edge-hugging text; higher preserves outlines."
                                 ),
                             )
+                            inpaint_colored_bubbles = gr.Checkbox(
+                                value=saved_settings.get(
+                                    "inpaint_colored_bubbles", False
+                                ),
+                                label="Use LAMA Large for Colored Bubbles",
+                                info=(
+                                    "Use mask-based LAMA Large instead of Flux for text "
+                                    "inside colored, grayscale, or gradient speech bubbles."
+                                ),
+                            )
+                            colored_bubble_inpainting_size = gr.Slider(
+                                256,
+                                4096,
+                                value=saved_settings.get(
+                                    "colored_bubble_inpainting_size", 2048
+                                ),
+                                step=256,
+                                label="LAMA Inpainting Size",
+                                info=(
+                                    "Maximum image side used by LAMA. Larger values preserve "
+                                    "more detail but require more memory."
+                                ),
+                                interactive=saved_settings.get(
+                                    "inpaint_colored_bubbles", False
+                                ),
+                            )
+                            colored_bubble_inpainting_precision = gr.Dropdown(
+                                choices=["fp32", "bf16", "fp16"],
+                                value=saved_settings.get(
+                                    "colored_bubble_inpainting_precision", "fp32"
+                                ),
+                                label="LAMA Precision",
+                                info=(
+                                    "GPU precision for LAMA. FP32 is the compatibility "
+                                    "default; BF16 is recommended on supported recent GPUs."
+                                ),
+                                interactive=saved_settings.get(
+                                    "inpaint_colored_bubbles", False
+                                ),
+                            )
+                            colored_bubble_mask_kernel_size = gr.Slider(
+                                1,
+                                31,
+                                value=saved_settings.get(
+                                    "colored_bubble_mask_kernel_size", 3
+                                ),
+                                step=2,
+                                label="Text Mask Kernel Size",
+                                info=(
+                                    "Kernel used to expand the detected text mask. "
+                                    "Odd values are used."
+                                ),
+                                interactive=saved_settings.get(
+                                    "inpaint_colored_bubbles", False
+                                ),
+                            )
+                            colored_bubble_mask_dilation_offset = gr.Slider(
+                                0,
+                                256,
+                                value=saved_settings.get(
+                                    "colored_bubble_mask_dilation_offset", 50
+                                ),
+                                step=1,
+                                label="Mask Dilation Offset (px)",
+                                info=(
+                                    "Expands the text mask to include outlines, antialiasing, "
+                                    "and attached symbols. Expansion is clipped inside the bubble."
+                                ),
+                                interactive=saved_settings.get(
+                                    "inpaint_colored_bubbles", False
+                                ),
+                            )
 
                         setting_groups.append(group_cleaning)
 
@@ -739,7 +1103,7 @@ def create_layout(
                             )
                             google_api_key = gr.Textbox(
                                 label="Google AI Studio API Key",
-                                placeholder="Enter Google AI Studio API key (starts with AI... / AQ...)",
+                                placeholder="Enter Google AI Studio API key (starts with AI...)",
                                 type="password",
                                 value=saved_settings.get("google_api_key", ""),
                                 show_copy_button=False,
@@ -806,19 +1170,6 @@ def create_layout(
                                 visible=(config_initial_provider == "Moonshot AI"),
                                 elem_id="moonshot_api_key",
                                 info="Stored locally. Or set via MOONSHOT_API_KEY env var.",
-                            )
-                            mimo_api_key = gr.Textbox(
-                                label="Xiaomi MiMo API Key",
-                                placeholder="Enter MiMo API key (starts with sk-... or tp-...)",
-                                type="password",
-                                value=saved_settings.get("mimo_api_key", ""),
-                                show_copy_button=False,
-                                visible=(config_initial_provider == "Xiaomi MiMo"),
-                                elem_id="mimo_api_key",
-                                info=(
-                                    "Stored locally. Or set via MIMO_API_KEY env var. "
-                                    "Pay-as-you-go keys start with sk-; Token Plan keys start with tp-."
-                                ),
                             )
                             openrouter_api_key = gr.Textbox(
                                 label="OpenRouter API Key",
@@ -919,7 +1270,7 @@ def create_layout(
                                 elem_id="reasoning_effort_dropdown",
                             )
 
-                            # Effort dropdown (Claude Opus 4.5+ and Sonnet 4.6)
+                            # Effort dropdown (Claude Opus 4.5/4.6/4.7 and Sonnet 4.6)
                             (
                                 _initial_effort_visible,
                                 _initial_effort_choices,
@@ -942,7 +1293,7 @@ def create_layout(
                                 choices=_initial_effort_choices,
                                 label="Effort",
                                 value=_initial_effort_value,
-                                info="Controls token spending eagerness. Opus 4.5+, Sonnet 4.6, Fable 5 only.",
+                                info="Controls token spending eagerness. Opus 4.5/4.6/4.7, Sonnet 4.6 only.",
                                 visible=_initial_effort_visible,
                                 elem_id="effort_dropdown",
                             )
@@ -1110,40 +1461,6 @@ def create_layout(
                                 elem_id="media_resolution_context_dropdown",
                             )
 
-                            initial_use_custom_sampling_value = saved_settings.get(
-                                "use_custom_sampling", True
-                            )
-                            initial_reasoning_effort = saved_settings.get(
-                                "reasoning_effort"
-                            )
-                            (
-                                initial_temp_interactive,
-                                initial_top_p_interactive,
-                                initial_top_k_interactive,
-                            ) = utils.get_sampling_slider_interactivity(
-                                config_initial_provider,
-                                config_initial_model_name,
-                                initial_reasoning_effort,
-                                use_custom_sampling=initial_use_custom_sampling_value,
-                            )
-                            initial_use_custom_sampling_visible = (
-                                utils.is_use_custom_sampling_visible(
-                                    config_initial_provider,
-                                    config_initial_model_name,
-                                    initial_reasoning_effort,
-                                )
-                            )
-
-                            use_custom_sampling_checkbox = gr.Checkbox(
-                                label="Use Custom Sampling Parameters",
-                                value=initial_use_custom_sampling_value,
-                                info=(
-                                    "Send custom temperature, top-p, and top-k values. "
-                                    "Disabling may improve translation quality for some models."
-                                ),
-                                visible=initial_use_custom_sampling_visible,
-                                elem_id="use_custom_sampling_checkbox",
-                            )
                             temperature = gr.Slider(
                                 0,
                                 2.0,
@@ -1151,7 +1468,6 @@ def create_layout(
                                 step=0.05,
                                 label="Temperature",
                                 info="Controls creativity. Lower = deterministic; higher = random.",
-                                interactive=initial_temp_interactive,
                                 elem_id="config_temperature",
                             )
                             top_p = gr.Slider(
@@ -1161,7 +1477,6 @@ def create_layout(
                                 step=0.05,
                                 label="Top P",
                                 info="Controls diversity. Lower = focused; higher = random.",
-                                interactive=initial_top_p_interactive,
                                 elem_id="config_top_p",
                             )
                             top_k = gr.Slider(
@@ -1171,7 +1486,10 @@ def create_layout(
                                 step=1,
                                 label="Top K",
                                 info="Limits sampling pool to top K tokens.",
-                                interactive=initial_top_k_interactive,
+                                interactive=(
+                                    config_initial_provider
+                                    not in ("OpenAI", "xAI", "DeepSeek", "Moonshot AI")
+                                ),
                                 elem_id="config_top_k",
                             )
                             max_tokens = gr.Slider(
@@ -1184,6 +1502,92 @@ def create_layout(
                                 elem_id="config_max_tokens",
                             )
 
+                            gr.Markdown("### Google / Vertex Request Limits")
+                            google_rate_limit_enabled = gr.Checkbox(
+                                value=saved_settings.get("google_rate_limit_enabled", False),
+                                label="Enable Google / Vertex Request Limits",
+                                info=(
+                                    "Applies only to Google provider requests, including the Vertex "
+                                    "service-account JSON endpoint."
+                                ),
+                                elem_id="google_rate_limit_enabled",
+                            )
+                            with gr.Row():
+                                google_request_interval_seconds = gr.Number(
+                                    value=saved_settings.get("google_request_interval_seconds", 0.0),
+                                    label="Minimum Seconds Between Requests",
+                                    info="0 disables the minimum spacing rule.",
+                                    precision=2,
+                                    elem_id="google_request_interval_seconds",
+                                )
+                                google_requests_per_minute = gr.Number(
+                                    value=saved_settings.get("google_requests_per_minute", 0),
+                                    label="Requests Per Minute",
+                                    info="0 disables the per-minute limit.",
+                                    precision=0,
+                                    elem_id="google_requests_per_minute",
+                                )
+                            with gr.Row():
+                                google_burst_requests = gr.Number(
+                                    value=saved_settings.get("google_burst_requests", 0),
+                                    label="Burst Requests",
+                                    info="0 disables burst cooldown.",
+                                    precision=0,
+                                    elem_id="google_burst_requests",
+                                )
+                                google_burst_cooldown_seconds = gr.Number(
+                                    value=saved_settings.get("google_burst_cooldown_seconds", 60.0),
+                                    label="Burst Cooldown Seconds",
+                                    precision=2,
+                                    elem_id="google_burst_cooldown_seconds",
+                                )
+                            with gr.Row():
+                                google_429_cooldown_seconds = gr.Number(
+                                    value=saved_settings.get("google_429_cooldown_seconds", 60.0),
+                                    label="429 Cooldown Seconds",
+                                    info="Minimum retry wait after rate-limit responses.",
+                                    precision=2,
+                                    elem_id="google_429_cooldown_seconds",
+                                )
+                                google_max_retries = gr.Number(
+                                    value=saved_settings.get("google_max_retries", 3),
+                                    label="Max Retries",
+                                    precision=0,
+                                    elem_id="google_max_retries",
+                                )
+                            saved_google_429_action = str(
+                                saved_settings.get("google_429_hourly_action", "stop")
+                            ).strip().lower()
+                            if saved_google_429_action not in {"stop", "pause"}:
+                                saved_google_429_action = "stop"
+                            with gr.Row():
+                                google_429_hourly_limit = gr.Number(
+                                    value=saved_settings.get("google_429_hourly_limit", 0),
+                                    label="429 Errors Per Hour Limit",
+                                    info=(
+                                        "0 disables auto-stop/rest. The 1-hour counter starts "
+                                        "when translation starts and resets after 1 hour."
+                                    ),
+                                    precision=0,
+                                    elem_id="google_429_hourly_limit",
+                                )
+                                google_429_hourly_action = gr.Radio(
+                                    choices=[
+                                        ("Stop Translation", "stop"),
+                                        ("Rest Then Continue", "pause"),
+                                    ],
+                                    value=saved_google_429_action,
+                                    label="429 Limit Action",
+                                    elem_id="google_429_hourly_action",
+                                )
+                                google_429_pause_minutes = gr.Number(
+                                    value=saved_settings.get("google_429_pause_minutes", 5.0),
+                                    label="429 Rest Minutes",
+                                    info="Used only when the 429 limit action is Rest Then Continue.",
+                                    precision=2,
+                                    elem_id="google_429_pause_minutes",
+                                )
+
                             gr.Markdown("### Context & Upscaling")
                             send_full_page_context = gr.Checkbox(
                                 value=saved_settings.get(
@@ -1193,6 +1597,18 @@ def create_layout(
                                 info=(
                                     "Include full page image as context. Might improve translation quality. "
                                     "Disable if refusals/using less-capable models or to reduce token usage."
+                                ),
+                                interactive=initial_ocr_method
+                                not in ("manga-ocr", "paddleocr-vl"),
+                            )
+                            parallel_inpaint_translation = gr.Checkbox(
+                                value=saved_settings.get(
+                                    "parallel_inpaint_translation", False
+                                ),
+                                label="Parallel Inpaint + LLM Request",
+                                info=(
+                                    "Start the LLM translation request while inpainting is still running. "
+                                    "Only applies to LLM OCR mode."
                                 ),
                                 interactive=initial_ocr_method
                                 not in ("manga-ocr", "paddleocr-vl"),
@@ -1275,31 +1691,121 @@ def create_layout(
                         with gr.Group(
                             visible=False, elem_classes="settings-group"
                         ) as group_rendering:
-                            gr.Markdown("### Font Rendering")
-                            max_font_size = gr.Slider(
-                                5,
-                                50,
-                                value=saved_settings.get("max_font_size", 16),
-                                step=1,
-                                label="Max Font Size (px)",
-                                info="The largest font size the renderer will attempt to use.",
-                            )
-                            min_font_size = gr.Slider(
-                                5,
-                                50,
-                                value=saved_settings.get("min_font_size", 8),
-                                step=1,
-                                label="Min Font Size (px)",
-                                info="The smallest font size the renderer will attempt to use before giving up.",
-                            )
-                            line_spacing_mult = gr.Slider(
-                                0.5,
-                                2.0,
-                                value=saved_settings.get("line_spacing_mult", 1.0),
-                                step=0.05,
-                                label="Line Spacing Multiplier",
-                                info="Adjusts the vertical space between lines of text (1.0 = standard).",
-                            )
+                            with gr.Column(visible=False):
+                                gr.Markdown("### Font Rendering")
+                                emphasis_font_pack = gr.Dropdown(
+                                    value=saved_emphasis_font_pack,
+                                    choices=[""] + font_choices,
+                                    label="Emphasis Font",
+                                    info=(
+                                        "Font for bold/emphasized speech bubble text. "
+                                        "Leave empty to use the selected regular font pack's bold variant."
+                                    ),
+                                )
+                                max_font_size = gr.Slider(
+                                    5,
+                                    50,
+                                    value=saved_settings.get("max_font_size", 16),
+                                    step=1,
+                                    label="Regular Max Font Size (px)",
+                                    info="The largest font size used for regular speech bubble text.",
+                                )
+                                emphasis_max_font_size = gr.Slider(
+                                    5,
+                                    50,
+                                    value=saved_settings.get(
+                                        "emphasis_max_font_size",
+                                        saved_settings.get("max_font_size", 16),
+                                    ),
+                                    step=1,
+                                    label="Emphasis Max Font Size (px)",
+                                    info="The largest font size used when speech bubble text is bold/emphasized.",
+                                )
+                                min_font_size = gr.Slider(
+                                    5,
+                                    50,
+                                    value=saved_settings.get("min_font_size", 8),
+                                    step=1,
+                                    label="Min Font Size (px)",
+                                    info="The smallest font size the renderer will attempt to use before giving up.",
+                                )
+                                line_spacing_mult = gr.Slider(
+                                    0.5,
+                                    2.0,
+                                    value=saved_settings.get("line_spacing_mult", 1.0),
+                                    step=0.05,
+                                    label="Regular Line Spacing Multiplier",
+                                    info="Adjusts line spacing for regular speech bubble text (1.0 = standard).",
+                                )
+                                emphasis_line_spacing_mult = gr.Slider(
+                                    0.5,
+                                    2.0,
+                                    value=saved_settings.get(
+                                        "emphasis_line_spacing_mult",
+                                        saved_settings.get("line_spacing_mult", 1.0),
+                                    ),
+                                    step=0.05,
+                                    label="Emphasis Line Spacing Multiplier",
+                                    info="Adjusts line spacing when speech bubble text is fully bold/emphasized.",
+                                )
+                                vertical_line_spacing_mult = gr.Slider(
+                                    0.5,
+                                    2.0,
+                                    value=saved_settings.get(
+                                        "vertical_line_spacing_mult",
+                                        saved_settings.get("line_spacing_mult", 1.0),
+                                    ),
+                                    step=0.05,
+                                    label="Vertical Regular Line Spacing Multiplier",
+                                    info="Line spacing used only for regular vertical text inside speech bubbles.",
+                                )
+                                vertical_emphasis_line_spacing_mult = gr.Slider(
+                                    0.5,
+                                    2.0,
+                                    value=saved_settings.get(
+                                        "vertical_emphasis_line_spacing_mult",
+                                        saved_settings.get(
+                                            "emphasis_line_spacing_mult",
+                                            saved_settings.get("vertical_line_spacing_mult", 1.0),
+                                        ),
+                                    ),
+                                    step=0.05,
+                                    label="Vertical Emphasis Line Spacing Multiplier",
+                                    info="Line spacing used only when vertical speech-bubble text is fully bold/emphasized.",
+                                )
+                                vertical_font_size_mult = gr.Slider(
+                                    0.5,
+                                    2.0,
+                                    value=saved_settings.get("vertical_font_size_mult", 1.0),
+                                    step=0.05,
+                                    label="Vertical Text Font Size Multiplier",
+                                    info="Scales the max font size search range only for vertical speech-bubble text.",
+                                )
+                                vertical_max_chars = gr.Slider(
+                                    0,
+                                    20,
+                                    value=saved_settings.get(
+                                        "vertical_max_chars",
+                                        saved_settings.get("vertical_min_chars", 4),
+                                    ),
+                                    step=1,
+                                    label="Vertical Regular Max Characters",
+                                    info="Maximum alphanumeric character count allowed for regular speech-bubble text to auto-switch to vertical layout. Set 0 to disable regular auto vertical text.",
+                                )
+                                vertical_emphasis_max_chars = gr.Slider(
+                                    0,
+                                    20,
+                                    value=saved_settings.get(
+                                        "vertical_emphasis_max_chars",
+                                        saved_settings.get(
+                                            "vertical_emphasis_min_chars",
+                                            saved_settings.get("vertical_max_chars", saved_settings.get("vertical_min_chars", 4)),
+                                        ),
+                                    ),
+                                    step=1,
+                                    label="Vertical Emphasis Max Characters",
+                                    info="Maximum alphanumeric character count allowed for fully emphasized speech-bubble text to auto-switch to vertical layout. Set 0 to disable emphasized auto vertical text.",
+                                )
                             use_subpixel_rendering = gr.Checkbox(
                                 value=saved_settings.get(
                                     "use_subpixel_rendering", False
@@ -1323,6 +1829,111 @@ def create_layout(
                                 info="Enables common letter combinations to be rendered as single glyphs "
                                 "(must be supported by the font).",
                             )
+                            gr.Markdown("### 글자 색상 및 외곽선")
+                            gr.Markdown(
+                                "말풍선 내부: 밝은 배경 = 검은 글자 / 어두운 배경 = 흰 글자  \n"
+                                "말풍선 외부: 밝은 배경 = 검은 글자 / 어두운 배경 = 흰 글자  \n"
+                                "원문이 컬러 글자면 원문 색상을 우선 적용  \n"
+                                "외부 글자는 반대색 외곽선 자동 적용"
+                            )
+                            gr.Markdown("#### 말풍선 내부 · 밝은 배경")
+                            with gr.Row():
+                                inside_light_text_color = gr.ColorPicker(
+                                    value=saved_settings.get(
+                                        "inside_light_text_color", "#000000"
+                                    ),
+                                    label="글자 색",
+                                )
+                                inside_light_outline_color = gr.ColorPicker(
+                                    value=saved_settings.get(
+                                        "inside_light_outline_color", "#ffffff"
+                                    ),
+                                    label="외곽선 색",
+                                )
+                                inside_light_outline_width = gr.Slider(
+                                    0,
+                                    10,
+                                    value=saved_settings.get(
+                                        "inside_light_outline_width", 0.0
+                                    ),
+                                    step=0.5,
+                                    label="외곽선 두께(px)",
+                                )
+                            gr.Markdown("#### 말풍선 내부 · 어두운 배경")
+                            with gr.Row():
+                                inside_dark_text_color = gr.ColorPicker(
+                                    value=saved_settings.get(
+                                        "inside_dark_text_color", "#ffffff"
+                                    ),
+                                    label="글자 색",
+                                )
+                                inside_dark_outline_color = gr.ColorPicker(
+                                    value=saved_settings.get(
+                                        "inside_dark_outline_color", "#000000"
+                                    ),
+                                    label="외곽선 색",
+                                )
+                                inside_dark_outline_width = gr.Slider(
+                                    0,
+                                    10,
+                                    value=saved_settings.get(
+                                        "inside_dark_outline_width", 0.0
+                                    ),
+                                    step=0.5,
+                                    label="외곽선 두께(px)",
+                                )
+                            gr.Markdown("#### 말풍선 외부 · 밝은 배경")
+                            with gr.Row():
+                                outside_light_text_color = gr.ColorPicker(
+                                    value=saved_settings.get(
+                                        "outside_light_text_color", "#000000"
+                                    ),
+                                    label="글자 색",
+                                )
+                                outside_light_outline_color = gr.ColorPicker(
+                                    value=saved_settings.get(
+                                        "outside_light_outline_color", "#ffffff"
+                                    ),
+                                    label="외곽선 색",
+                                )
+                                outside_light_outline_width = gr.Slider(
+                                    0,
+                                    10,
+                                    value=saved_settings.get(
+                                        "outside_light_outline_width",
+                                        saved_settings.get(
+                                            "outside_text_osb_outline_width", 3.0
+                                        ),
+                                    ),
+                                    step=0.5,
+                                    label="외곽선 두께(px)",
+                                )
+                            gr.Markdown("#### 말풍선 외부 · 어두운 배경")
+                            with gr.Row():
+                                outside_dark_text_color = gr.ColorPicker(
+                                    value=saved_settings.get(
+                                        "outside_dark_text_color", "#ffffff"
+                                    ),
+                                    label="글자 색",
+                                )
+                                outside_dark_outline_color = gr.ColorPicker(
+                                    value=saved_settings.get(
+                                        "outside_dark_outline_color", "#000000"
+                                    ),
+                                    label="외곽선 색",
+                                )
+                                outside_dark_outline_width = gr.Slider(
+                                    0,
+                                    10,
+                                    value=saved_settings.get(
+                                        "outside_dark_outline_width",
+                                        saved_settings.get(
+                                            "outside_text_osb_outline_width", 3.0
+                                        ),
+                                    ),
+                                    step=0.5,
+                                    label="외곽선 두께(px)",
+                                )
                             gr.Markdown("### Text Layout")
                             detach_trailing_punctuation = gr.Checkbox(
                                 value=saved_settings.get(
@@ -1353,7 +1964,7 @@ def create_layout(
                                 100,
                                 2000,
                                 value=saved_settings.get("hyphen_penalty", 1000.0),
-                                step=50,
+                                step=100,
                                 label="Hyphen Penalty",
                                 info="Penalty for hyphenated line breaks in text layout. "
                                 "Increase to discourage hyphenation.",
@@ -1383,15 +1994,29 @@ def create_layout(
                                 info="Exponent for line badness calculation in text layout. "
                                 "Increase to avoid loose lines.",
                             )
-                            padding_pixels = gr.Slider(
-                                2,
-                                12,
-                                value=saved_settings.get("padding_pixels", 5.0),
-                                step=1,
-                                label="Padding Pixels",
-                                info="Padding between text and the edge of the speech bubble. "
-                                "Increase for more space between text and bubble boundaries.",
-                            )
+                            with gr.Row():
+                                padding_horizontal_pixels = gr.Slider(
+                                    0,
+                                    24,
+                                    value=saved_settings.get(
+                                        "padding_horizontal_pixels",
+                                        saved_settings.get("padding_pixels", 5.0),
+                                    ),
+                                    step=1,
+                                    label="Horizontal Padding (px)",
+                                    info="Horizontal padding between text and speech-bubble edges.",
+                                )
+                                padding_vertical_pixels = gr.Slider(
+                                    0,
+                                    24,
+                                    value=saved_settings.get(
+                                        "padding_vertical_pixels",
+                                        saved_settings.get("padding_pixels", 5.0),
+                                    ),
+                                    step=1,
+                                    label="Vertical Padding (px)",
+                                    info="Vertical padding between text and speech-bubble edges.",
+                                )
                             supersampling_factor = gr.Slider(
                                 1,
                                 16,
@@ -1402,6 +2027,74 @@ def create_layout(
                                 "Higher values improve quality but use slightly more memory. 1 = disabled.",
                             )
                         setting_groups.append(group_rendering)
+
+                        # --- Tag Style Settings ---
+                        with gr.Group(
+                            visible=False, elem_classes="settings-group"
+                        ) as group_tag_styles:
+                            gr.Markdown("### 태그별 글꼴/배치 설정")
+                            gr.Markdown(
+                                "번역 결과가 `<BN>...</BN>`, `<SFX>...</SFX>`처럼 태그로 감싸져 있으면 "
+                                "이 표의 글꼴/크기/줄 간격/세로쓰기 설정을 우선 적용합니다. "
+                                "글꼴은 아래 드롭다운으로 선택하거나 표의 글꼴 칸에 직접 입력할 수 있으며, "
+                                "fonts 폴더 안의 글꼴 폴더명이 자동으로 표시됩니다. "
+                                "빈칸이면 기본 글꼴을 사용합니다."
+                            )
+                            with gr.Row(
+                                equal_height=False,
+                                elem_classes="tag-style-font-row",
+                            ):
+                                tag_style_font_target = gr.Dropdown(
+                                    choices=list(TAG_DEFINITIONS.keys()),
+                                    value="BN",
+                                    label="글꼴을 적용할 태그",
+                                    scale=1,
+                                )
+                                tag_style_font_pack = gr.Dropdown(
+                                    choices=[""] + font_choices,
+                                    value="",
+                                    label="글꼴 선택",
+                                    scale=2,
+                                )
+                                tag_style_font_apply = gr.Button(
+                                    "선택한 태그에 글꼴 적용",
+                                    variant="secondary",
+                                    scale=1,
+                                )
+                            tag_style_table = gr.Dataframe(
+                                headers=TAG_STYLE_COLUMNS,
+                                value=saved_tag_style_rows,
+                                datatype=[
+                                    "str",
+                                    "str",
+                                    "str",
+                                    "number",
+                                    "number",
+                                    "number",
+                                    "number",
+                                    "number",
+                                ],
+                                column_widths=[
+                                    "7%",
+                                    "23%",
+                                    "16%",
+                                    "9%",
+                                    "9%",
+                                    "9%",
+                                    "13%",
+                                    "14%",
+                                ],
+                                row_count=(len(saved_tag_style_rows), "fixed"),
+                                col_count=(len(TAG_STYLE_COLUMNS), "fixed"),
+                                interactive=True,
+                                label="태그별 설정 표",
+                                wrap=True,
+                            )
+                            gr.Markdown(
+                                "지원 태그: `<BN>`, `<BE>`, `<BT>`, `<BW>`, `<ON>`, `<OT>`, `<OM>`, "
+                                "`<OD>`, `<OE>`, `<OH>`, `<SFX>`, `<SFXI>`, `<SFXS>`"
+                            )
+                        setting_groups.append(group_tag_styles)
 
                         # --- Outside Text Removal Settings ---
                         with gr.Group(
@@ -1469,20 +2162,6 @@ def create_layout(
                                         "Increase to group more distant boxes together."
                                     ),
                                 )
-                                outside_text_min_area_ignore_ratio_percent = gr.Slider(
-                                    0.0,
-                                    5.0,
-                                    value=saved_settings.get(
-                                        "outside_text_min_area_ignore_ratio", 0.0
-                                    )
-                                    * 100.0,
-                                    step=0.1,
-                                    label="Ignore Regions Below Area (%)",
-                                    info=(
-                                        "Skip OSB regions whose bounding-box area is below this "
-                                        "percentage of the image."
-                                    ),
-                                )
                                 outside_text_enable_page_number_filtering = gr.Checkbox(
                                     value=saved_settings.get(
                                         "outside_text_enable_page_number_filtering",
@@ -1543,156 +2222,82 @@ def create_layout(
                                     ],
                                     label="Inpainting Method",
                                     info=(
-                                        "Klein models are newer, but may introduce minor color "
-                                        "shifts. Kontext does not shift colors, but is more dated."
+                                        "Klein models are faster and cross-platform, but may introduce minor color "
+                                        "shifts. Kontext models do not shift colors, but are larger and slower. "
+                                        "Models are downloaded in 4-bit quantization."
                                     ),
                                 )
                                 _initial_method = saved_settings.get(
                                     "outside_text_inpainting_method", "flux_klein_4b"
                                 )
                                 _is_kontext = _initial_method == "flux_kontext"
+                                outside_text_kontext_backend = gr.Radio(
+                                    choices=[
+                                        ("SDNQ (cross-platform)", "sdnq"),
+                                        ("Nunchaku (CUDA)", "nunchaku"),
+                                    ],
+                                    value=saved_settings.get(
+                                        "outside_text_kontext_backend", "sdnq"
+                                    ),
+                                    label="Kontext Backend",
+                                    info=(
+                                        "SDNQ: cross-platform, no HF token. "
+                                        "Nunchaku: CUDA-only, HF token required."
+                                    ),
+                                    visible=_is_kontext,
+                                )
                                 _is_klein_model = _initial_method in (
                                     "flux_klein_9b",
                                     "flux_klein_4b",
                                 )
-                                _backend_visible = _is_klein_model or _is_kontext
-                                _initial_backend = flux_valid_backend(
-                                    _initial_method,
-                                    saved_settings.get(
-                                        "outside_text_flux_backend", "sdnq"
-                                    ),
+                                _initial_backend = saved_settings.get(
+                                    "outside_text_kontext_backend", "sdnq"
                                 )
-                                outside_text_flux_backend_state = gr.State(
-                                    _initial_backend
+                                _show_low_vram = _is_klein_model or _is_kontext
+                                _initial_offload_mode = saved_settings.get(
+                                    "outside_text_flux_offload_mode"
                                 )
-                                outside_text_flux_backend = gr.Radio(
-                                    choices=_flux_backend_choices(_initial_method),
-                                    value=_initial_backend,
-                                    label="Flux Backend",
-                                    info=(
-                                        "SDNQ/sd.cpp: cross-platform, no HF token. "
-                                        "Nunchaku: CUDA-only, HF token required."
-                                    ),
-                                    visible=_backend_visible,
-                                )
-                                outside_text_flux_residual_diff_threshold = gr.Slider(
-                                    0.0,
-                                    1.0,
-                                    value=saved_settings.get(
-                                        "outside_text_flux_residual_diff_threshold",
-                                        0.15,
-                                    ),
-                                    step=0.01,
-                                    label="Residual Diff Threshold",
-                                    info=(
-                                        "First Block Caching threshold for Kontext via Nunchaku. "
-                                        "Higher = faster, but lower quality."
-                                    ),
-                                    interactive=(
-                                        _is_kontext and _initial_backend == "nunchaku"
-                                    ),
-                                    visible=(
-                                        _is_kontext and _initial_backend == "nunchaku"
-                                    ),
-                                )
-                                _show_low_vram = (
-                                    _is_klein_model or _is_kontext
-                                ) and _initial_backend == "sdnq"
-                                _show_sdcpp_quant = (
-                                    _is_klein_model or _is_kontext
-                                ) and _initial_backend == "sdcpp"
-                                outside_text_flux_low_vram = gr.Checkbox(
-                                    value=saved_settings.get(
+                                if _initial_offload_mode not in {
+                                    "device",
+                                    "model",
+                                    "sequential",
+                                }:
+                                    if not saved_settings.get(
+                                        "outside_text_flux_cpu_offload", True
+                                    ):
+                                        _initial_offload_mode = "device"
+                                    elif saved_settings.get(
                                         "outside_text_flux_low_vram", False
+                                    ):
+                                        _initial_offload_mode = "sequential"
+                                    else:
+                                        _initial_offload_mode = "model"
+
+                                outside_text_flux_offload_mode = gr.Radio(
+                                    choices=[
+                                        ("GPU 상주 (CPU 오프로딩 안 함)", "device"),
+                                        ("일반 CPU 오프로딩", "model"),
+                                        ("순차 CPU 오프로딩 (저 VRAM)", "sequential"),
+                                    ],
+                                    value=_initial_offload_mode,
+                                    label="Flux 메모리 모드",
+                                    info=(
+                                        "RAM 사용량을 줄이려면 GPU 상주를 선택하세요. "
+                                        "단, 모델 전체를 담을 충분한 VRAM이 반드시 필요합니다."
                                     ),
-                                    label="Low VRAM Mode",
-                                    info="Sequential CPU offload for SDNQ.",
                                     visible=_show_low_vram,
                                 )
-                                outside_text_flux_sdcpp_cache_mode = gr.Radio(
-                                    choices=[
-                                        ("Spectrum", "spectrum"),
-                                        ("Cache-DiT", "cache-dit"),
-                                        ("TaylorSeer", "taylorseer"),
-                                        ("DBCache", "dbcache"),
-                                        ("None", "none"),
-                                    ],
-                                    value=saved_settings.get(
-                                        "outside_text_flux_sdcpp_cache_mode",
-                                        "none",
-                                    ),
-                                    label="Cache Method",
-                                    info=(
-                                        "Caching methods for Flux via sd.cpp. Ordered fastest/worst quality -> slowest/best quality. "
-                                        "Warmup is 25% of the selected step count."
-                                    ),
-                                    visible=(
-                                        (_is_klein_model or _is_kontext)
-                                        and _initial_backend == "sdcpp"
-                                    ),
-                                )
-                                _saved_diffusion_quant = saved_settings.get(
-                                    "outside_text_flux_sdcpp_diffusion_quant",
-                                    "Q4_K_M",
-                                )
-                                _initial_diffusion_quant = (
-                                    _saved_diffusion_quant
-                                    if _saved_diffusion_quant
-                                    in FLUX_SDCPP_DIFFUSION_QUANTS
-                                    else "Q4_K_M"
-                                )
-                                outside_text_flux_sdcpp_diffusion_quant = gr.Radio(
-                                    choices=[
-                                        (quant, quant)
-                                        for quant in FLUX_SDCPP_DIFFUSION_QUANTS
-                                    ],
-                                    value=_initial_diffusion_quant,
-                                    label="Flux Model Quant",
-                                    info=(
-                                        "Quantization level for the model. Ordered from "
-                                        "largest/best quality to smallest/lowest quality."
-                                    ),
-                                    visible=_show_sdcpp_quant,
-                                )
-                                outside_text_flux_sdcpp_diffusion_quant_state = (
-                                    gr.State(_initial_diffusion_quant)
-                                )
-                                _available_text_encoder_quants = (
-                                    flux_sdcpp_text_encoder_quants(_initial_method)
-                                )
-                                _text_encoder_quants = (
-                                    _available_text_encoder_quants
-                                    or flux_sdcpp_text_encoder_quants("flux_klein_4b")
-                                )
-                                _text_encoder_default = flux_sdcpp_text_encoder_default(
-                                    _initial_method
-                                )
-                                _saved_text_encoder_quant = saved_settings.get(
-                                    "outside_text_flux_sdcpp_text_encoder_quant",
-                                    _text_encoder_default,
-                                )
-                                _initial_text_encoder_quant = (
-                                    flux_sdcpp_valid_text_encoder_quant(
-                                        _initial_method, _saved_text_encoder_quant
-                                    )
-                                )
-                                outside_text_flux_sdcpp_text_encoder_quant = gr.Radio(
-                                    choices=[
-                                        (quant, quant) for quant in _text_encoder_quants
-                                    ],
-                                    value=_initial_text_encoder_quant,
-                                    label="Text Encoder Model Quant",
-                                    info=(
-                                        "Quantization level for the model. Ordered from "
-                                        "largest/best quality to smallest/lowest quality."
-                                    ),
-                                    visible=(
-                                        _show_sdcpp_quant
-                                        and bool(_available_text_encoder_quants)
-                                    ),
-                                )
-                                outside_text_flux_sdcpp_text_encoder_quant_state = (
-                                    gr.State(_initial_text_encoder_quant)
+                                outside_text_flux_memory_help = gr.Markdown(
+                                    """
+**Flux 메모리 모드 사용 설명**
+
+- **GPU 상주 (CPU 오프로딩 안 함)**: Flux 모델 전체를 GPU에 올립니다. 일반 RAM 사용량은 가장 적고 보통 가장 빠르지만, VRAM이 부족하면 모델 로딩 중 `CUDA out of memory` 오류가 발생합니다.
+- **일반 CPU 오프로딩**: 현재 기본값입니다. 모델 구성요소를 RAM과 VRAM 사이에서 이동합니다. VRAM 사용량은 줄지만 일반 RAM 사용량이 크게 늘어날 수 있습니다.
+- **순차 CPU 오프로딩 (저 VRAM)**: 더 작은 단위로 이동하여 VRAM 사용량을 가장 낮춥니다. 일반 RAM을 계속 사용하며 처리 속도가 가장 느립니다.
+
+모드를 변경하면 다음 Flux 작업을 시작할 때 기존 Flux 모델을 자동으로 내리고 선택한 모드로 다시 로드합니다. GPU 상주 모드는 RAM 부족 해결에 도움이 되지만 VRAM 용량을 먼저 확인해야 합니다.
+""",
+                                    visible=_show_low_vram,
                                 )
                                 outside_text_flux_num_inference_steps = gr.Slider(
                                     1,
@@ -1720,6 +2325,36 @@ def create_layout(
                                     )
                                     != "opencv",
                                 )
+                                outside_text_flux_kontext_prompt = gr.Textbox(
+                                    value=saved_settings.get(
+                                        "outside_text_flux_kontext_prompt",
+                                        settings_manager.DEFAULT_SETTINGS[
+                                            "outside_text_flux_kontext_prompt"
+                                        ],
+                                    ),
+                                    label="Flux.1 Kontext Prompt",
+                                    info=(
+                                        "Prompt used by Flux.1 Kontext for outside-text and "
+                                        "colored-bubble inpainting. Empty values use the built-in default."
+                                    ),
+                                    lines=4,
+                                    max_lines=12,
+                                )
+                                outside_text_flux_klein_prompt = gr.Textbox(
+                                    value=saved_settings.get(
+                                        "outside_text_flux_klein_prompt",
+                                        settings_manager.DEFAULT_SETTINGS[
+                                            "outside_text_flux_klein_prompt"
+                                        ],
+                                    ),
+                                    label="Flux.2 Klein Prompt",
+                                    info=(
+                                        "Prompt shared by Flux.2 Klein 4B and 9B for outside-text "
+                                        "and colored-bubble inpainting. Empty values use the built-in default."
+                                    ),
+                                    lines=6,
+                                    max_lines=16,
+                                )
                                 _is_klein_for_lum = saved_settings.get(
                                     "outside_text_inpainting_method",
                                     "flux_klein_4b",
@@ -1735,34 +2370,19 @@ def create_layout(
                                     "outside_text_flux_group_regions", False
                                 )
                                 outside_text_flux_luminance_correction = gr.Checkbox(
-                                    value=(
-                                        saved_settings.get(
-                                            "outside_text_flux_luminance_correction",
-                                            True,
-                                        )
-                                        if not _is_klein_for_lum
-                                        else (
-                                            saved_settings.get(
-                                                "outside_text_flux_luminance_correction",
-                                                True,
-                                            )
-                                            if (
-                                                _upscale_small_crops_enabled
-                                                and not _group_flux_regions_enabled
-                                            )
-                                            else False
-                                        )
+                                    value=saved_settings.get(
+                                        "outside_text_flux_luminance_correction",
+                                        True,
                                     ),
-                                    label="Luminance Correction",
+                                    label="휘도 보정",
                                     info=(
-                                        "Try and match generated patch brightness to surrounding context. "
-                                        "Only available for ungrouped Klein crops scaled to ~1MP."
+                                        "생성된 인페인팅 패치의 밝기를 주변 배경과 맞춥니다. "
+                                        "Klein Flux 영역 묶기를 사용할 때는 원본 OSB 영역별로 보정합니다."
                                     ),
                                     visible=_is_klein_for_lum,
                                     interactive=(
                                         _is_klein_for_lum
                                         and _upscale_small_crops_enabled
-                                        and not _group_flux_regions_enabled
                                     ),
                                 )
                                 outside_text_flux_upscale_small_crops = gr.Checkbox(
@@ -1791,6 +2411,49 @@ def create_layout(
                                     )
                                     not in ("opencv", "none"),
                                 )
+                                outside_text_flux_residual_diff_threshold = gr.Slider(
+                                    0.0,
+                                    1.0,
+                                    value=saved_settings.get(
+                                        "outside_text_flux_residual_diff_threshold",
+                                        0.15,
+                                    ),
+                                    step=0.01,
+                                    label="Residual Diff Threshold",
+                                    info=(
+                                        "First Block Caching threshold for Flux.1 Kontext. "
+                                        "Higher = faster, but lower quality."
+                                    ),
+                                    interactive=saved_settings.get(
+                                        "outside_text_inpainting_method",
+                                        "flux_klein_4b",
+                                    )
+                                    == "flux_kontext",
+                                    visible=_is_kontext,
+                                )
+                                outside_text_osb_residual_render_guard_action = gr.Radio(
+                                    choices=[
+                                        ("처리 안 함", "none"),
+                                        ("원본 복구", "restore_original"),
+                                        ("LAMA Large 재시도", "lama_large"),
+                                    ],
+                                    value=saved_settings.get(
+                                        "outside_text_osb_residual_render_guard_action",
+                                        "restore_original",
+                                    ),
+                                    label="짧은 효과음 잔여 원문 처리",
+                                    info=(
+                                        "Flux 처리 후 남은 원문 위에 짧은 효과음 번역이 겹칠 때, "
+                                        "처리하지 않고 그대로 렌더링하거나, 원본 영역을 복구하거나, "
+                                        "남은 원문 부분만 LAMA Large로 다시 지웁니다."
+                                    ),
+                                    visible=_is_flux_for_klein_options,
+                                    interactive=saved_settings.get(
+                                        "outside_text_inpainting_method",
+                                        "flux_klein_4b",
+                                    )
+                                    not in ("opencv", "none"),
+                                )
                                 outside_text_seed = gr.Number(
                                     value=saved_settings.get("outside_text_seed", 1),
                                     label="Seed",
@@ -1802,160 +2465,284 @@ def create_layout(
                                     )
                                     not in ("opencv", "none"),
                                 )
-                                inpaint_colored_bubbles = gr.Checkbox(
-                                    value=saved_settings.get(
-                                        "inpaint_colored_bubbles", False
-                                    ),
-                                    label="Use Flux to Inpaint Colored Bubbles",
-                                    info=(
-                                        "Use Flux for bubble cleaning when the interior is not pure white/black "
-                                        "(e.g., colored/grayscale)."
-                                    ),
-                                    interactive=saved_settings.get(
-                                        "outside_text_inpainting_method",
-                                        "flux_klein_4b",
-                                    )
-                                    not in ("opencv", "none"),
-                                )
-
-                                gr.Markdown("### Font Rendering")
-                                outside_text_osb_render_expansion_narrow_multiplier = gr.Slider(
-                                    1.0,
-                                    3.0,
-                                    value=saved_settings.get(
-                                        "outside_text_osb_render_expansion_narrow_multiplier",
+                                gr.Markdown("### OSB \ub80c\ub354\ub9c1 \ubc15\uc2a4")
+                                outside_text_osb_tall_box_expand_aspect_ratio = (
+                                    gr.Slider(
                                         1.0,
-                                    ),
-                                    step=0.1,
-                                    label="Narrow/Tall Expansion Multiplier",
-                                    info=(
-                                        "Expands OSB render boxes whose width/height aspect ratio "
-                                        "is at or below the narrow/tall threshold."
-                                    ),
-                                )
-                                outside_text_osb_render_expansion_aspect_ratio_threshold = gr.Slider(
-                                    0.05,
-                                    1.0,
-                                    value=saved_settings.get(
-                                        "outside_text_osb_render_expansion_aspect_ratio_threshold",
-                                        0.4,
-                                    ),
-                                    step=0.01,
-                                    label="Narrow/Tall Aspect Ratio Threshold",
-                                    info=(
-                                        "Classifies a box as narrow/tall when width divided by "
-                                        "height is at or below this value."
-                                    ),
-                                )
-                                outside_text_osb_render_expansion_tiny_multiplier = gr.Slider(
-                                    1.0,
-                                    3.0,
-                                    value=saved_settings.get(
-                                        "outside_text_osb_render_expansion_tiny_multiplier",
-                                        1.0,
-                                    ),
-                                    step=0.1,
-                                    label="Tiny Expansion Multiplier",
-                                    info=(
-                                        "Expands OSB render boxes whose area is below the tiny "
-                                        "bubble area threshold."
-                                    ),
-                                )
-                                outside_text_osb_render_expansion_area_threshold_percent = gr.Slider(
-                                    0.0,
-                                    5.0,
-                                    value=saved_settings.get(
-                                        "outside_text_osb_render_expansion_area_ratio_threshold",
-                                        0.005,
+                                        10.0,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_tall_box_expand_aspect_ratio",
+                                            2.0,
+                                        ),
+                                        step=0.1,
+                                        label="\ube44SFX OSB \uac00\ub85c \ud655\uc7a5 \uae30\uc900 (\uc138\ub85c/\uac00\ub85c)",
+                                        info=(
+                                            "SFX \ud0dc\uadf8\uac00 \uc544\ub2cc OSB \ubc15\uc2a4\uc758 \uc138\ub85c \uae38\uc774\uac00 "
+                                            "\uac00\ub85c \uae38\uc774\uc758 \uc774 \ubc30\uc218 \uc774\uc0c1\uc77c \ub54c \uac00\ub85c \ud3ed\uc744 "
+                                            "\ud655\uc7a5\ud569\ub2c8\ub2e4."
+                                        ),
                                     )
-                                    * 100.0,
-                                    step=0.1,
-                                    label="Tiny Area Threshold (%)",
-                                    info=(
-                                        "Classifies a box as tiny when its area is below this "
-                                        "percentage of the full image area."
-                                    ),
                                 )
-                                outside_text_osb_font_pack = gr.Dropdown(
-                                    value=saved_osb_font_pack,
-                                    choices=[""] + font_choices,
-                                    label="Text Font",
-                                    info="Font for rendering OSB text translations (leave empty to use main font)",
+                                outside_text_osb_tall_box_expand_width_percent = (
+                                    gr.Slider(
+                                        0,
+                                        100,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_tall_box_expand_width_percent",
+                                            20.0,
+                                        ),
+                                        step=1,
+                                        label="\ube44SFX OSB \uac00\ub85c \ud655\uc7a5 (%)",
+                                        info=(
+                                            "\uc870\uac74\uc744 \ub9cc\uc871\ud55c OSB \ub80c\ub354\ub9c1 \ubc15\uc2a4\uc758 "
+                                            "\uc804\uccb4 \uac00\ub85c \ud3ed\uc744 \ub298\ub9ac\ub294 \ube44\uc728\uc785\ub2c8\ub2e4. "
+                                            "\uc88c\uc6b0\ub85c \ub098\ub204\uc5b4 \ud655\uc7a5\ud558\uba70, \ud655\uc7a5\ub41c "
+                                            "\ubc15\uc2a4\ub85c \uac00\ub85c/\uc138\ub85c \ub80c\ub354\ub9c1\uc744 "
+                                            "\ube44\uad50\ud569\ub2c8\ub2e4. 0%\ub294 \uc0ac\uc6a9\ud558\uc9c0 "
+                                            "\uc54a\uc74c\uc785\ub2c8\ub2e4."
+                                        ),
+                                    )
                                 )
-                                outside_text_osb_max_font_size = gr.Slider(
-                                    5,
-                                    96,
-                                    value=saved_settings.get(
-                                        "outside_text_osb_max_font_size", 64
-                                    ),
-                                    step=1,
-                                    label="Max Font Size (px)",
-                                    info="The largest font size the renderer will attempt to use for OSB text.",
-                                )
-                                outside_text_osb_min_font_size = gr.Slider(
-                                    5,
-                                    96,
-                                    value=saved_settings.get(
-                                        "outside_text_osb_min_font_size", 10
-                                    ),
-                                    step=1,
-                                    label="Min Font Size (px)",
-                                    info="The smallest font size the renderer will attempt to use for OSB text.",
-                                )
-                                outside_text_osb_line_spacing = gr.Slider(
-                                    0.5,
-                                    2.0,
-                                    value=saved_settings.get(
-                                        "outside_text_osb_line_spacing", 1.0
-                                    ),
-                                    step=0.05,
-                                    label="Line Spacing Multiplier",
-                                    info=(
-                                        "Adjusts the vertical space between lines of text (1.0 = standard). "
-                                        "Also affects vertically stacked text. Decrease for tighter text (e.g., 0.9)."
-                                    ),
-                                )
-                                outside_text_osb_use_subpixel_rendering = gr.Checkbox(
-                                    value=saved_settings.get(
-                                        "outside_text_osb_use_subpixel_rendering", True
-                                    ),
-                                    label="Use Subpixel Rendering",
-                                    info=(
-                                        "Improves text clarity on RGB-based displays. "
-                                        "Disable if using a PenTile-based display (i.e., an OLED screen)"
-                                    ),
-                                )
-                                outside_text_osb_font_hinting = gr.Radio(
-                                    choices=["none", "slight", "normal", "full"],
-                                    value=saved_settings.get(
-                                        "outside_text_osb_font_hinting", "none"
-                                    ),
-                                    label="Font Hinting",
-                                    info=(
-                                        "Adjusts glyph outlines to fit pixel grid. 'None' is often best for "
-                                        "high-res displays."
-                                    ),
-                                )
-                                outside_text_osb_use_ligatures = gr.Checkbox(
-                                    value=saved_settings.get(
-                                        "outside_text_osb_use_ligatures", False
-                                    ),
-                                    label="Use Standard Ligatures (e.g., fi, fl)",
-                                    info=(
-                                        "Enables common letter combinations to be rendered as single glyphs "
-                                        "(must be supported by the font)."
-                                    ),
-                                )
-                                outside_text_osb_outline_width = gr.Slider(
-                                    0,
-                                    10,
-                                    value=saved_settings.get(
-                                        "outside_text_osb_outline_width", 3.0
-                                    ),
-                                    step=0.5,
-                                    label="Outline Width (px)",
-                                    info="Width of text outline for OSB text.",
-                                )
+                                with gr.Column(visible=False):
+                                    gr.Markdown("### Font Rendering")
+                                    outside_text_osb_render_expansion_narrow_multiplier = gr.Slider(
+                                        1.0,
+                                        3.0,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_render_expansion_narrow_multiplier",
+                                            1.0,
+                                        ),
+                                        step=0.1,
+                                        label="Narrow/Tall Expansion Multiplier",
+                                        info=(
+                                            "Expands OSB render boxes whose width/height aspect ratio "
+                                            "is at or below the narrow/tall threshold."
+                                        ),
+                                    )
+                                    outside_text_osb_render_expansion_aspect_ratio_threshold = gr.Slider(
+                                        0.05,
+                                        1.0,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_render_expansion_aspect_ratio_threshold",
+                                            0.4,
+                                        ),
+                                        step=0.01,
+                                        label="Narrow/Tall Aspect Ratio Threshold",
+                                        info=(
+                                            "Classifies a box as narrow/tall when width divided by "
+                                            "height is at or below this value."
+                                        ),
+                                    )
+                                    outside_text_osb_render_expansion_tiny_multiplier = gr.Slider(
+                                        1.0,
+                                        3.0,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_render_expansion_tiny_multiplier",
+                                            1.0,
+                                        ),
+                                        step=0.1,
+                                        label="Tiny Expansion Multiplier",
+                                        info=(
+                                            "Expands OSB render boxes whose area is below the tiny "
+                                            "bubble area threshold."
+                                        ),
+                                    )
+                                    outside_text_osb_render_expansion_area_threshold_percent = gr.Slider(
+                                        0.0,
+                                        5.0,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_render_expansion_area_ratio_threshold",
+                                            0.005,
+                                        )
+                                        * 100.0,
+                                        step=0.1,
+                                        label="Tiny Area Threshold (%)",
+                                        info=(
+                                            "Classifies a box as tiny when its area is below this "
+                                            "percentage of the full image area."
+                                        ),
+                                    )
+                                    outside_text_osb_font_pack = gr.Dropdown(
+                                        value=saved_osb_font_pack,
+                                        choices=[""] + font_choices,
+                                        label="Text Font",
+                                        info="Font for rendering OSB text translations (leave empty to use main font)",
+                                    )
+                                    outside_text_osb_emphasis_font_pack = gr.Dropdown(
+                                        value=saved_osb_emphasis_font_pack,
+                                        choices=[""] + font_choices,
+                                        label="Emphasis Text Font",
+                                        info=(
+                                            "Font for bold/emphasized OSB text. "
+                                            "Leave empty to use the OSB text font's bold variant."
+                                        ),
+                                    )
+                                    outside_text_osb_max_font_size = gr.Slider(
+                                        5,
+                                        256,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_max_font_size", 64
+                                        ),
+                                        step=1,
+                                        label="OSB Regular Max Font Size (px)",
+                                        info="The largest font size used for regular OSB text.",
+                                    )
+                                    outside_text_osb_emphasis_max_font_size = gr.Slider(
+                                        5,
+                                        256,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_emphasis_max_font_size",
+                                            saved_settings.get(
+                                                "outside_text_osb_max_font_size", 64
+                                            ),
+                                        ),
+                                        step=1,
+                                        label="OSB Emphasis Max Font Size (px)",
+                                        info="The largest font size used when OSB text is bold/emphasized.",
+                                    )
+                                    outside_text_osb_min_font_size = gr.Slider(
+                                        5,
+                                        96,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_min_font_size", 10
+                                        ),
+                                        step=1,
+                                        label="Min Font Size (px)",
+                                        info="The smallest font size the renderer will attempt to use for OSB text.",
+                                    )
+                                    outside_text_osb_line_spacing = gr.Slider(
+                                        0.5,
+                                        2.0,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_line_spacing", 1.0
+                                        ),
+                                        step=0.05,
+                                        label="OSB Horizontal Line Spacing Multiplier",
+                                        info=(
+                                            "Adjusts spacing between horizontal OSB text lines "
+                                            "(1.0 = standard). Decrease for tighter horizontal text."
+                                        ),
+                                    )
+                                    outside_text_osb_vertical_line_spacing = gr.Slider(
+                                        0.5,
+                                        2.0,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_vertical_line_spacing",
+                                            saved_settings.get(
+                                                "outside_text_osb_line_spacing", 1.0
+                                            ),
+                                        ),
+                                        step=0.05,
+                                        label="OSB Vertical Text Line Spacing Multiplier",
+                                        info=(
+                                            "Adjusts spacing between vertically stacked OSB characters "
+                                            "(1.0 = standard). Decrease for tighter vertical text."
+                                        ),
+                                    )
+                                    outside_text_osb_auto_vertical = gr.Checkbox(
+                                        value=saved_settings.get(
+                                            "outside_text_osb_auto_vertical", True
+                                        ),
+                                        label="Auto Vertical Text for Tall OSB Text",
+                                        info=(
+                                            "Use vertical stacking for outside-bubble text when "
+                                            "the detected text box is tall and narrow."
+                                        ),
+                                    )
+                                    outside_text_osb_vertical_aspect_ratio = gr.Slider(
+                                        1.0,
+                                        4.0,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_vertical_aspect_ratio", 1.45
+                                        ),
+                                        step=0.05,
+                                        label="OSB Vertical Box Aspect Ratio",
+                                        info=(
+                                            "Minimum height/width ratio for applying automatic "
+                                            "vertical stacking to outside-bubble text."
+                                        ),
+                                    )
+                                    outside_text_osb_vertical_max_chars = gr.Slider(
+                                        0,
+                                        120,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_vertical_max_chars", 30
+                                        ),
+                                        step=1,
+                                        label="OSB Vertical Max Characters",
+                                        info=(
+                                            "Maximum non-space character count for automatic "
+                                            "vertical stacking. Set 0 for no character limit."
+                                        ),
+                                    )
+                                    outside_text_osb_rotation_max_degrees = gr.Slider(
+                                        0,
+                                        45,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_rotation_max_degrees", 15.0
+                                        ),
+                                        step=1,
+                                        label="OSB Max Auto Tilt Angle (deg)",
+                                        info=(
+                                            "Maximum angle for automatically tilting rendered "
+                                            "outside-bubble text to match the original. Set 0 to disable."
+                                        ),
+                                    )
+                                    outside_text_osb_use_subpixel_rendering = gr.Checkbox(
+                                        value=saved_settings.get(
+                                            "outside_text_osb_use_subpixel_rendering", True
+                                        ),
+                                        label="Use Subpixel Rendering",
+                                        info=(
+                                            "Improves text clarity on RGB-based displays. "
+                                            "Disable if using a PenTile-based display (i.e., an OLED screen)"
+                                        ),
+                                    )
+                                    outside_text_osb_font_hinting = gr.Radio(
+                                        choices=["none", "slight", "normal", "full"],
+                                        value=saved_settings.get(
+                                            "outside_text_osb_font_hinting", "none"
+                                        ),
+                                        label="Font Hinting",
+                                        info=(
+                                            "Adjusts glyph outlines to fit pixel grid. 'None' is often best for "
+                                            "high-res displays."
+                                        ),
+                                    )
+                                    outside_text_osb_use_ligatures = gr.Checkbox(
+                                        value=saved_settings.get(
+                                            "outside_text_osb_use_ligatures", False
+                                        ),
+                                        label="Use Standard Ligatures (e.g., fi, fl)",
+                                        info=(
+                                            "Enables common letter combinations to be rendered as single glyphs "
+                                            "(must be supported by the font)."
+                                        ),
+                                    )
+                                    outside_text_osb_outline_width = gr.Slider(
+                                        0,
+                                        10,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_outline_width", 3.0
+                                        ),
+                                        step=0.5,
+                                        label="Outline Width (px)",
+                                        info="Width of text outline for OSB text.",
+                                        visible=False,
+                                    )
+                                    outside_text_osb_padding_pixels = gr.Slider(
+                                        0,
+                                        128,
+                                        value=saved_settings.get(
+                                            "outside_text_osb_padding_pixels", 1.0
+                                        ),
+                                        step=1,
+                                        label="OSB Padding (px)",
+                                        info=(
+                                            "Padding between rendered outside-bubble text "
+                                            "and the detected text box boundary."
+                                        ),
+                                    )
                         setting_groups.append(group_outside_text)
 
                         # --- Output Settings ---
@@ -1975,6 +2762,66 @@ def create_layout(
                         with gr.Group(
                             visible=False, elem_classes="settings-group"
                         ) as group_output:
+                            gr.Markdown("### 저장 경로")
+                            with gr.Row():
+                                output_directory = gr.Textbox(
+                                    label="저장 폴더 경로",
+                                    value=saved_settings.get(
+                                        "output_directory", "output"
+                                    ),
+                                    placeholder=r"C:\path\to\translated",
+                                    info=(
+                                        "절대 경로를 직접 입력하거나 찾아보기로 선택하세요. "
+                                        "상대 경로도 입력할 수 있지만 MangaTranslator 폴더 기준으로 처리됩니다."
+                                    ),
+                                    scale=8,
+                                )
+                                browse_output_directory_button = gr.Button(
+                                    "찾아보기",
+                                    scale=1,
+                                )
+                            output_path_explorer = gr.FileExplorer(
+                                glob="**/*",
+                                file_count="single",
+                                root_dir=output_browser_root,
+                                label=(
+                                    "저장 경로 선택 탐색기 "
+                                    f"({output_browser_root} 기준)"
+                                ),
+                                height=320,
+                                visible=False,
+                                interactive=True,
+                            )
+                            disable_auto_save = gr.Checkbox(
+                                label="번역 자동저장 안함",
+                                value=bool(
+                                    saved_settings.get("disable_auto_save", False)
+                                ),
+                                info=(
+                                    "켜면 단일 번역과 일괄 번역 결과를 위 저장 폴더에 자동 저장하지 않습니다. "
+                                    "화면 표시와 고급 편집기 세션은 유지되며, 일괄 번역의 결과 ZIP은 다운로드용으로 계속 생성됩니다."
+                                ),
+                            )
+                            embed_editor_package_checkbox = gr.Checkbox(
+                                label="편집 정보 포함 저장",
+                                value=bool(
+                                    saved_settings.get("embed_editor_package", True)
+                                ),
+                                info=(
+                                    "켜면 결과 이미지 안에 고급 편집기 세션 정보를 함께 저장합니다. "
+                                    "텍스트박스 좌표, 번역문, 마스크, 원본 복구용 이미지가 포함되며, 끄면 편집 정보가 없는 일반 이미지로 저장됩니다."
+                                ),
+                            )
+                            save_plain_image_copy_checkbox = gr.Checkbox(
+                                label="일반 이미지도 함께 저장",
+                                value=bool(
+                                    saved_settings.get("save_plain_image_copy", False)
+                                ),
+                                info=(
+                                    "켜면 편집 정보 포함 저장이 켜져 있을 때 편집 정보가 없는 일반 이미지 사본도 함께 저장합니다. "
+                                    "일반 이미지는 파일명 뒤에 _plain이 붙습니다."
+                                ),
+                            )
                             gr.Markdown("### Output Format")
                             output_format = gr.Radio(
                                 choices=["auto", "png", "jpeg"],
@@ -2120,16 +2967,29 @@ def create_layout(
             thresholding_value,
             use_otsu_threshold,
             inpaint_colored_bubbles,
+            colored_bubble_inpainting_size,
+            colored_bubble_inpainting_precision,
+            colored_bubble_mask_kernel_size,
+            colored_bubble_mask_dilation_offset,
             roi_shrink_px,
             provider_selector,
             google_api_key,
+            google_rate_limit_enabled,
+            google_request_interval_seconds,
+            google_requests_per_minute,
+            google_burst_requests,
+            google_burst_cooldown_seconds,
+            google_429_cooldown_seconds,
+            google_max_retries,
+            google_429_hourly_limit,
+            google_429_hourly_action,
+            google_429_pause_minutes,
             openai_api_key,
             anthropic_api_key,
             xai_api_key,
             deepseek_api_key,
             zai_api_key,
             moonshot_api_key,
-            mimo_api_key,
             openrouter_api_key,
             openai_compatible_url_input,
             openai_compatible_api_key_input,
@@ -2137,19 +2997,42 @@ def create_layout(
             temperature,
             top_p,
             top_k,
-            use_custom_sampling_checkbox,
             max_tokens,
             config_translation_mode,
             ocr_method_radio,
             max_font_size,
+            emphasis_max_font_size,
             min_font_size,
             line_spacing_mult,
+            emphasis_line_spacing_mult,
+            vertical_line_spacing_mult,
+            vertical_emphasis_line_spacing_mult,
+            vertical_font_size_mult,
+            vertical_max_chars,
+            vertical_emphasis_max_chars,
+            tag_style_table,
             use_subpixel_rendering,
             font_hinting,
             use_ligatures,
+            inside_light_text_color,
+            inside_light_outline_color,
+            inside_light_outline_width,
+            inside_dark_text_color,
+            inside_dark_outline_color,
+            inside_dark_outline_width,
+            outside_light_text_color,
+            outside_light_outline_color,
+            outside_light_outline_width,
+            outside_dark_text_color,
+            outside_dark_outline_color,
+            outside_dark_outline_width,
             output_format,
             jpeg_quality,
             png_compression,
+            output_directory,
+            disable_auto_save,
+            embed_editor_package_checkbox,
+            save_plain_image_copy_checkbox,
             verbose,
             cleaning_only_toggle,
             upscaling_only_toggle,
@@ -2157,6 +3040,7 @@ def create_layout(
             input_language,
             output_language,
             font_dropdown,
+            emphasis_font_pack,
             batch_input_language,
             batch_output_language,
             batch_font_dropdown,
@@ -2170,6 +3054,7 @@ def create_layout(
             effort_dropdown,
             verbosity_dropdown,
             send_full_page_context,
+            parallel_inpaint_translation,
             whiteout_conjoined_bubbles,
             upscale_method,
             bubble_min_side_pixels,
@@ -2183,33 +3068,43 @@ def create_layout(
             hyphen_penalty,
             hyphenation_min_word_length,
             badness_exponent,
-            padding_pixels,
+            padding_horizontal_pixels,
+            padding_vertical_pixels,
             supersampling_factor,
             outside_text_enabled,
             outside_text_seed,
             outside_text_inpainting_method,
-            outside_text_flux_backend_state,
-            outside_text_flux_low_vram,
-            outside_text_flux_sdcpp_cache_mode,
-            outside_text_flux_sdcpp_diffusion_quant_state,
-            outside_text_flux_sdcpp_text_encoder_quant_state,
+            outside_text_kontext_backend,
+            outside_text_flux_offload_mode,
             outside_text_flux_num_inference_steps,
+            outside_text_flux_kontext_prompt,
+            outside_text_flux_klein_prompt,
             outside_text_flux_luminance_correction,
             outside_text_flux_upscale_small_crops,
             outside_text_flux_group_regions,
             outside_text_flux_residual_diff_threshold,
+            outside_text_osb_residual_render_guard_action,
             outside_text_osb_confidence,
-            outside_text_min_area_ignore_ratio_percent,
             outside_text_enable_page_number_filtering,
             outside_text_page_filter_margin_threshold,
             outside_text_page_filter_min_area_ratio,
             outside_text_huggingface_token,
             outside_text_osb_font_pack,
+            outside_text_osb_emphasis_font_pack,
             outside_text_osb_max_font_size,
+            outside_text_osb_emphasis_max_font_size,
             outside_text_osb_min_font_size,
             outside_text_osb_use_ligatures,
             outside_text_osb_outline_width,
+            outside_text_osb_padding_pixels,
             outside_text_osb_line_spacing,
+            outside_text_osb_vertical_line_spacing,
+            outside_text_osb_auto_vertical,
+            outside_text_osb_vertical_aspect_ratio,
+            outside_text_osb_vertical_max_chars,
+            outside_text_osb_tall_box_expand_aspect_ratio,
+            outside_text_osb_tall_box_expand_width_percent,
+            outside_text_osb_rotation_max_degrees,
             outside_text_osb_use_subpixel_rendering,
             outside_text_osb_font_hinting,
             outside_text_bbox_expansion_percent,
@@ -2223,9 +3118,10 @@ def create_layout(
             image_upscale_model,
             auto_scale,
             batch_parallel_requests,
-            batch_parallel_within_pages,
+            batch_retry_failed_once,
             batch_previous_context_image_count,
             batch_previous_context_text_count,
+            batch_previous_context_text_mode,
         ]
 
         reset_outputs = [
@@ -2241,16 +3137,29 @@ def create_layout(
             thresholding_value,
             use_otsu_threshold,
             inpaint_colored_bubbles,
+            colored_bubble_inpainting_size,
+            colored_bubble_inpainting_precision,
+            colored_bubble_mask_kernel_size,
+            colored_bubble_mask_dilation_offset,
             roi_shrink_px,
             provider_selector,
             google_api_key,
+            google_rate_limit_enabled,
+            google_request_interval_seconds,
+            google_requests_per_minute,
+            google_burst_requests,
+            google_burst_cooldown_seconds,
+            google_429_cooldown_seconds,
+            google_max_retries,
+            google_429_hourly_limit,
+            google_429_hourly_action,
+            google_429_pause_minutes,
             openai_api_key,
             anthropic_api_key,
             xai_api_key,
             deepseek_api_key,
             zai_api_key,
             moonshot_api_key,
-            mimo_api_key,
             openrouter_api_key,
             openai_compatible_url_input,
             openai_compatible_api_key_input,
@@ -2258,19 +3167,42 @@ def create_layout(
             temperature,
             top_p,
             top_k,
-            use_custom_sampling_checkbox,
             max_tokens,
             config_translation_mode,
             ocr_method_radio,
             max_font_size,
+            emphasis_max_font_size,
             min_font_size,
             line_spacing_mult,
+            emphasis_line_spacing_mult,
+            vertical_line_spacing_mult,
+            vertical_emphasis_line_spacing_mult,
+            vertical_font_size_mult,
+            vertical_max_chars,
+            vertical_emphasis_max_chars,
+            tag_style_table,
             use_subpixel_rendering,
             font_hinting,
             use_ligatures,
+            inside_light_text_color,
+            inside_light_outline_color,
+            inside_light_outline_width,
+            inside_dark_text_color,
+            inside_dark_outline_color,
+            inside_dark_outline_width,
+            outside_light_text_color,
+            outside_light_outline_color,
+            outside_light_outline_width,
+            outside_dark_text_color,
+            outside_dark_outline_color,
+            outside_dark_outline_width,
             output_format,
             jpeg_quality,
             png_compression,
+            output_directory,
+            disable_auto_save,
+            embed_editor_package_checkbox,
+            save_plain_image_copy_checkbox,
             verbose,
             cleaning_only_toggle,
             upscaling_only_toggle,
@@ -2278,6 +3210,7 @@ def create_layout(
             input_language,
             output_language,
             font_dropdown,
+            emphasis_font_pack,
             batch_input_language,
             batch_output_language,
             batch_font_dropdown,
@@ -2290,8 +3223,8 @@ def create_layout(
             reasoning_effort_dropdown,
             effort_dropdown,
             verbosity_dropdown,
-            config_status,
             send_full_page_context,
+            parallel_inpaint_translation,
             whiteout_conjoined_bubbles,
             upscale_method,
             bubble_min_side_pixels,
@@ -2300,36 +3233,44 @@ def create_layout(
             hyphenate_before_scaling,
             detach_trailing_punctuation,
             auto_vertical_text,
+            padding_horizontal_pixels,
+            padding_vertical_pixels,
             special_instructions,
             batch_special_instructions,
             outside_text_enabled,
             outside_text_seed,
             outside_text_inpainting_method,
-            outside_text_flux_backend,
-            outside_text_flux_backend_state,
-            outside_text_flux_low_vram,
-            outside_text_flux_sdcpp_cache_mode,
-            outside_text_flux_sdcpp_diffusion_quant,
-            outside_text_flux_sdcpp_diffusion_quant_state,
-            outside_text_flux_sdcpp_text_encoder_quant,
-            outside_text_flux_sdcpp_text_encoder_quant_state,
+            outside_text_kontext_backend,
+            outside_text_flux_offload_mode,
             outside_text_flux_num_inference_steps,
+            outside_text_flux_kontext_prompt,
+            outside_text_flux_klein_prompt,
             outside_text_flux_luminance_correction,
             outside_text_flux_upscale_small_crops,
             outside_text_flux_group_regions,
             outside_text_flux_residual_diff_threshold,
+            outside_text_osb_residual_render_guard_action,
             outside_text_osb_confidence,
-            outside_text_min_area_ignore_ratio_percent,
             outside_text_enable_page_number_filtering,
             outside_text_page_filter_margin_threshold,
             outside_text_page_filter_min_area_ratio,
             outside_text_huggingface_token,
             outside_text_osb_font_pack,
+            outside_text_osb_emphasis_font_pack,
             outside_text_osb_max_font_size,
+            outside_text_osb_emphasis_max_font_size,
             outside_text_osb_min_font_size,
             outside_text_osb_use_ligatures,
             outside_text_osb_outline_width,
+            outside_text_osb_padding_pixels,
             outside_text_osb_line_spacing,
+            outside_text_osb_vertical_line_spacing,
+            outside_text_osb_auto_vertical,
+            outside_text_osb_vertical_aspect_ratio,
+            outside_text_osb_vertical_max_chars,
+            outside_text_osb_tall_box_expand_aspect_ratio,
+            outside_text_osb_tall_box_expand_width_percent,
+            outside_text_osb_rotation_max_degrees,
             outside_text_osb_use_subpixel_rendering,
             outside_text_osb_font_hinting,
             outside_text_bbox_expansion_percent,
@@ -2343,9 +3284,10 @@ def create_layout(
             image_upscale_model,
             auto_scale,
             batch_parallel_requests,
-            batch_parallel_within_pages,
+            batch_retry_failed_once,
             batch_previous_context_image_count,
             batch_previous_context_text_count,
+            batch_previous_context_text_mode,
         ]
 
         translate_inputs = [
@@ -2361,6 +3303,10 @@ def create_layout(
             thresholding_value,
             use_otsu_threshold,
             inpaint_colored_bubbles,
+            colored_bubble_inpainting_size,
+            colored_bubble_inpainting_precision,
+            colored_bubble_mask_kernel_size,
+            colored_bubble_mask_dilation_offset,
             roi_shrink_px,
             provider_selector,
             google_api_key,
@@ -2370,7 +3316,6 @@ def create_layout(
             deepseek_api_key,
             zai_api_key,
             moonshot_api_key,
-            mimo_api_key,
             openrouter_api_key,
             openai_compatible_url_input,
             openai_compatible_api_key_input,
@@ -2378,7 +3323,6 @@ def create_layout(
             temperature,
             top_p,
             top_k,
-            use_custom_sampling_checkbox,
             max_tokens,
             config_reading_direction,
             config_translation_mode,
@@ -2386,15 +3330,40 @@ def create_layout(
             input_language,
             output_language,
             font_dropdown,
+            emphasis_font_pack,
             max_font_size,
+            emphasis_max_font_size,
             min_font_size,
             line_spacing_mult,
+            emphasis_line_spacing_mult,
+            vertical_line_spacing_mult,
+            vertical_emphasis_line_spacing_mult,
+            vertical_font_size_mult,
+            vertical_max_chars,
+            vertical_emphasis_max_chars,
+            tag_style_table,
             use_subpixel_rendering,
             font_hinting,
             use_ligatures,
+            inside_light_text_color,
+            inside_light_outline_color,
+            inside_light_outline_width,
+            inside_dark_text_color,
+            inside_dark_outline_color,
+            inside_dark_outline_width,
+            outside_light_text_color,
+            outside_light_outline_color,
+            outside_light_outline_width,
+            outside_dark_text_color,
+            outside_dark_outline_color,
+            outside_dark_outline_width,
             output_format,
             jpeg_quality,
             png_compression,
+            output_directory,
+            disable_auto_save,
+            embed_editor_package_checkbox,
+            save_plain_image_copy_checkbox,
             verbose,
             cleaning_only_toggle,
             upscaling_only_toggle,
@@ -2409,6 +3378,7 @@ def create_layout(
             effort_dropdown,
             verbosity_dropdown,
             send_full_page_context,
+            parallel_inpaint_translation,
             whiteout_conjoined_bubbles,
             upscale_method,
             bubble_min_side_pixels,
@@ -2420,33 +3390,43 @@ def create_layout(
             hyphen_penalty,
             hyphenation_min_word_length,
             badness_exponent,
-            padding_pixels,
+            padding_horizontal_pixels,
+            padding_vertical_pixels,
             supersampling_factor,
             outside_text_enabled,
             outside_text_seed,
             outside_text_inpainting_method,
-            outside_text_flux_backend_state,
-            outside_text_flux_low_vram,
-            outside_text_flux_sdcpp_cache_mode,
-            outside_text_flux_sdcpp_diffusion_quant_state,
-            outside_text_flux_sdcpp_text_encoder_quant_state,
+            outside_text_kontext_backend,
+            outside_text_flux_offload_mode,
             outside_text_flux_num_inference_steps,
+            outside_text_flux_kontext_prompt,
+            outside_text_flux_klein_prompt,
             outside_text_flux_luminance_correction,
             outside_text_flux_upscale_small_crops,
             outside_text_flux_group_regions,
             outside_text_flux_residual_diff_threshold,
+            outside_text_osb_residual_render_guard_action,
             outside_text_osb_confidence,
-            outside_text_min_area_ignore_ratio_percent,
             outside_text_enable_page_number_filtering,
             outside_text_page_filter_margin_threshold,
             outside_text_page_filter_min_area_ratio,
             outside_text_huggingface_token,
             outside_text_osb_font_pack,
+            outside_text_osb_emphasis_font_pack,
             outside_text_osb_max_font_size,
+            outside_text_osb_emphasis_max_font_size,
             outside_text_osb_min_font_size,
             outside_text_osb_use_ligatures,
             outside_text_osb_outline_width,
+            outside_text_osb_padding_pixels,
             outside_text_osb_line_spacing,
+            outside_text_osb_vertical_line_spacing,
+            outside_text_osb_auto_vertical,
+            outside_text_osb_vertical_aspect_ratio,
+            outside_text_osb_vertical_max_chars,
+            outside_text_osb_tall_box_expand_aspect_ratio,
+            outside_text_osb_tall_box_expand_width_percent,
+            outside_text_osb_rotation_max_degrees,
             outside_text_osb_use_subpixel_rendering,
             outside_text_osb_font_hinting,
             outside_text_bbox_expansion_percent,
@@ -2465,9 +3445,10 @@ def create_layout(
             special_instructions,
             batch_special_instructions,
             batch_parallel_requests,
-            batch_parallel_within_pages,
+            batch_retry_failed_once,
             batch_previous_context_image_count,
             batch_previous_context_text_count,
+            batch_previous_context_text_mode,
         ]
 
         batch_inputs = [
@@ -2484,6 +3465,10 @@ def create_layout(
             thresholding_value,
             use_otsu_threshold,
             inpaint_colored_bubbles,
+            colored_bubble_inpainting_size,
+            colored_bubble_inpainting_precision,
+            colored_bubble_mask_kernel_size,
+            colored_bubble_mask_dilation_offset,
             roi_shrink_px,
             provider_selector,
             google_api_key,
@@ -2493,7 +3478,6 @@ def create_layout(
             deepseek_api_key,
             zai_api_key,
             moonshot_api_key,
-            mimo_api_key,
             openrouter_api_key,
             openai_compatible_url_input,
             openai_compatible_api_key_input,
@@ -2501,7 +3485,6 @@ def create_layout(
             temperature,
             top_p,
             top_k,
-            use_custom_sampling_checkbox,
             max_tokens,
             config_reading_direction,
             config_translation_mode,
@@ -2509,15 +3492,40 @@ def create_layout(
             input_language,
             output_language,
             font_dropdown,
+            emphasis_font_pack,
             max_font_size,
+            emphasis_max_font_size,
             min_font_size,
             line_spacing_mult,
+            emphasis_line_spacing_mult,
+            vertical_line_spacing_mult,
+            vertical_emphasis_line_spacing_mult,
+            vertical_font_size_mult,
+            vertical_max_chars,
+            vertical_emphasis_max_chars,
+            tag_style_table,
             use_subpixel_rendering,
             font_hinting,
             use_ligatures,
+            inside_light_text_color,
+            inside_light_outline_color,
+            inside_light_outline_width,
+            inside_dark_text_color,
+            inside_dark_outline_color,
+            inside_dark_outline_width,
+            outside_light_text_color,
+            outside_light_outline_color,
+            outside_light_outline_width,
+            outside_dark_text_color,
+            outside_dark_outline_color,
+            outside_dark_outline_width,
             output_format,
             jpeg_quality,
             png_compression,
+            output_directory,
+            disable_auto_save,
+            embed_editor_package_checkbox,
+            save_plain_image_copy_checkbox,
             verbose,
             cleaning_only_toggle,
             upscaling_only_toggle,
@@ -2532,6 +3540,7 @@ def create_layout(
             effort_dropdown,
             verbosity_dropdown,
             send_full_page_context,
+            parallel_inpaint_translation,
             whiteout_conjoined_bubbles,
             upscale_method,
             bubble_min_side_pixels,
@@ -2543,33 +3552,43 @@ def create_layout(
             hyphen_penalty,
             hyphenation_min_word_length,
             badness_exponent,
-            padding_pixels,
+            padding_horizontal_pixels,
+            padding_vertical_pixels,
             supersampling_factor,
             outside_text_enabled,
             outside_text_seed,
             outside_text_inpainting_method,
-            outside_text_flux_backend_state,
-            outside_text_flux_low_vram,
-            outside_text_flux_sdcpp_cache_mode,
-            outside_text_flux_sdcpp_diffusion_quant_state,
-            outside_text_flux_sdcpp_text_encoder_quant_state,
+            outside_text_kontext_backend,
+            outside_text_flux_offload_mode,
             outside_text_flux_num_inference_steps,
+            outside_text_flux_kontext_prompt,
+            outside_text_flux_klein_prompt,
             outside_text_flux_luminance_correction,
             outside_text_flux_upscale_small_crops,
             outside_text_flux_group_regions,
             outside_text_flux_residual_diff_threshold,
+            outside_text_osb_residual_render_guard_action,
             outside_text_osb_confidence,
-            outside_text_min_area_ignore_ratio_percent,
             outside_text_enable_page_number_filtering,
             outside_text_page_filter_margin_threshold,
             outside_text_page_filter_min_area_ratio,
             outside_text_huggingface_token,
             outside_text_osb_font_pack,
+            outside_text_osb_emphasis_font_pack,
             outside_text_osb_max_font_size,
+            outside_text_osb_emphasis_max_font_size,
             outside_text_osb_min_font_size,
             outside_text_osb_use_ligatures,
             outside_text_osb_outline_width,
+            outside_text_osb_padding_pixels,
             outside_text_osb_line_spacing,
+            outside_text_osb_vertical_line_spacing,
+            outside_text_osb_auto_vertical,
+            outside_text_osb_vertical_aspect_ratio,
+            outside_text_osb_vertical_max_chars,
+            outside_text_osb_tall_box_expand_aspect_ratio,
+            outside_text_osb_tall_box_expand_width_percent,
+            outside_text_osb_rotation_max_degrees,
             outside_text_osb_use_subpixel_rendering,
             outside_text_osb_font_hinting,
             outside_text_bbox_expansion_percent,
@@ -2588,9 +3607,10 @@ def create_layout(
             special_instructions,
             batch_special_instructions,
             batch_parallel_requests,
-            batch_parallel_within_pages,
+            batch_retry_failed_once,
             batch_previous_context_image_count,
             batch_previous_context_text_count,
+            batch_previous_context_text_mode,
         ]
 
         # Config Tab Navigation & Updates
@@ -2623,25 +3643,44 @@ def create_layout(
             outputs=output_components_for_switch,
             queue=False,
         )
-        nav_button_outside_text.click(
+        nav_button_tag_styles.click(
             fn=lambda idx=4: utils.switch_settings_view(
                 idx, setting_groups, nav_buttons
             ),
             outputs=output_components_for_switch,
             queue=False,
         )
-        nav_button_output.click(
+        nav_button_outside_text.click(
             fn=lambda idx=5: utils.switch_settings_view(
                 idx, setting_groups, nav_buttons
             ),
             outputs=output_components_for_switch,
             queue=False,
         )
-        nav_button_other.click(
+        nav_button_output.click(
             fn=lambda idx=6: utils.switch_settings_view(
                 idx, setting_groups, nav_buttons
             ),
             outputs=output_components_for_switch,
+            queue=False,
+        )
+        nav_button_other.click(
+            fn=lambda idx=7: utils.switch_settings_view(
+                idx, setting_groups, nav_buttons
+            ),
+            outputs=output_components_for_switch,
+            queue=False,
+        )
+
+        browse_output_directory_button.click(
+            fn=lambda: gr.update(visible=True),
+            outputs=[output_path_explorer],
+            queue=False,
+        )
+        output_path_explorer.change(
+            fn=callbacks.handle_output_path_explorer_select,
+            inputs=[output_path_explorer, output_directory],
+            outputs=[output_directory],
             queue=False,
         )
 
@@ -2664,11 +3703,7 @@ def create_layout(
 
         provider_selector.change(
             fn=callbacks.handle_provider_change,
-            inputs=[
-                provider_selector,
-                ocr_method_radio,
-                use_custom_sampling_checkbox,
-            ],
+            inputs=[provider_selector, temperature, ocr_method_radio],
             outputs=[
                 google_api_key,
                 openai_api_key,
@@ -2677,7 +3712,6 @@ def create_layout(
                 deepseek_api_key,
                 zai_api_key,
                 moonshot_api_key,
-                mimo_api_key,
                 openrouter_api_key,
                 openai_compatible_url_input,
                 openai_compatible_api_key_input,
@@ -2686,7 +3720,6 @@ def create_layout(
                 top_p,
                 top_k,
                 max_tokens,
-                use_custom_sampling_checkbox,
                 enable_web_search_checkbox,
                 enable_code_execution_checkbox,
                 image_detail_dropdown,
@@ -2728,18 +3761,12 @@ def create_layout(
 
         config_model_name.change(
             fn=callbacks.handle_model_change,
-            inputs=[
-                provider_selector,
-                config_model_name,
-                temperature,
-                use_custom_sampling_checkbox,
-            ],
+            inputs=[provider_selector, config_model_name, temperature],
             outputs=[
                 temperature,
                 top_p,
                 top_k,
                 max_tokens,
-                use_custom_sampling_checkbox,
                 enable_web_search_checkbox,
                 enable_code_execution_checkbox,
                 image_detail_dropdown,
@@ -2756,25 +3783,8 @@ def create_layout(
         # Reasoning effort change → update temp/top_p slider interactivity
         reasoning_effort_dropdown.change(
             fn=callbacks.handle_reasoning_effort_change,
-            inputs=[
-                provider_selector,
-                config_model_name,
-                reasoning_effort_dropdown,
-                use_custom_sampling_checkbox,
-            ],
-            outputs=[temperature, top_p, top_k, use_custom_sampling_checkbox],
-            queue=False,
-        )
-
-        use_custom_sampling_checkbox.change(
-            fn=callbacks.handle_use_custom_sampling_change,
-            inputs=[
-                provider_selector,
-                config_model_name,
-                temperature,
-                use_custom_sampling_checkbox,
-            ],
-            outputs=[temperature, top_p, top_k],
+            inputs=[provider_selector, config_model_name, reasoning_effort_dropdown],
+            outputs=[temperature, top_p],
             queue=False,
         )
 
@@ -2844,11 +3854,8 @@ def create_layout(
         def _update_inpainting_controls(
             method: str,
             current_backend: str,
-            current_diffusion_quant: str,
-            current_text_encoder_quant: str,
             current_steps: int,
             upscale_small_crops: bool,
-            group_regions: bool,
         ):
             """Update controls based on inpainting method selection."""
             is_opencv = method == "opencv"
@@ -2864,64 +3871,20 @@ def create_layout(
                 max_steps = 12
                 default_steps = 4
 
-            if is_klein:
-                backend_value = flux_valid_backend(method, current_backend)
-                backend_visible = True
-            elif is_kontext:
-                backend_value = flux_valid_backend(method, current_backend)
-                backend_visible = True
-            else:
-                backend_value = flux_valid_backend(method, current_backend)
-                backend_visible = False
-
-            show_low_vram = (is_klein or is_kontext) and backend_value == "sdnq"
-            show_sdcpp_cache = (is_klein or is_kontext) and backend_value == "sdcpp"
-            available_text_encoder_quants = flux_sdcpp_text_encoder_quants(method)
-            text_encoder_quants = (
-                available_text_encoder_quants
-                or flux_sdcpp_text_encoder_quants("flux_klein_4b")
-            )
-            diffusion_quant_value = (
-                current_diffusion_quant
-                if current_diffusion_quant in FLUX_SDCPP_DIFFUSION_QUANTS
-                else "Q4_K_M"
-            )
-            text_encoder_quant_value = flux_sdcpp_valid_text_encoder_quant(
-                method, current_text_encoder_quant
-            )
-            residual_interactive = is_kontext and backend_value == "nunchaku"
-            luminance_interactive = (
-                is_klein and bool(upscale_small_crops) and not bool(group_regions)
-            )
+            show_low_vram = is_klein or is_kontext
+            residual_interactive = is_kontext and current_backend == "nunchaku"
+            luminance_interactive = is_klein and bool(upscale_small_crops)
             luminance_update = gr.update(visible=False, interactive=False)
             if is_klein:
                 luminance_update = gr.update(
                     visible=True,
                     interactive=luminance_interactive,
-                    value=luminance_interactive,
                 )
 
             return (
-                gr.update(
-                    visible=backend_visible,
-                    choices=_flux_backend_choices(method),
-                    value=backend_value,
-                ),
-                backend_value,
+                gr.update(visible=is_kontext),
                 gr.update(visible=show_low_vram),
-                gr.update(visible=show_sdcpp_cache),
-                gr.update(
-                    choices=[(quant, quant) for quant in FLUX_SDCPP_DIFFUSION_QUANTS],
-                    value=diffusion_quant_value,
-                    visible=show_sdcpp_cache,
-                ),
-                diffusion_quant_value,
-                gr.update(
-                    choices=[(quant, quant) for quant in text_encoder_quants],
-                    value=text_encoder_quant_value,
-                    visible=show_sdcpp_cache and bool(available_text_encoder_quants),
-                ),
-                text_encoder_quant_value,
+                gr.update(visible=show_low_vram),
                 gr.update(
                     interactive=(not is_no_flux),
                     maximum=max_steps,
@@ -2930,11 +3893,8 @@ def create_layout(
                 luminance_update,
                 gr.update(visible=(not is_no_flux), interactive=is_klein),
                 gr.update(visible=(not is_no_flux), interactive=(not is_no_flux)),
-                gr.update(
-                    visible=residual_interactive,
-                    interactive=residual_interactive,
-                ),
-                gr.update(interactive=(not is_no_flux)),
+                gr.update(visible=is_kontext, interactive=residual_interactive),
+                gr.update(visible=(not is_no_flux), interactive=(not is_no_flux)),
                 gr.update(interactive=(not is_no_flux)),
             )
 
@@ -2942,29 +3902,37 @@ def create_layout(
             fn=_update_inpainting_controls,
             inputs=[
                 outside_text_inpainting_method,
-                outside_text_flux_backend_state,
-                outside_text_flux_sdcpp_diffusion_quant_state,
-                outside_text_flux_sdcpp_text_encoder_quant_state,
+                outside_text_kontext_backend,
                 outside_text_flux_num_inference_steps,
                 outside_text_flux_upscale_small_crops,
-                outside_text_flux_group_regions,
             ],
             outputs=[
-                outside_text_flux_backend,
-                outside_text_flux_backend_state,
-                outside_text_flux_low_vram,
-                outside_text_flux_sdcpp_cache_mode,
-                outside_text_flux_sdcpp_diffusion_quant,
-                outside_text_flux_sdcpp_diffusion_quant_state,
-                outside_text_flux_sdcpp_text_encoder_quant,
-                outside_text_flux_sdcpp_text_encoder_quant_state,
+                outside_text_kontext_backend,
+                outside_text_flux_offload_mode,
+                outside_text_flux_memory_help,
                 outside_text_flux_num_inference_steps,
                 outside_text_flux_luminance_correction,
                 outside_text_flux_upscale_small_crops,
                 outside_text_flux_group_regions,
                 outside_text_flux_residual_diff_threshold,
+                outside_text_osb_residual_render_guard_action,
                 outside_text_seed,
-                inpaint_colored_bubbles,
+            ],
+            queue=False,
+        )
+
+        def _update_colored_bubble_lama_controls(enabled: bool):
+            update = gr.update(interactive=bool(enabled))
+            return update, update, update, update
+
+        inpaint_colored_bubbles.change(
+            fn=_update_colored_bubble_lama_controls,
+            inputs=[inpaint_colored_bubbles],
+            outputs=[
+                colored_bubble_inpainting_size,
+                colored_bubble_inpainting_precision,
+                colored_bubble_mask_kernel_size,
+                colored_bubble_mask_dilation_offset,
             ],
             queue=False,
         )
@@ -2972,18 +3940,13 @@ def create_layout(
         def _update_luminance_interactivity(
             upscale_small_crops: bool, group_regions: bool, method: str
         ):
-            """Luminance correction is calibrated for ungrouped ~1MP Klein crops."""
+            """Luminance correction is available for Klein crops scaled to ~1MP."""
             is_klein = method in ("flux_klein_9b", "flux_klein_4b")
             if not is_klein:
                 return gr.update(interactive=False)
 
-            luminance_interactive = bool(upscale_small_crops) and not bool(
-                group_regions
-            )
-            return gr.update(
-                interactive=luminance_interactive,
-                value=luminance_interactive,
-            )
+            luminance_interactive = bool(upscale_small_crops)
+            return gr.update(interactive=luminance_interactive)
 
         for control in (
             outside_text_flux_upscale_small_crops,
@@ -3000,76 +3963,24 @@ def create_layout(
                 queue=False,
             )
 
-        # Flux backend change -> update sd.cpp-specific, Low VRAM, and Residual diff visibility
-        def _update_flux_backend_controls(
-            backend: str, method: str, current_text_encoder_quant: str
-        ):
-            """Update controls when Flux backend changes."""
-            is_kontext = method == "flux_kontext"
-            is_klein = method in ("flux_klein_9b", "flux_klein_4b")
-            backend_value = flux_valid_backend(method, backend)
-            show_low_vram = (is_klein or is_kontext) and backend_value == "sdnq"
-            show_sdcpp_cache = (is_klein or is_kontext) and backend_value == "sdcpp"
-            text_encoder_quants = flux_sdcpp_text_encoder_quants(method)
-            text_encoder_quant_value = flux_sdcpp_valid_text_encoder_quant(
-                method, current_text_encoder_quant
-            )
+        # Kontext backend change -> update Low VRAM and Residual diff visibility
+        def _update_kontext_backend_controls(backend: str):
+            """Update controls when Kontext backend changes."""
+            is_sdnq = backend == "sdnq"
             return (
-                gr.update(
-                    choices=_flux_backend_choices(method),
-                    value=backend_value,
-                    visible=is_klein or is_kontext,
-                ),
-                backend_value,
-                gr.update(visible=show_low_vram),
-                gr.update(visible=show_sdcpp_cache),
-                gr.update(visible=show_sdcpp_cache),
-                gr.update(
-                    choices=[(quant, quant) for quant in text_encoder_quants],
-                    value=text_encoder_quant_value,
-                    visible=show_sdcpp_cache and bool(text_encoder_quants),
-                ),
-                text_encoder_quant_value,
-                gr.update(
-                    visible=(is_kontext and backend_value == "nunchaku"),
-                    interactive=(is_kontext and backend_value == "nunchaku"),
-                ),
+                gr.update(visible=True),
+                gr.update(visible=True),
+                gr.update(interactive=(not is_sdnq)),
             )
 
-        outside_text_flux_backend.change(
-            fn=_update_flux_backend_controls,
-            inputs=[
-                outside_text_flux_backend,
-                outside_text_inpainting_method,
-                outside_text_flux_sdcpp_text_encoder_quant_state,
-            ],
+        outside_text_kontext_backend.change(
+            fn=_update_kontext_backend_controls,
+            inputs=outside_text_kontext_backend,
             outputs=[
-                outside_text_flux_backend,
-                outside_text_flux_backend_state,
-                outside_text_flux_low_vram,
-                outside_text_flux_sdcpp_cache_mode,
-                outside_text_flux_sdcpp_diffusion_quant,
-                outside_text_flux_sdcpp_text_encoder_quant,
-                outside_text_flux_sdcpp_text_encoder_quant_state,
+                outside_text_flux_offload_mode,
+                outside_text_flux_memory_help,
                 outside_text_flux_residual_diff_threshold,
             ],
-            queue=False,
-        )
-
-        outside_text_flux_sdcpp_diffusion_quant.change(
-            fn=lambda quant: quant,
-            inputs=outside_text_flux_sdcpp_diffusion_quant,
-            outputs=outside_text_flux_sdcpp_diffusion_quant_state,
-            queue=False,
-        )
-
-        outside_text_flux_sdcpp_text_encoder_quant.change(
-            fn=lambda quant, method: flux_sdcpp_valid_text_encoder_quant(method, quant),
-            inputs=[
-                outside_text_flux_sdcpp_text_encoder_quant,
-                outside_text_inpainting_method,
-            ],
-            outputs=outside_text_flux_sdcpp_text_encoder_quant_state,
             queue=False,
         )
 
@@ -3155,6 +4066,7 @@ def create_layout(
                 batch_original_language_state,
                 send_full_page_context,
                 batch_previous_context_image_count,
+                parallel_inpaint_translation,
                 whiteout_conjoined_bubbles,
                 enable_code_execution_checkbox,
                 image_detail_dropdown,
@@ -3194,6 +4106,13 @@ def create_layout(
             queue=False,
         )
 
+        tag_style_font_apply.click(
+            fn=callbacks.handle_apply_tag_style_font,
+            inputs=[tag_style_table, tag_style_font_target, tag_style_font_pack],
+            outputs=[tag_style_table],
+            queue=False,
+        )
+
         # Config Save/Reset Buttons
         save_config_btn.click(
             fn=callbacks.handle_save_config_click,
@@ -3216,7 +4135,9 @@ def create_layout(
         refresh_outputs = [
             font_dropdown,
             batch_font_dropdown,
+            emphasis_font_pack,
             outside_text_osb_font_pack,
+            outside_text_osb_emphasis_font_pack,
         ]
         refresh_resources_button.click(
             fn=functools.partial(
@@ -3237,17 +4158,106 @@ def create_layout(
 
         # Translator Tab Button
         clear_button.click(
-            fn=lambda: (None, None, gr.update(value="", lines=1)),
-            outputs=[input_image, output_image, status_message],
+            fn=lambda: (
+                None,
+                None,
+                gr.update(value="", lines=1),
+                gr.update(value=None, visible=True),
+                gr.update(value=None, visible=True),
+                "",
+                gr.update(visible=False),
+            ),
+            outputs=[
+                input_image,
+                output_image,
+                status_message,
+                translator_saved_file,
+                translator_plain_file,
+                editor_session_state,
+                open_advanced_editor_button,
+            ],
             queue=False,
         ).then(fn=None, js=js_reset_status_height, queue=False)
+
+        open_advanced_editor_button.click(
+            fn=callbacks.handle_launch_advanced_editor,
+            inputs=[editor_session_state],
+            outputs=[status_message],
+            queue=False,
+        )
+
+        image_editor_create_button.click(
+            fn=functools.partial(
+                callbacks.handle_create_image_editor_sessions,
+                fonts_base_dir=fonts_base_dir,
+            ),
+            inputs=[
+                image_editor_folder_path,
+                image_editor_font_dropdown,
+            ],
+            outputs=[
+                image_editor_session_select,
+                image_editor_open_button,
+                image_editor_status,
+            ],
+            queue=False,
+        )
+        image_editor_folder_button.click(
+            fn=callbacks.handle_browse_image_editor_folder,
+            inputs=[image_editor_folder_path],
+            outputs=[image_editor_folder_path],
+            queue=False,
+            show_progress="hidden",
+        )
+        image_editor_session_select.change(
+            fn=lambda session_path: gr.update(
+                visible=bool(session_path), interactive=bool(session_path)
+            ),
+            inputs=[image_editor_session_select],
+            outputs=[image_editor_open_button],
+            queue=False,
+        )
+        image_editor_open_button.click(
+            fn=callbacks.handle_launch_advanced_editor,
+            inputs=[image_editor_session_select],
+            outputs=[image_editor_status],
+            queue=False,
+        )
+        image_editor_clear_button.click(
+            fn=lambda: (
+                "",
+                gr.update(choices=[], value=None, visible=False),
+                gr.update(visible=False, interactive=False),
+                gr.update(value="", lines=1),
+            ),
+            outputs=[
+                image_editor_folder_path,
+                image_editor_session_select,
+                image_editor_open_button,
+                image_editor_status,
+            ],
+            queue=False,
+        )
         batch_clear_button.click(
-            fn=lambda: (None, None, None, gr.update(value="", lines=1)),
+            fn=lambda: (
+                None,
+                None,
+                None,
+                gr.update(value="", lines=1),
+                gr.update(value=None, visible=True),
+                gr.update(value=None, visible=True),
+                gr.update(choices=[], value=None, visible=False),
+                gr.update(visible=False),
+            ),
             outputs=[
                 input_files,
                 input_zip,
                 batch_output_gallery,
                 batch_status_message,
+                batch_success_zip_file,
+                batch_failed_zip_file,
+                batch_editor_session_select,
+                batch_advanced_editor_button,
             ],
             queue=False,
         ).then(fn=None, js=js_reset_status_height, queue=False)
@@ -3275,7 +4285,14 @@ def create_layout(
                 target_device=target_device,
             ),
             inputs=translate_inputs,
-            outputs=[output_image, status_message],
+            outputs=[
+                output_image,
+                status_message,
+                translator_saved_file,
+                translator_plain_file,
+                editor_session_state,
+                open_advanced_editor_button,
+            ],
         )
         translate_event.then(
             fn=functools.partial(
@@ -3326,7 +4343,28 @@ def create_layout(
                 target_device=target_device,
             ),
             inputs=batch_inputs,
-            outputs=[batch_output_gallery, batch_status_message],
+            outputs=[
+                batch_output_gallery,
+                batch_status_message,
+                batch_success_zip_file,
+                batch_failed_zip_file,
+                batch_editor_session_select,
+                batch_advanced_editor_button,
+            ],
+        )
+        batch_editor_session_select.change(
+            fn=lambda session_path: gr.update(
+                visible=bool(session_path), interactive=bool(session_path)
+            ),
+            inputs=[batch_editor_session_select],
+            outputs=[batch_advanced_editor_button],
+            queue=False,
+        )
+        batch_advanced_editor_button.click(
+            fn=callbacks.handle_launch_advanced_editor,
+            inputs=[batch_editor_session_select],
+            outputs=[batch_status_message],
+            queue=False,
         )
         batch_event.then(
             fn=functools.partial(
@@ -3348,7 +4386,6 @@ def create_layout(
 
         batch_cancel_button.click(
             fn=callbacks.cancel_process,
-            cancels=batch_event,
             queue=False,
         )
 
@@ -3362,5 +4399,6 @@ def create_layout(
             outputs=[config_model_name],
             queue=False,
         )
+        app.load(fn=None, inputs=None, outputs=None, js=js_folder_upload, queue=False)
 
     return app

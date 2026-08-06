@@ -1,0 +1,73 @@
+{
+  "output": {
+    "custom_output_path": "",
+    "overwrite_source_on_save": false
+  },
+  "editor": {
+    "show_help": true,
+    "show_inpaint_mask": true
+  },
+  "show_help": true,
+  "ocr": {
+    "auto_ocr": true,
+    "detector": "default",
+    "detector_confidence": 0.2,
+    "merge_detected_boxes": true,
+    "ocr_model": "manga_ocr",
+    "ocr_threshold": 0.01
+  },
+  "inpaint": {
+    "method": "lama_large",
+    "device": "cuda",
+    "seed": -1,
+    "steps": 4,
+    "inpainting_size": 2048,
+    "prompt": "Remove all text and sound effects.\nPreserve character line art, screentones, panel borders, speech-bubble outlines, and background details exactly as they appear.\nKeep the original contrast, shading, character expressions, and surrounding environmental textures unchanged.\nCompletely clear the text areas so no letter strokes or remnants remain, and restore them so they blend naturally with the surrounding texture.",
+    "low_vram": false,
+    "luminance_correction": true,
+    "upscale_small_crops": true,
+    "strict_mask_clipping": true,
+    "force_torch": true,
+    "auto_run_after_brush": false,
+    "precision": "fp32",
+    "kontext_backend": "sdnq",
+    "residual_diff_threshold": 0.15,
+    "opencv_radius": 3.0,
+    "opencv_algorithm": "telea"
+  },
+  "translation": {
+    "input_source": "source"
+  },
+  "presets": {
+    "1": {
+      "auto_ocr": true,
+      "detector": "default",
+      "detector_confidence": 0.2,
+      "merge_detected_boxes": true,
+      "ocr_model": "manga_ocr",
+      "ocr_threshold": 0.01,
+      "inpaint_method": "lama_large",
+      "inpaint_device": "cuda",
+      "inpaint_seed": -1,
+      "inpaint_steps": 4,
+      "auto_run_after_brush": false,
+      "inpainting_size": 2048,
+      "inpaint_prompt": "Remove all text and sound effects.\nPreserve character line art, screentones, panel borders, speech-bubble outlines, and background details exactly as they appear.\nKeep the original contrast, shading, character expressions, and surrounding environmental textures unchanged.\nCompletely clear the text areas so no letter strokes or remnants remain, and restore them so they blend naturally with the surrounding texture.",
+      "low_vram": false,
+      "luminance_correction": true,
+      "upscale_small_crops": true,
+      "strict_mask_clipping": true,
+      "force_torch": true,
+      "precision": "fp32",
+      "kontext_backend": "sdnq",
+      "residual_diff_threshold": 0.15,
+      "opencv_radius": 3.0,
+      "opencv_algorithm": "telea",
+      "translation_input_source": "source",
+      "custom_output_path": "",
+      "overwrite_source_on_save": false,
+      "show_help": true,
+      "show_inpaint_mask": true
+    }
+  }
+}

@@ -30,3 +30,12 @@ Thumbs.db
 /.vscode/
 *.log
 *.txt
+
+# large runtime/data — not source code, keep out of repo
+/advanced_editor/hgmzhn_runtime/models/
+/advanced_editor/__pycache__/
+/editor_sessions/
+
+# one-off backup files created during risky edits
+*.bak_before_*
+*.bak_*

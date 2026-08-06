@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import os
 from typing import List, Optional, Tuple
 
@@ -16,6 +17,22 @@ from utils.logging import log_message
 OSB_BUBBLE_MATCH_IOA_THRESHOLD = (
     0.2  # Minimum text-box overlap ratio for OSB assignment
 )
+OSB_TEXT_FREE_BYPASS_MAX_BUBBLE_IOA = 0.60
+OSB_MASK_OUTSIDE_RESCUE_MAX_COVERAGE = 0.12
+OSB_MASK_OUTSIDE_RESCUE_MIN_BBOX_IOA = 0.10
+OSB_PARTIAL_SFX_RESCUE_MAX_MASK_COVERAGE = 0.45
+OSB_PARTIAL_SFX_RESCUE_MIN_BUBBLE_IOA = 0.10
+OSB_PARTIAL_SFX_RESCUE_MAX_BUBBLE_IOA = 0.55
+OSB_PARTIAL_SFX_RESCUE_MIN_ASPECT = 1.65
+OSB_PARTIAL_SFX_RESCUE_MAX_HEIGHT_RATIO = 0.12
+OSB_EDGE_SFX_RESCUE_MIN_BUBBLE_IOA = 0.35
+OSB_EDGE_SFX_RESCUE_MAX_AREA_RATIO = 0.16
+OSB_EDGE_SFX_RESCUE_MAX_WIDTH_RATIO = 0.46
+OSB_EDGE_SFX_RESCUE_MAX_HEIGHT_RATIO = 0.50
+OSB_EDGE_SFX_RESCUE_EDGE_BAND_RATIO = 0.24
+OSB_EDGE_SFX_RESCUE_MAX_EDGE_GAP_RATIO = 0.12
+OSB_EDGE_SFX_RESCUE_MAX_EDGE_GAP_PX = 14.0
+OSB_EDGE_SFX_RESCUE_MAX_MASK_COVERAGE = 0.45
 
 
 class OutsideTextDetector:
@@ -66,9 +83,30 @@ class OutsideTextDetector:
         """Return the area of an xyxy box."""
         return max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
 
+    def box_ioa(self, inner_box, outer_box) -> float:
+        """Return intersection over the first box area."""
+        inner_area = self.box_area(inner_box)
+        if inner_area <= 0.0:
+            return 0.0
+        return self.box_intersection_area(inner_box, outer_box) / inner_area
+
     def point_in_box(self, point_x: float, point_y: float, box) -> bool:
         """Return True if a point lies inside an xyxy box."""
         return box[0] <= point_x <= box[2] and box[1] <= point_y <= box[3]
+
+    def normalize_box(self, box):
+        if box is None:
+            return None
+        if hasattr(box, "detach"):
+            box = box.detach().cpu().numpy()
+        if hasattr(box, "tolist"):
+            box = box.tolist()
+        if len(box) != 4:
+            return None
+        try:
+            return [float(v) for v in box]
+        except (TypeError, ValueError):
+            return None
 
     def text_box_meaningfully_matches_bubble(self, text_box, bubble_box) -> bool:
         """Return True when a text box meaningfully belongs to a bubble box."""
@@ -86,6 +124,197 @@ class OutsideTextDetector:
             intersection / text_area >= OSB_BUBBLE_MATCH_IOA_THRESHOLD
             or self.point_in_box(center_x, center_y, bubble_box)
         )
+
+    def text_box_matches_any_text_free(self, text_box, text_free_boxes) -> bool:
+        """Return True when the OSB candidate clearly belongs to a text_free box."""
+        if not text_free_boxes:
+            return False
+        for tf_box in text_free_boxes:
+            normalized = self.normalize_box(tf_box)
+            if normalized is None:
+                continue
+            if self.text_box_meaningfully_matches_bubble(text_box, normalized):
+                return True
+        return False
+
+    def mask_coverage(self, mask, box) -> float:
+        """Return how much of an xyxy box is covered by a bool/uint8 mask."""
+        if mask is None:
+            return 1.0
+        normalized = self.normalize_box(box)
+        if normalized is None:
+            return 1.0
+        try:
+            mask_np = np.asarray(mask)
+            if mask_np.ndim == 3:
+                mask_np = mask_np[..., 0]
+            h, w = mask_np.shape[:2]
+            x0 = max(0, min(w, int(round(normalized[0]))))
+            y0 = max(0, min(h, int(round(normalized[1]))))
+            x1 = max(0, min(w, int(round(normalized[2]))))
+            y1 = max(0, min(h, int(round(normalized[3]))))
+            if x1 <= x0 or y1 <= y0:
+                return 1.0
+            region = mask_np[y0:y1, x0:x1]
+            if region.size == 0:
+                return 1.0
+            return float(np.count_nonzero(region)) / float(region.size)
+        except Exception:
+            return 1.0
+
+    def point_in_mask(self, mask, point_x: float, point_y: float) -> bool:
+        """Return True if a point lies inside a bool/uint8 mask."""
+        if mask is None:
+            return False
+        try:
+            mask_np = np.asarray(mask)
+            if mask_np.ndim == 3:
+                mask_np = mask_np[..., 0]
+            h, w = mask_np.shape[:2]
+            x = int(round(point_x))
+            y = int(round(point_y))
+            return 0 <= x < w and 0 <= y < h and bool(mask_np[y, x])
+        except Exception:
+            return False
+
+    def should_rescue_mask_outside_osb(self, text_box, bubble_box, bubble_mask) -> bool:
+        """Keep YOLO_2-adjacent OSB when it overlaps only the bubble bbox, not the mask."""
+        if bubble_mask is None:
+            return False
+        if not self.boxes_overlap(text_box, bubble_box):
+            return False
+
+        center_x = (text_box[0] + text_box[2]) / 2.0
+        center_y = (text_box[1] + text_box[3]) / 2.0
+        bbox_ioa = self.box_ioa(text_box, bubble_box)
+        center_inside_bbox = self.point_in_box(center_x, center_y, bubble_box)
+        if (
+            bbox_ioa < OSB_MASK_OUTSIDE_RESCUE_MIN_BBOX_IOA
+            and not center_inside_bbox
+        ):
+            return False
+
+        coverage = self.mask_coverage(bubble_mask, text_box)
+        center_inside_mask = self.point_in_mask(bubble_mask, center_x, center_y)
+        return (
+            not center_inside_mask
+            and coverage <= OSB_MASK_OUTSIDE_RESCUE_MAX_COVERAGE
+        )
+
+    def should_rescue_partial_sfx_outside_bubble(
+        self, text_box, bubble_box, bubble_mask
+    ) -> bool:
+        """Keep wide SFX that crosses a speech-bubble bbox edge.
+
+        Some slanted SFX sit on top of a speech-bubble tail.  Their detector box can
+        have its center inside the bubble bbox/mask even though most glyph ink is
+        outside the actual bubble.  Dialogue text remains fully covered by the mask,
+        so keep this rescue narrow: wide/short boxes only, partial bbox overlap only,
+        and less than half of the candidate covered by the bubble mask.
+        """
+        if bubble_mask is None:
+            return False
+        text_box = self.normalize_box(text_box)
+        bubble_box = self.normalize_box(bubble_box)
+        if text_box is None or bubble_box is None:
+            return False
+        if not self.boxes_overlap(text_box, bubble_box):
+            return False
+
+        width = max(0.0, text_box[2] - text_box[0])
+        height = max(0.0, text_box[3] - text_box[1])
+        if width <= 0.0 or height <= 0.0:
+            return False
+        if width / height < OSB_PARTIAL_SFX_RESCUE_MIN_ASPECT:
+            return False
+
+        try:
+            mask_h = int(np.asarray(bubble_mask).shape[0])
+        except Exception:
+            mask_h = 0
+        if mask_h > 0 and height > mask_h * OSB_PARTIAL_SFX_RESCUE_MAX_HEIGHT_RATIO:
+            return False
+
+        bbox_ioa = self.box_ioa(text_box, bubble_box)
+        if not (
+            OSB_PARTIAL_SFX_RESCUE_MIN_BUBBLE_IOA
+            <= bbox_ioa
+            <= OSB_PARTIAL_SFX_RESCUE_MAX_BUBBLE_IOA
+        ):
+            return False
+
+        coverage = self.mask_coverage(bubble_mask, text_box)
+        return coverage <= OSB_PARTIAL_SFX_RESCUE_MAX_MASK_COVERAGE
+
+    def should_rescue_edge_sfx_inside_bubble(
+        self, text_box, bubble_box, bubble_mask=None
+    ) -> bool:
+        """Keep only small effect marks hugging a speech-bubble edge.
+
+        This is intentionally narrow.  Dialogue text boxes can sit fully inside a
+        speech bubble, so this rescues only compact candidates whose box is small
+        relative to the bubble and visibly anchored to one bubble edge.
+        """
+        text_box = self.normalize_box(text_box)
+        bubble_box = self.normalize_box(bubble_box)
+        if text_box is None or bubble_box is None:
+            return False
+        if not self.boxes_overlap(text_box, bubble_box):
+            return False
+
+        text_w = max(0.0, text_box[2] - text_box[0])
+        text_h = max(0.0, text_box[3] - text_box[1])
+        bubble_w = max(0.0, bubble_box[2] - bubble_box[0])
+        bubble_h = max(0.0, bubble_box[3] - bubble_box[1])
+        if min(text_w, text_h, bubble_w, bubble_h) <= 0.0:
+            return False
+
+        if self.box_ioa(text_box, bubble_box) < OSB_EDGE_SFX_RESCUE_MIN_BUBBLE_IOA:
+            return False
+
+        text_area = text_w * text_h
+        bubble_area = bubble_w * bubble_h
+        if text_area / max(1.0, bubble_area) > OSB_EDGE_SFX_RESCUE_MAX_AREA_RATIO:
+            return False
+        if text_w / bubble_w > OSB_EDGE_SFX_RESCUE_MAX_WIDTH_RATIO:
+            return False
+        if text_h / bubble_h > OSB_EDGE_SFX_RESCUE_MAX_HEIGHT_RATIO:
+            return False
+
+        center_x = (text_box[0] + text_box[2]) / 2.0
+        center_y = (text_box[1] + text_box[3]) / 2.0
+        if bubble_mask is not None:
+            if self.point_in_mask(bubble_mask, center_x, center_y):
+                return False
+            if (
+                self.mask_coverage(bubble_mask, text_box)
+                > OSB_EDGE_SFX_RESCUE_MAX_MASK_COVERAGE
+            ):
+                return False
+
+        rel_x = (center_x - bubble_box[0]) / bubble_w
+        rel_y = (center_y - bubble_box[1]) / bubble_h
+        edge_band = OSB_EDGE_SFX_RESCUE_EDGE_BAND_RATIO
+        center_near_edge = (
+            rel_x <= edge_band
+            or rel_x >= 1.0 - edge_band
+            or rel_y <= edge_band
+            or rel_y >= 1.0 - edge_band
+        )
+        if not center_near_edge:
+            return False
+
+        max_edge_gap = min(
+            OSB_EDGE_SFX_RESCUE_MAX_EDGE_GAP_PX,
+            max(6.0, min(bubble_w, bubble_h) * OSB_EDGE_SFX_RESCUE_MAX_EDGE_GAP_RATIO),
+        )
+        edge_gap = min(
+            abs(text_box[0] - bubble_box[0]),
+            abs(text_box[2] - bubble_box[2]),
+            abs(text_box[1] - bubble_box[1]),
+            abs(text_box[3] - bubble_box[3]),
+        )
+        return edge_gap <= max_edge_gap
 
     def box_is_inside(self, box1, box2, threshold=0.9):
         """Check if box1 is significantly contained inside box2 (IoA > threshold).
@@ -169,7 +398,6 @@ class OutsideTextDetector:
         existing_bubbles: Optional[List] = None,
         text_free_boxes: Optional[List] = None,
         bubble_detector_model: str = "yolo_1",
-        min_area_ignore_ratio: float = 0.0,
     ):
         """Detect non-dialogue text by subtracting YOLO speech bubbles from OCR results.
 
@@ -210,9 +438,13 @@ class OutsideTextDetector:
             raise ImageProcessingError(f"Error loading image: {e}")
 
         provided_bubble_boxes = None
+        provided_bubble_mask = None
+        using_provided_bubbles = False
         if existing_bubbles is not None:
             try:
+                img_h, img_w = image_cv.shape[:2]
                 provided_bubble_boxes = []
+                provided_mask = np.zeros((img_h, img_w), dtype=bool)
                 for b in existing_bubbles:
                     bbox = b.get("bbox") if isinstance(b, dict) else b
                     if bbox is None or len(bbox) != 4:
@@ -221,21 +453,41 @@ class OutsideTextDetector:
                     provided_bubble_boxes.append(
                         [float(x0), float(y0), float(x1), float(y1)]
                     )
+                    mask_added = False
+                    mask = b.get("sam_mask") if isinstance(b, dict) else None
+                    if mask is not None:
+                        mask_np = np.asarray(mask)
+                        if mask_np.ndim == 3:
+                            mask_np = mask_np[..., 0]
+                        if mask_np.shape[:2] == (img_h, img_w):
+                            provided_mask |= mask_np > 0
+                            mask_added = True
+                    if not mask_added:
+                        bx0 = max(0, min(img_w, int(round(float(x0)))))
+                        by0 = max(0, min(img_h, int(round(float(y0)))))
+                        bx1 = max(0, min(img_w, int(round(float(x1)))))
+                        by1 = max(0, min(img_h, int(round(float(y1)))))
+                        if bx1 > bx0 and by1 > by0:
+                            provided_mask[by0:by1, bx0:bx1] = True
                 if provided_bubble_boxes:
                     log_message(
                         f"Using {len(provided_bubble_boxes)} provided bubble boxes for OSB filtering",
                         verbose=verbose,
                     )
+                if provided_bubble_boxes:
+                    provided_bubble_mask = provided_mask
             except Exception as e:
                 log_message(
                     f"Warning: Failed to parse provided bubbles: {e}. Falling back to YOLO.",
                     always_print=True,
                 )
                 provided_bubble_boxes = None
+                provided_bubble_mask = None
 
         text_free_boxes = list(text_free_boxes) if text_free_boxes else []
 
         if provided_bubble_boxes:
+            using_provided_bubbles = True
             yolo_boxes = torch.tensor(
                 provided_bubble_boxes, device=self.device, dtype=torch.float32
             )
@@ -262,14 +514,20 @@ class OutsideTextDetector:
                 yolo_results, yolo_boxes = cached_sb
             else:
                 yolo_model = self.manager.load_yolo_speech_bubble(yolo_model_path)
-                yolo_results = yolo_model(
-                    image_cv,
-                    conf=confidence,
-                    device=self.device,
-                    verbose=False,
-                    imgsz=1600 if bubble_detector_model == "yolo_2" else 640,
-                    retina_masks=True,
-                )[0]
+                inference_lock = getattr(
+                    self.manager,
+                    "yolo_speech_bubble_inference_lock",
+                    nullcontext(),
+                )
+                with inference_lock:
+                    yolo_results = yolo_model(
+                        image_cv,
+                        conf=confidence,
+                        device=self.device,
+                        verbose=False,
+                        imgsz=1600 if bubble_detector_model == "yolo_2" else 640,
+                        retina_masks=True,
+                    )[0]
                 yolo_boxes = (
                     yolo_results.boxes.xyxy
                     if yolo_results.boxes is not None
@@ -287,13 +545,17 @@ class OutsideTextDetector:
             )
             try:
                 sec_model = self.manager.load_yolo_conjoined_bubble()
-                sec_results = sec_model(
-                    image_cv,
-                    conf=conjoined_confidence,
-                    device=self.device,
-                    verbose=False,
-                    imgsz=1024,
-                )[0]
+                inference_lock = getattr(
+                    self.manager, "yolo_conjoined_inference_lock", nullcontext()
+                )
+                with inference_lock:
+                    sec_results = sec_model(
+                        image_cv,
+                        conf=conjoined_confidence,
+                        device=self.device,
+                        verbose=False,
+                        imgsz=1024,
+                    )[0]
 
                 sec_boxes = (
                     sec_results.boxes.xyxy
@@ -359,13 +621,17 @@ class OutsideTextDetector:
                 osbtext_results, osbtext_boxes, osbtext_confs = cached_osbtext
             else:
                 osbtext_model = self.manager.load_yolo_osbtext(token=self.hf_token)
-                osbtext_results = osbtext_model(
-                    image_cv,
-                    conf=confidence,
-                    device=self.device,
-                    verbose=False,
-                    imgsz=640,
-                )[0]
+                inference_lock = getattr(
+                    self.manager, "yolo_osbtext_inference_lock", nullcontext()
+                )
+                with inference_lock:
+                    osbtext_results = osbtext_model(
+                        image_cv,
+                        conf=confidence,
+                        device=self.device,
+                        verbose=False,
+                        imgsz=640,
+                    )[0]
                 osbtext_boxes = (
                     osbtext_results.boxes.xyxy
                     if osbtext_results.boxes is not None
@@ -429,32 +695,135 @@ class OutsideTextDetector:
             )
             filtered_results = []
             yolo_boxes_np = yolo_boxes.detach().cpu().numpy()
+            if (
+                bubble_detector_model == "yolo_2"
+                and not using_provided_bubbles
+                and text_free_boxes
+                and len(yolo_boxes_np) > 0
+            ):
+                text_free_norm_boxes = [
+                    normalized
+                    for normalized in (
+                        self.normalize_box(tf_box) for tf_box in text_free_boxes
+                    )
+                    if normalized is not None
+                ]
+                if text_free_norm_boxes:
+                    filtered_yolo_boxes = []
+                    removed_text_free_yolo_count = 0
+                    for yolo_box in yolo_boxes_np:
+                        yolo_norm = self.normalize_box(yolo_box)
+                        if yolo_norm is None:
+                            filtered_yolo_boxes.append(yolo_box)
+                            continue
+                        overlaps_text_free = any(
+                            self.text_box_meaningfully_matches_bubble(
+                                yolo_norm, text_free_box
+                            )
+                            or self.text_box_meaningfully_matches_bubble(
+                                text_free_box, yolo_norm
+                            )
+                            for text_free_box in text_free_norm_boxes
+                        )
+                        if overlaps_text_free:
+                            removed_text_free_yolo_count += 1
+                            continue
+                        filtered_yolo_boxes.append(yolo_box)
+                    if removed_text_free_yolo_count:
+                        log_message(
+                            "Ignoring "
+                            f"{removed_text_free_yolo_count} speech bubble box(es) "
+                            "routed to OSB as text_free",
+                            verbose=verbose,
+                        )
+                    yolo_boxes_np = np.asarray(
+                        filtered_yolo_boxes, dtype=yolo_boxes_np.dtype
+                    )
 
             for ocr_result in final_results:
                 bbox, _ = ocr_result
+                bbox = self.normalize_box(bbox)
+                if bbox is None:
+                    continue
 
                 best_bubble = None
                 best_intersection = 0.0
+                candidate_is_text_free = self.text_box_matches_any_text_free(
+                    bbox, text_free_boxes
+                )
+                center_x = (bbox[0] + bbox[2]) / 2.0
+                center_y = (bbox[1] + bbox[3]) / 2.0
 
                 for yolo_box in yolo_boxes_np:
                     if self.boxes_overlap(bbox, yolo_box):
-                        # Check if this bubble is actually a text_free region
-                        is_text_free_bubble = False
-                        if text_free_boxes:
-                            for tf_box in text_free_boxes:
-                                # We check if the YOLO bubble overlaps with a text_free detection
-                                if self.boxes_overlap(yolo_box, tf_box):
-                                    is_text_free_bubble = True
-                                    break
+                        bubble_ioa = self.box_ioa(bbox, yolo_box)
+                        center_inside_bubble = self.point_in_box(
+                            center_x, center_y, yolo_box
+                        )
+                        can_bypass_as_text_free = (
+                            not using_provided_bubbles
+                            and candidate_is_text_free
+                            and (
+                                bubble_detector_model == "yolo_2"
+                                or (
+                                    not center_inside_bubble
+                                    and bubble_ioa < OSB_TEXT_FREE_BYPASS_MAX_BUBBLE_IOA
+                                )
+                            )
+                        )
+                        if can_bypass_as_text_free:
+                            continue
 
-                        if not is_text_free_bubble:
-                            intersection = self.box_intersection_area(bbox, yolo_box)
-                            if intersection > best_intersection:
-                                best_intersection = intersection
-                                best_bubble = yolo_box
+                        if (
+                            using_provided_bubbles
+                            and bubble_detector_model == "yolo_2"
+                            and self.should_rescue_mask_outside_osb(
+                                bbox, yolo_box, provided_bubble_mask
+                            )
+                        ):
+                            log_message(
+                                "Rescuing OSB candidate outside YOLO_2 bubble mask: "
+                                f"{tuple(int(round(v)) for v in bbox)}",
+                                verbose=verbose,
+                            )
+                            continue
 
-                if best_bubble is None or not self.text_box_meaningfully_matches_bubble(
-                    bbox, best_bubble
+                        if (
+                            using_provided_bubbles
+                            and self.should_rescue_partial_sfx_outside_bubble(
+                                bbox, yolo_box, provided_bubble_mask
+                            )
+                        ):
+                            log_message(
+                                "Rescuing partial SFX OSB candidate crossing "
+                                "speech-bubble edge: "
+                                f"{tuple(int(round(v)) for v in bbox)}",
+                                verbose=verbose,
+                            )
+                            continue
+
+                        if (
+                            using_provided_bubbles
+                            and self.should_rescue_edge_sfx_inside_bubble(
+                                bbox, yolo_box, provided_bubble_mask
+                            )
+                        ):
+                            log_message(
+                                "Rescuing edge SFX OSB candidate inside "
+                                "speech-bubble bbox: "
+                                f"{tuple(int(round(v)) for v in bbox)}",
+                                verbose=verbose,
+                            )
+                            continue
+
+                        intersection = self.box_intersection_area(bbox, yolo_box)
+                        if intersection > best_intersection:
+                            best_intersection = intersection
+                            best_bubble = yolo_box
+
+                if (
+                    best_bubble is None
+                    or not self.text_box_meaningfully_matches_bubble(bbox, best_bubble)
                 ):
                     filtered_results.append(ocr_result)
 
@@ -465,19 +834,9 @@ class OutsideTextDetector:
             )
             final_results = filtered_results
 
-        found_count = len(final_results)
-        min_ignore = max(0.0, min(0.05, min_area_ignore_ratio))
-        if min_ignore > 0.0:
-            image_area = float(image_pil.width * image_pil.height)
-            ignored_count = sum(
-                1
-                for bbox, _ in final_results
-                if ((bbox[2] - bbox[0]) * (bbox[3] - bbox[1])) / max(1.0, image_area)
-                < min_ignore
-            )
-            found_count -= ignored_count
-
-        log_message(f"Found {found_count} outside text regions", always_print=True)
+        log_message(
+            f"Found {len(final_results)} outside text regions", always_print=True
+        )
 
         return final_results
 

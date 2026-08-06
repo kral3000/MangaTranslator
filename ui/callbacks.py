@@ -1,5 +1,10 @@
+import os
+import json
 import re
+import subprocess
+import sys
 import time
+import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -8,21 +13,23 @@ import torch
 from PIL import Image
 
 from core.config import MangaTranslatorConfig
+from core.pipeline import (
+    BATCH_EMBEDDED_OUTPUT_DIR_NAME,
+    BATCH_PLAIN_OUTPUT_DIR_NAME,
+    editor_plain_copy_path,
+)
+from core.tag_styles import tag_styles_to_table
 from core.validation import (
+    normalize_zip_file_input,
     validate_mutually_exclusive_modes,
     validate_zip_file,
 )
 from utils.exceptions import CancellationError, ValidationError
-from utils.model_metadata import (
-    FLUX_SDCPP_DIFFUSION_QUANTS,
-    flux_sdcpp_text_encoder_quants,
-    flux_sdcpp_valid_text_encoder_quant,
-    is_anthropic_model_family,
-    is_openai_model_family,
-)
+from utils.token_usage import format_usage
 
 from . import logic, settings_manager, utils
 from .cancellation import CancellationManager
+from .korean import ko
 from .ui_models import (
     UICleaningSettings,
     UIConfigState,
@@ -31,31 +38,18 @@ from .ui_models import (
     UIOutputSettings,
     UIOutsideTextSettings,
     UIRenderingSettings,
+    UIGoogleRateLimitSettings,
     UITranslationLLMSettings,
     UITranslationProviderSettings,
+    flux_offload_flags,
     map_ui_to_backend_config,
 )
 
-ERROR_PREFIX = "❌ Error: "
-SUCCESS_PREFIX = "✅ "
+ERROR_PREFIX = "오류: "
+SUCCESS_PREFIX = "완료: "
+IMAGE_EDITOR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
 CANCELLATION_MANAGER: Optional[CancellationManager] = None
-
-
-def _radio_choices(values):
-    return [(value, value) for value in values]
-
-
-def _flux_backend_choices(method: str):
-    if method in ("flux_klein_9b", "flux_klein_4b"):
-        return [("sd.cpp", "sdcpp"), ("SDNQ", "sdnq")]
-    if method == "flux_kontext":
-        return [
-            ("sd.cpp", "sdcpp"),
-            ("SDNQ", "sdnq"),
-            ("Nunchaku (CUDA)", "nunchaku"),
-        ]
-    return [("SDNQ", "sdnq")]
 
 
 def _clean_error_message(message: Any) -> str:
@@ -70,6 +64,8 @@ def _clean_error_message(message: Any) -> str:
     ):
         text = text[1:-1].strip()
 
+    text = ko(text)
+
     if text.startswith(ERROR_PREFIX):
         return text
     return f"{ERROR_PREFIX}{text}"
@@ -80,11 +76,458 @@ def _status_update(message: str) -> gr.update:
 
     Accounts for both explicit newlines and text wrapping (~120 chars per line).
     """
+    message = ko(message)
     line_count = 0
     for line in message.split("\n"):
         # Each segment takes at least 1 line, plus additional lines for wrapping
         line_count += max(1, (len(line) + 119) // 120)
     return gr.update(value=message, lines=line_count)
+
+
+def _download_file_update(path: Any = None) -> gr.update:
+    return gr.update(value=str(path) if path else None, visible=True)
+
+
+def _editor_button_update(path: Any = None) -> gr.update:
+    return gr.update(visible=bool(path), interactive=bool(path))
+
+
+def _plain_download_path(
+    save_path: Optional[Path],
+    backend_config: MangaTranslatorConfig,
+) -> Optional[Path]:
+    if not save_path:
+        return None
+    if not (
+        bool(getattr(backend_config.output, "embed_editor_package", True))
+        and bool(getattr(backend_config.output, "save_plain_image_copy", False))
+    ):
+        return None
+    candidate = editor_plain_copy_path(save_path)
+    return candidate if candidate.is_file() else None
+
+
+def handle_browse_output_directory(current_value: str) -> gr.update:
+    """Open a native folder picker and return the chosen absolute output path."""
+    try:
+        repo_root = Path(__file__).resolve().parents[1]
+        initial = Path(os.path.expandvars(str(current_value or "").strip())).expanduser()
+        if not initial.is_absolute():
+            initial = repo_root / initial
+        if not initial.exists():
+            initial = initial.parent if initial.parent.exists() else repo_root
+
+        script = r"""
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = '저장 폴더 선택'
+$dialog.ShowNewFolderButton = $true
+$initial = $env:MT_OUTPUT_INITIAL_DIR
+if (-not [string]::IsNullOrWhiteSpace($initial) -and (Test-Path -LiteralPath $initial -PathType Container)) {
+    $dialog.SelectedPath = $initial
+}
+$result = $dialog.ShowDialog()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+    Write-Output $dialog.SelectedPath
+}
+"""
+        env = dict(os.environ)
+        env["MT_OUTPUT_INITIAL_DIR"] = str(initial)
+        completed = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-STA",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
+            cwd=str(repo_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            timeout=3600,
+        )
+        selected = (
+            completed.stdout.strip().splitlines()[-1].strip()
+            if completed.stdout.strip()
+            else ""
+        )
+        if selected:
+            return gr.update(value=str(Path(selected).resolve()))
+        if completed.returncode not in (0, None):
+            error_text = completed.stderr.strip() or f"exit code {completed.returncode}"
+            gr.Warning(f"폴더 선택 창을 열 수 없습니다: {error_text}")
+    except Exception as exc:
+        gr.Warning(f"폴더 선택 창을 열 수 없습니다: {exc}")
+    return gr.update(value=current_value)
+
+
+def _remember_image_editor_source_path(value: Any) -> str:
+    path_text = str(value or "").strip()
+    settings = settings_manager.get_saved_settings()
+    if settings.get("image_editor_source_path") != path_text:
+        settings["image_editor_source_path"] = path_text
+        settings_manager.save_config(settings)
+    return path_text
+
+
+def handle_remember_image_editor_source_path(value: Any) -> None:
+    _remember_image_editor_source_path(value)
+
+
+def handle_browse_image_editor_folder(current_value: str) -> gr.update:
+    """Open a topmost native folder picker for the standalone image editor."""
+    try:
+        repo_root = Path(__file__).resolve().parents[1]
+        current_text = os.path.expandvars(str(current_value or "").strip())
+        initial = Path(current_text).expanduser() if current_text else repo_root
+        if not initial.is_absolute():
+            initial = repo_root / initial
+        if initial.is_file():
+            initial = initial.parent
+        if not initial.exists():
+            initial = initial.parent if initial.parent.exists() else repo_root
+
+        script = r"""
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+Add-Type -AssemblyName System.Windows.Forms
+$owner = New-Object System.Windows.Forms.Form
+$owner.Text = 'MangaTranslator'
+$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+$owner.Size = New-Object System.Drawing.Size(1, 1)
+$owner.ShowInTaskbar = $false
+$owner.TopMost = $true
+$owner.Opacity = 0
+$owner.Show()
+$owner.Activate()
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = '편집할 이미지 폴더 선택'
+$dialog.ShowNewFolderButton = $false
+$initial = $env:MT_IMAGE_EDITOR_SOURCE_INITIAL
+if (-not [string]::IsNullOrWhiteSpace($initial) -and (Test-Path -LiteralPath $initial -PathType Container)) {
+    $dialog.SelectedPath = $initial
+}
+$result = $dialog.ShowDialog($owner)
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+    Write-Output $dialog.SelectedPath
+}
+$owner.Close()
+$owner.Dispose()
+"""
+        env = dict(os.environ)
+        env["MT_IMAGE_EDITOR_SOURCE_INITIAL"] = str(initial)
+        completed = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-STA",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
+            cwd=str(repo_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            timeout=3600,
+        )
+        selected = (
+            completed.stdout.strip().splitlines()[-1].strip()
+            if completed.stdout.strip()
+            else ""
+        )
+        if selected:
+            resolved = str(Path(selected).resolve())
+            _remember_image_editor_source_path(resolved)
+            return gr.update(value=resolved)
+        if completed.returncode not in (0, None):
+            error_text = completed.stderr.strip() or f"exit code {completed.returncode}"
+            gr.Warning(f"폴더 선택 창을 열 수 없습니다: {error_text}")
+    except Exception as exc:
+        gr.Warning(f"폴더 선택 창을 열 수 없습니다: {exc}")
+    return gr.update(value=current_value)
+
+
+def handle_output_path_explorer_select(
+    selected_path: Any,
+    current_value: str,
+) -> gr.update:
+    """Apply a FileExplorer selection to the output directory textbox."""
+    try:
+        if isinstance(selected_path, (list, tuple)):
+            selected = selected_path[0] if selected_path else ""
+        else:
+            selected = selected_path
+        if not selected:
+            return gr.update(value=current_value)
+
+        path = Path(str(selected)).expanduser()
+        if path.is_file():
+            path = path.parent
+        elif not path.exists() and path.suffix:
+            path = path.parent
+        return gr.update(value=str(path.resolve()))
+    except Exception as exc:
+        gr.Warning(f"선택한 경로를 적용할 수 없습니다: {exc}")
+        return gr.update(value=current_value)
+
+
+def _editor_session_choices_from_outputs(output_files: List[str]) -> List[Tuple[str, str]]:
+    try:
+        from core.editor_session import default_edit_session_path, legacy_edit_session_path
+        from core.editor_package import has_embedded_editor_package
+    except Exception:
+        return []
+
+    choices: List[Tuple[str, str]] = []
+    for file_path in output_files or []:
+        output_path = Path(file_path)
+        session_path = default_edit_session_path(output_path)
+        if not session_path.exists():
+            legacy_path = legacy_edit_session_path(output_path)
+            if legacy_path.exists():
+                session_path = legacy_path
+        if session_path.exists():
+            choices.append((output_path.name, str(session_path)))
+        elif output_path.is_file() and has_embedded_editor_package(output_path):
+            choices.append((output_path.name, str(output_path)))
+    return choices
+
+
+def _as_path_list(value: Any) -> List[Path]:
+    if not value:
+        return []
+    raw_items = value if isinstance(value, (list, tuple)) else [value]
+    paths: List[Path] = []
+    for item in raw_items:
+        candidate = getattr(item, "name", item)
+        if candidate:
+            paths.append(Path(str(candidate)))
+    return paths
+
+
+def _natural_path_key(path: Path) -> tuple:
+    text = str(path).casefold()
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part)
+        for part in re.split(r"(\d+)", text)
+    )
+
+
+def _collect_image_editor_paths(
+    image_files: Any,
+    folder_files: Any,
+    zip_file: Any,
+) -> tuple[List[Path], Optional[Any], int, Dict[str, str]]:
+    collected: List[Path] = []
+    collected.extend(_as_path_list(image_files))
+    collected.extend(_as_path_list(folder_files))
+
+    zip_temp_dir_obj = None
+    zip_count = 0
+    zip_members: Dict[str, str] = {}
+    if zip_file:
+        zip_path_str = normalize_zip_file_input(zip_file)
+        zip_path = validate_zip_file(zip_path_str)
+        extracted_root, zip_temp_dir_obj = logic.extract_zip_to_temp(zip_path)
+        zip_images = [
+            path
+            for path in extracted_root.rglob("*")
+            if path.is_file() and path.suffix.lower() in IMAGE_EDITOR_EXTENSIONS
+        ]
+        zip_count = len(zip_images)
+        collected.extend(zip_images)
+        zip_members.update(
+            {
+                str(path.resolve()).casefold(): path.relative_to(extracted_root).as_posix()
+                for path in zip_images
+            }
+        )
+
+    image_paths: List[Path] = []
+    seen: set[str] = set()
+    for path in sorted(collected, key=_natural_path_key):
+        resolved = path.resolve()
+        candidates = (
+            sorted(
+                (
+                    child
+                    for child in resolved.rglob("*")
+                    if child.is_file()
+                    and child.suffix.lower() in IMAGE_EDITOR_EXTENSIONS
+                ),
+                key=_natural_path_key,
+            )
+            if resolved.is_dir()
+            else [resolved]
+        )
+        for candidate in candidates:
+            key = str(candidate).casefold()
+            if (
+                key not in seen
+                and candidate.is_file()
+                and candidate.suffix.lower() in IMAGE_EDITOR_EXTENSIONS
+            ):
+                seen.add(key)
+                image_paths.append(candidate)
+
+    return image_paths, zip_temp_dir_obj, zip_count, zip_members
+
+
+def _source_relative_name(path: Path, zip_members: Dict[str, str]) -> Path:
+    member = zip_members.get(str(path.resolve()).casefold())
+    if member:
+        return Path(member)
+    decoded = logic._decode_uploaded_relative_path(path.name)
+    return decoded if decoded is not None else Path(path.name)
+
+
+def _resolve_linked_folder_file(root: Path, relative_name: Path) -> Path:
+    clean_parts = [
+        part for part in relative_name.parts if part not in ("", ".", "..")
+    ]
+    relative_name = Path(*clean_parts) if clean_parts else Path(relative_name.name)
+    candidates: List[Path] = [root / relative_name]
+    if relative_name.parts and relative_name.parts[0].casefold() == root.name.casefold():
+        candidates.append(root.parent / relative_name)
+        if len(relative_name.parts) > 1:
+            candidates.append(root / Path(*relative_name.parts[1:]))
+    candidates.append(root / relative_name.name)
+
+    unique_matches: Dict[str, Path] = {}
+    for candidate in candidates:
+        if candidate.is_file():
+            resolved = candidate.resolve()
+            unique_matches.setdefault(str(resolved).casefold(), resolved)
+    if not unique_matches:
+        recursive_matches = [
+            candidate.resolve()
+            for candidate in root.rglob(relative_name.name)
+            if candidate.is_file()
+        ]
+        for candidate in recursive_matches:
+            unique_matches.setdefault(str(candidate).casefold(), candidate)
+    if len(unique_matches) == 1:
+        return next(iter(unique_matches.values()))
+    if not unique_matches:
+        raise FileNotFoundError(
+            f"연결한 원본 폴더에서 파일을 찾을 수 없습니다: {relative_name.as_posix()}"
+        )
+    raise ValueError(
+        f"연결한 원본 폴더에 같은 이름의 파일이 여러 개 있습니다: {relative_name.name}"
+    )
+
+
+def _resolve_image_editor_source_references(
+    image_paths: List[Path],
+    linked_source_path: Any,
+    zip_members: Dict[str, str],
+) -> Dict[str, Dict[str, str]]:
+    linked_text = os.path.expandvars(str(linked_source_path or "").strip())
+    if not linked_text:
+        return {}
+    linked = Path(linked_text).expanduser().resolve()
+    if not linked.exists():
+        raise FileNotFoundError(f"연결한 원본 위치를 찾을 수 없습니다: {linked}")
+
+    references: Dict[str, Dict[str, str]] = {}
+    if linked.is_file() and linked.suffix.lower() == ".zip":
+        with zipfile.ZipFile(linked, "r") as archive:
+            archive_names = {
+                name.replace("\\", "/").lstrip("/"): name
+                for name in archive.namelist()
+                if not name.endswith("/")
+            }
+        for image_path in image_paths:
+            relative_name = _source_relative_name(image_path, zip_members)
+            normalized = relative_name.as_posix().lstrip("/")
+            matched = archive_names.get(normalized)
+            if matched is None:
+                suffix_matches = [
+                    original
+                    for normalized_name, original in archive_names.items()
+                    if normalized_name.casefold().endswith(
+                        f"/{normalized.casefold()}"
+                    )
+                    or Path(normalized_name).name.casefold()
+                    == relative_name.name.casefold()
+                ]
+                if len(suffix_matches) == 1:
+                    matched = suffix_matches[0]
+            if matched is None:
+                raise FileNotFoundError(
+                    f"연결한 원본 ZIP에서 파일을 찾을 수 없습니다: {normalized}"
+                )
+            references[str(image_path.resolve()).casefold()] = {
+                "kind": "zip",
+                "archive_path": str(linked),
+                "member_path": matched.replace("\\", "/"),
+            }
+        return references
+
+    if linked.is_file():
+        if len(image_paths) != 1 or linked.suffix.lower() not in IMAGE_EDITOR_EXTENSIONS:
+            raise ValueError(
+                "원본 이미지 파일 하나를 연결할 때는 편집할 이미지도 한 장만 업로드해 주세요."
+            )
+        references[str(image_paths[0].resolve()).casefold()] = {
+            "kind": "file",
+            "path": str(linked),
+        }
+        return references
+
+    for image_path in image_paths:
+        relative_name = _source_relative_name(image_path, zip_members)
+        target = _resolve_linked_folder_file(linked, relative_name)
+        references[str(image_path.resolve()).casefold()] = {
+            "kind": "file",
+            "path": str(target),
+        }
+    return references
+
+
+def _looks_like_empty_folder_placeholder(value: Any) -> bool:
+    """Detect the 0-byte pseudo-file Gradio can emit for an unprocessed folder drop."""
+    for path in _as_path_list(value):
+        try:
+            resolved = path.resolve()
+            if (
+                resolved.is_file()
+                and resolved.stat().st_size == 0
+                and not resolved.suffix
+            ):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _image_editor_choice_label(source_path: Path, session_path: Path) -> str:
+    try:
+        with open(session_path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        display = str(data.get("source_display_path") or "").strip()
+        if display:
+            return display
+    except Exception:
+        pass
+    try:
+        decoded = logic._decode_uploaded_relative_path(source_path.name)
+        if decoded is not None:
+            return str(decoded).replace("\\", "/")
+    except Exception:
+        pass
+    return source_path.name
 
 
 def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
@@ -101,6 +544,10 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         thresholding_value,
         use_otsu_threshold,
         inpaint_colored_bubbles,
+        colored_bubble_inpainting_size,
+        colored_bubble_inpainting_precision,
+        colored_bubble_mask_kernel_size,
+        colored_bubble_mask_dilation_offset,
         roi_shrink_px,
         provider_selector,
         google_api_key,
@@ -110,7 +557,6 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         deepseek_api_key,
         zai_api_key,
         moonshot_api_key,
-        mimo_api_key,
         openrouter_api_key,
         openai_compatible_url_input,
         openai_compatible_api_key_input,
@@ -118,7 +564,6 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         temperature,
         top_p,
         top_k,
-        use_custom_sampling_val,
         max_tokens,
         config_reading_direction,
         config_translation_mode,
@@ -126,15 +571,40 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         input_language,
         output_language,
         font_dropdown,
+        emphasis_font_pack_val,
         max_font_size,
+        emphasis_max_font_size,
         min_font_size,
         line_spacing_mult,
+        emphasis_line_spacing_mult,
+        vertical_line_spacing_mult,
+        vertical_emphasis_line_spacing_mult,
+        vertical_font_size_mult,
+        vertical_max_chars,
+        vertical_emphasis_max_chars,
+        tag_style_table_val,
         use_subpixel_rendering,
         font_hinting,
         use_ligatures,
+        inside_light_text_color,
+        inside_light_outline_color,
+        inside_light_outline_width,
+        inside_dark_text_color,
+        inside_dark_outline_color,
+        inside_dark_outline_width,
+        outside_light_text_color,
+        outside_light_outline_color,
+        outside_light_outline_width,
+        outside_dark_text_color,
+        outside_dark_outline_color,
+        outside_dark_outline_width,
         output_format,
         jpeg_quality,
         png_compression,
+        output_directory,
+        disable_auto_save,
+        embed_editor_package_val,
+        save_plain_image_copy_val,
         verbose,
         cleaning_only_toggle,
         upscaling_only_val,
@@ -149,6 +619,7 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         effort_val,
         verbosity_val,
         send_full_page_context_val,
+        parallel_inpaint_translation_val,
         whiteout_conjoined_bubbles_val,
         upscale_method_val,
         bubble_min_side_pixels_val,
@@ -160,33 +631,43 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         hyphen_penalty_val,
         hyphenation_min_word_length_val,
         badness_exponent_val,
-        padding_pixels_val,
+        padding_horizontal_pixels_val,
+        padding_vertical_pixels_val,
         supersampling_factor_val,
         outside_text_enabled_val,
         outside_text_seed_val,
         outside_text_inpainting_method_val,
-        outside_text_flux_backend_val,
-        outside_text_flux_low_vram_val,
-        outside_text_flux_sdcpp_cache_mode_val,
-        outside_text_flux_sdcpp_diffusion_quant_val,
-        outside_text_flux_sdcpp_text_encoder_quant_val,
+        outside_text_kontext_backend_val,
+        outside_text_flux_offload_mode_val,
         outside_text_flux_num_inference_steps_val,
+        outside_text_flux_kontext_prompt_val,
+        outside_text_flux_klein_prompt_val,
         outside_text_flux_luminance_correction_val,
         outside_text_flux_upscale_small_crops_val,
         outside_text_flux_group_regions_val,
         outside_text_flux_residual_diff_threshold_val,
+        outside_text_osb_residual_render_guard_action_val,
         outside_text_osb_confidence_val,
-        outside_text_min_area_ignore_ratio_percent_val,
         outside_text_enable_page_number_filtering_val,
         outside_text_page_filter_margin_threshold_val,
         outside_text_page_filter_min_area_ratio_val,
         outside_text_huggingface_token_val,
         outside_text_osb_font_pack_val,
+        outside_text_osb_emphasis_font_pack_val,
         outside_text_osb_max_font_size_val,
+        outside_text_osb_emphasis_max_font_size_val,
         outside_text_osb_min_font_size_val,
         outside_text_osb_use_ligatures_val,
         outside_text_osb_outline_width_val,
+        outside_text_osb_padding_pixels_val,
         outside_text_osb_line_spacing_val,
+        outside_text_osb_vertical_line_spacing_val,
+        outside_text_osb_auto_vertical_val,
+        outside_text_osb_vertical_aspect_ratio_val,
+        outside_text_osb_vertical_max_chars_val,
+        outside_text_osb_tall_box_expand_aspect_ratio_val,
+        outside_text_osb_tall_box_expand_width_percent_val,
+        outside_text_osb_rotation_max_degrees_val,
         outside_text_osb_use_subpixel_rendering_val,
         outside_text_osb_font_hinting_val,
         outside_text_bbox_expansion_percent_val,
@@ -205,9 +686,10 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         special_instructions_val,
         batch_special_instructions_val,
         batch_parallel_requests_val,
-        batch_parallel_within_pages_val,
+        batch_retry_failed_once_val,
         batch_previous_context_image_count_val,
         batch_previous_context_text_count_val,
+        batch_previous_context_text_mode_val,
     ) = args
 
     final_input_language = batch_input_language if is_batch else input_language
@@ -215,6 +697,10 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
     final_font_pack = batch_font_dropdown if is_batch else font_dropdown
     final_special_instructions = (
         batch_special_instructions_val if is_batch else special_instructions_val
+    )
+
+    flux_cpu_offload, flux_low_vram = flux_offload_flags(
+        outside_text_flux_offload_mode_val
     )
 
     return UIConfigState(
@@ -233,27 +719,38 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
             use_otsu_threshold=use_otsu_threshold,
             roi_shrink_px=int(roi_shrink_px),
             inpaint_colored_bubbles=inpaint_colored_bubbles,
+            colored_bubble_inpainting_size=int(
+                colored_bubble_inpainting_size
+            ),
+            colored_bubble_inpainting_precision=(
+                colored_bubble_inpainting_precision
+            ),
+            colored_bubble_mask_kernel_size=int(
+                colored_bubble_mask_kernel_size
+            ),
+            colored_bubble_mask_dilation_offset=int(
+                colored_bubble_mask_dilation_offset
+            ),
         ),
         outside_text=UIOutsideTextSettings(
             enabled=outside_text_enabled_val,
             seed=int(outside_text_seed_val),
             huggingface_token=outside_text_huggingface_token_val,
             inpainting_method=outside_text_inpainting_method_val,
-            flux_backend=outside_text_flux_backend_val,
-            flux_low_vram=outside_text_flux_low_vram_val,
-            flux_sdcpp_cache_mode=outside_text_flux_sdcpp_cache_mode_val,
-            flux_sdcpp_diffusion_quant=outside_text_flux_sdcpp_diffusion_quant_val,
-            flux_sdcpp_text_encoder_quant=outside_text_flux_sdcpp_text_encoder_quant_val,
+            kontext_backend=outside_text_kontext_backend_val,
+            flux_cpu_offload=flux_cpu_offload,
+            flux_low_vram=flux_low_vram,
             flux_num_inference_steps=int(outside_text_flux_num_inference_steps_val),
+            flux_kontext_prompt=outside_text_flux_kontext_prompt_val,
+            flux_klein_prompt=outside_text_flux_klein_prompt_val,
             flux_luminance_correction=outside_text_flux_luminance_correction_val,
             flux_upscale_small_crops=outside_text_flux_upscale_small_crops_val,
             flux_group_regions=outside_text_flux_group_regions_val,
             flux_residual_diff_threshold=float(
                 outside_text_flux_residual_diff_threshold_val
             ),
+            osb_residual_render_guard_action=outside_text_osb_residual_render_guard_action_val,
             osb_confidence=float(outside_text_osb_confidence_val),
-            min_area_ignore_ratio=float(outside_text_min_area_ignore_ratio_percent_val)
-            / 100.0,
             enable_page_number_filtering=outside_text_enable_page_number_filtering_val,
             page_filter_margin_threshold=float(
                 outside_text_page_filter_margin_threshold_val
@@ -262,11 +759,33 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
                 outside_text_page_filter_min_area_ratio_val
             ),
             osb_font_dir=outside_text_osb_font_pack_val,
+            osb_emphasis_font_dir=outside_text_osb_emphasis_font_pack_val,
             osb_max_font_size=int(outside_text_osb_max_font_size_val),
+            osb_emphasis_max_font_size=int(
+                outside_text_osb_emphasis_max_font_size_val
+            ),
             osb_min_font_size=int(outside_text_osb_min_font_size_val),
             osb_use_ligatures=outside_text_osb_use_ligatures_val,
             osb_outline_width=float(outside_text_osb_outline_width_val),
+            osb_padding_pixels=float(outside_text_osb_padding_pixels_val),
             osb_line_spacing=float(outside_text_osb_line_spacing_val),
+            osb_vertical_line_spacing=float(
+                outside_text_osb_vertical_line_spacing_val
+            ),
+            osb_auto_vertical=outside_text_osb_auto_vertical_val,
+            osb_vertical_aspect_ratio=float(
+                outside_text_osb_vertical_aspect_ratio_val
+            ),
+            osb_vertical_max_chars=int(outside_text_osb_vertical_max_chars_val),
+            osb_tall_box_expand_aspect_ratio=float(
+                outside_text_osb_tall_box_expand_aspect_ratio_val
+            ),
+            osb_tall_box_expand_width_percent=float(
+                outside_text_osb_tall_box_expand_width_percent_val
+            ),
+            osb_rotation_max_degrees=float(
+                outside_text_osb_rotation_max_degrees_val
+            ),
             osb_use_subpixel_rendering=outside_text_osb_use_subpixel_rendering_val,
             osb_font_hinting=outside_text_osb_font_hinting_val,
             bbox_expansion_percent=float(outside_text_bbox_expansion_percent_val),
@@ -294,7 +813,6 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
             deepseek_api_key=deepseek_api_key,
             zai_api_key=zai_api_key,
             moonshot_api_key=moonshot_api_key,
-            mimo_api_key=mimo_api_key,
             openrouter_api_key=openrouter_api_key,
             openai_compatible_url=openai_compatible_url_input,
             openai_compatible_api_key=openai_compatible_api_key_input,
@@ -309,6 +827,7 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
             translation_mode=config_translation_mode,
             ocr_method=ocr_method_val,
             send_full_page_context=send_full_page_context_val,
+            parallel_inpaint_translation=parallel_inpaint_translation_val,
             whiteout_conjoined_bubbles=whiteout_conjoined_bubbles_val,
             upscale_method=upscale_method_val,
             bubble_min_side_pixels=bubble_min_side_pixels_val,
@@ -317,22 +836,52 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
             special_instructions=final_special_instructions,
         ),
         rendering=UIRenderingSettings(
+            emphasis_font_dir=emphasis_font_pack_val,
             max_font_size=max_font_size,
+            emphasis_max_font_size=emphasis_max_font_size,
             min_font_size=min_font_size,
             line_spacing_mult=line_spacing_mult,
+            emphasis_line_spacing_mult=emphasis_line_spacing_mult,
+            vertical_line_spacing_mult=vertical_line_spacing_mult,
+            vertical_emphasis_line_spacing_mult=vertical_emphasis_line_spacing_mult,
+            vertical_font_size_mult=vertical_font_size_mult,
+            vertical_max_chars=int(vertical_max_chars),
+            vertical_emphasis_max_chars=int(vertical_emphasis_max_chars),
+            tag_style_table=tag_style_table_val,
             use_subpixel_rendering=use_subpixel_rendering,
             font_hinting=font_hinting,
             use_ligatures=use_ligatures,
+            inside_light_text_color=inside_light_text_color,
+            inside_light_outline_color=inside_light_outline_color,
+            inside_light_outline_width=float(inside_light_outline_width),
+            inside_dark_text_color=inside_dark_text_color,
+            inside_dark_outline_color=inside_dark_outline_color,
+            inside_dark_outline_width=float(inside_dark_outline_width),
+            outside_light_text_color=outside_light_text_color,
+            outside_light_outline_color=outside_light_outline_color,
+            outside_light_outline_width=float(outside_light_outline_width),
+            outside_dark_text_color=outside_dark_text_color,
+            outside_dark_outline_color=outside_dark_outline_color,
+            outside_dark_outline_width=float(outside_dark_outline_width),
             hyphenate_before_scaling=hyphenate_before_scaling_val,
             detach_trailing_punctuation=detach_trailing_punctuation_val,
             auto_vertical_text=auto_vertical_text_val,
             hyphen_penalty=hyphen_penalty_val,
             hyphenation_min_word_length=hyphenation_min_word_length_val,
             badness_exponent=badness_exponent_val,
-            padding_pixels=padding_pixels_val,
+            padding_pixels=max(
+                float(padding_horizontal_pixels_val),
+                float(padding_vertical_pixels_val),
+            ),
+            padding_horizontal_pixels=float(padding_horizontal_pixels_val),
+            padding_vertical_pixels=float(padding_vertical_pixels_val),
             supersampling_factor=int(supersampling_factor_val),
         ),
         output=UIOutputSettings(
+            output_directory=output_directory,
+            disable_auto_save=bool(disable_auto_save),
+            embed_editor_package=bool(embed_editor_package_val),
+            save_plain_image_copy=bool(save_plain_image_copy_val),
             output_format=output_format,
             jpeg_quality=jpeg_quality,
             png_compression=png_compression,
@@ -347,7 +896,6 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
             test_mode=test_mode_toggle,
             enable_web_search=enable_web_search_val,
             enable_code_execution=enable_code_execution_val,
-            use_custom_sampling=use_custom_sampling_val,
             image_detail=image_detail_val,
             media_resolution=media_resolution_val,
             media_resolution_bubbles=media_resolution_bubbles_val,
@@ -364,9 +912,10 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         batch_output_language=batch_output_language,
         batch_font_pack=batch_font_dropdown,
         batch_parallel_requests=int(batch_parallel_requests_val),
-        batch_parallel_within_pages=bool(batch_parallel_within_pages_val),
+        batch_retry_failed_once=bool(batch_retry_failed_once_val),
         batch_previous_context_image_count=int(batch_previous_context_image_count_val),
         batch_previous_context_text_count=int(batch_previous_context_text_count_val),
+        batch_previous_context_text_mode=str(batch_previous_context_text_mode_val),
     )
 
 
@@ -403,8 +952,6 @@ def _validate_ui_state(ui_state: UIConfigState) -> None:
             api_key_to_validate = ui_state.provider_settings.zai_api_key
         elif provider_selector == "Moonshot AI":
             api_key_to_validate = ui_state.provider_settings.moonshot_api_key
-        elif provider_selector == "Xiaomi MiMo":
-            api_key_to_validate = ui_state.provider_settings.mimo_api_key
         elif provider_selector == "OpenRouter":
             api_key_to_validate = ui_state.provider_settings.openrouter_api_key
         elif provider_selector == "OpenAI-Compatible":
@@ -445,8 +992,9 @@ def _format_single_success_message(
     result_image: Image.Image,
     backend_config: MangaTranslatorConfig,
     font_dir_path: Path,
-    save_path: Path,
+    save_path: Optional[Path],
     processing_time: float,
+    token_usage: Optional[Dict[str, int]] = None,
 ) -> str:
     """Formats the success message for single image translation."""
     width, height = result_image.size
@@ -471,7 +1019,9 @@ def _format_single_success_message(
     elif provider == "OpenAI":
         param_notes = " (Top-K N/A)"
     elif provider == "OpenRouter":
-        if is_openai_model_family(model_name) or is_anthropic_model_family(model_name):
+        is_openai_model = "openai/" in model_name
+        is_anthropic_model = "anthropic/" in model_name
+        if is_openai_model or is_anthropic_model:
             param_notes = " (Temp clamped <= 1.0, Top-K N/A)"
         else:
             llm_params_str += f", Top-K={top_k_val}"
@@ -505,6 +1055,15 @@ def _format_single_success_message(
         osb_font_pack_name = Path(backend_config.outside_text.osb_font_dir).name
         msg_parts.append(f"• OSB Font Pack: {osb_font_pack_name}\n")
 
+    if (
+        backend_config.outside_text.enabled
+        and backend_config.outside_text.osb_emphasis_font_dir
+    ):
+        osb_emphasis_font_name = Path(
+            backend_config.outside_text.osb_emphasis_font_dir
+        ).name
+        msg_parts.append(f"• OSB Emphasis Font Pack: {osb_emphasis_font_name}\n")
+
     if not backend_config.cleaning_only and not backend_config.upscaling_only:
         msg_parts.append(
             f"• Full-Page Context: {'On' if backend_config.translation.send_full_page_context else 'Off'}\n"
@@ -531,7 +1090,14 @@ def _format_single_success_message(
     if not backend_config.cleaning_only and not backend_config.upscaling_only:
         msg_parts.append(f"{llm_params_str}\n")
 
+    usage_str = format_usage(token_usage)
+    if usage_str:
+        msg_parts.append(f"• Tokens: {usage_str}\n")
+
     msg_parts.append(f"• Font Pack: {font_dir_path.name}\n")
+    if backend_config.rendering.emphasis_font_dir:
+        emphasis_font_name = Path(backend_config.rendering.emphasis_font_dir).name
+        msg_parts.append(f"• Emphasis Font Pack: {emphasis_font_name}\n")
 
     if (
         getattr(backend_config, "preprocessing", None)
@@ -556,7 +1122,7 @@ def _format_single_success_message(
         msg_parts.append(f"• JPEG Quality: {backend_config.output.jpeg_quality}\n")
     else:
         try:
-            ext = save_path.suffix.lower()
+            ext = save_path.suffix.lower() if save_path else ""
         except Exception:
             ext = ""
         if ext in {".jpg", ".jpeg"}:
@@ -572,13 +1138,17 @@ def _format_single_success_message(
         else:
             msg_parts.append("• Output Format: auto\n")
 
-    msg_parts.extend(
-        [
-            f"• Processing Time: {processing_time:.2f} seconds\n",
-            f"• Saved To: {save_path}",
-        ]
-    )
-    return "".join(msg_parts)
+    msg_parts.append(f"• Processing Time: {processing_time:.2f} seconds\n")
+    if save_path:
+        msg_parts.append(f"• Saved To: {save_path}")
+        plain_copy_path = _plain_download_path(save_path, backend_config)
+        if plain_copy_path:
+            msg_parts.append(f"\n• Plain Copy: {plain_copy_path}")
+    else:
+        msg_parts.append(
+            "• 자동 저장: 꺼짐 - 지정 저장 폴더 저장을 건너뛰었습니다. 고급 편집기 세션은 유지됩니다."
+        )
+    return ko("".join(msg_parts))
 
 
 def _format_batch_success_message(
@@ -589,10 +1159,13 @@ def _format_batch_success_message(
     """Formats the success message for batch processing."""
     success_count = results["success_count"]
     error_count = results["error_count"]
-    total_images = success_count + error_count
+    total_images = int(results.get("total_count") or (success_count + error_count))
     processing_time = results["processing_time"]
     output_path = results["output_path"]
     seconds_per_image = processing_time / success_count if success_count > 0 else 0
+    was_cancelled = bool(results.get("cancelled", False))
+    auto_save_disabled = bool(results.get("auto_save_disabled", False))
+    cancel_message = str(results.get("cancel_message") or "").strip()
 
     provider = backend_config.translation.provider
     model_name = backend_config.translation.model_name
@@ -615,7 +1188,11 @@ def _format_batch_success_message(
     elif provider == "OpenAI":
         param_notes = " (Top-K N/A)"
     elif provider == "OpenRouter":
-        if is_openai_model_family(model_name) or is_anthropic_model_family(model_name):
+        is_openai_model = "openai/" in model_name or model_name.startswith("gpt-")
+        is_anthropic_model = "anthropic/" in model_name or model_name.startswith(
+            "claude-"
+        )
+        if is_openai_model or is_anthropic_model:
             param_notes = " (Temp clamped <= 1.0, Top-K N/A)"
         else:
             llm_params_str += f", Top-K={top_k_val}"
@@ -629,17 +1206,9 @@ def _format_batch_success_message(
             + llm_params_str
         )
 
-    failure_details = ""
+    error_summary = ""
     if error_count > 0:
-        failed_pages = results.get("errors", {})
-        failure_parts = [f"• Warning: {error_count} image(s) failed to process.\n"]
-        if failed_pages:
-            failure_parts.append("\nFailed pages:\n")
-            failure_parts.extend(
-                f"• {filename}: {error_msg}\n"
-                for filename, error_msg in failed_pages.items()
-            )
-        failure_details = "".join(failure_parts)
+        error_summary = f"\n• Warning: {error_count} image(s) failed to process."
 
     if backend_config.cleaning_only:
         processing_mode_str = "Cleaning Only"
@@ -647,6 +1216,21 @@ def _format_batch_success_message(
         processing_mode_str = "Upscaling Only"
     else:
         processing_mode_str = "Translation"
+
+    if was_cancelled and error_count > 0:
+        error_summary = (
+            f"\n??Warning: {error_count} image(s) failed or were not processed."
+        )
+    if was_cancelled and cancel_message:
+        error_summary += f"\n??Cancel Reason: {cancel_message}"
+
+    retry_attempted = int(results.get("retry_attempted_count", 0) or 0)
+    retry_summary = ""
+    if retry_attempted:
+        retry_summary = (
+            f"??Failed File Retry: {results.get('retry_success_count', 0)} "
+            f"succeeded, {results.get('retry_failed_count', 0)} still failed\n"
+        )
 
     # Determine model display based on mode
     if backend_config.test_mode:
@@ -658,14 +1242,24 @@ def _format_batch_success_message(
     else:
         model_display = f"{model_name}{thinking_status_str}"
 
+    completion_word = "cancelled" if was_cancelled else "completed"
     msg_parts = [
-        f"{SUCCESS_PREFIX}Batch {processing_mode_str.lower()} completed!\n",
+        f"{SUCCESS_PREFIX}Batch {processing_mode_str.lower()} {completion_word}!\n",
         f"• Outside Text Detection: {'Enabled' if backend_config.outside_text.enabled else 'Disabled'}\n",
     ]
 
     if backend_config.outside_text.enabled and backend_config.outside_text.osb_font_dir:
         osb_font_pack_name = Path(backend_config.outside_text.osb_font_dir).name
         msg_parts.append(f"• OSB Font Pack: {osb_font_pack_name}\n")
+
+    if (
+        backend_config.outside_text.enabled
+        and backend_config.outside_text.osb_emphasis_font_dir
+    ):
+        osb_emphasis_font_name = Path(
+            backend_config.outside_text.osb_emphasis_font_dir
+        ).name
+        msg_parts.append(f"• OSB Emphasis Font Pack: {osb_emphasis_font_name}\n")
 
     if not backend_config.cleaning_only and not backend_config.upscaling_only:
         msg_parts.append(
@@ -694,6 +1288,9 @@ def _format_batch_success_message(
         msg_parts.append(f"{llm_params_str}\n")
 
     msg_parts.append(f"• Font Pack: {font_dir_path.name}\n")
+    if backend_config.rendering.emphasis_font_dir:
+        emphasis_font_name = Path(backend_config.rendering.emphasis_font_dir).name
+        msg_parts.append(f"• Emphasis Font Pack: {emphasis_font_name}\n")
 
     if (
         getattr(backend_config, "preprocessing", None)
@@ -738,13 +1335,34 @@ def _format_batch_success_message(
 
     msg_parts.extend(
         [
-            f"• Successful Translations: {success_count}/{total_images}\n",
-            failure_details,
+            f"• Successful Translations: {success_count}/{total_images}{error_summary}\n",
             f"• Total Processing Time: {processing_time:.2f} seconds ({seconds_per_image:.2f} seconds/image)\n",
-            f"• Saved To: {output_path}",
         ]
     )
-    return "".join(msg_parts)
+    if auto_save_disabled:
+        msg_parts.append(
+            "• 자동 저장: 꺼짐 - 지정 저장 폴더 저장은 건너뛰고, 결과 ZIP은 다운로드용으로 생성했습니다. "
+            "화면 목록과 고급 편집기 세션은 유지됩니다."
+        )
+    else:
+        msg_parts.append(f"• Saved To: {output_path}")
+        if (
+            bool(getattr(backend_config.output, "embed_editor_package", True))
+            and bool(getattr(backend_config.output, "save_plain_image_copy", False))
+        ):
+            msg_parts.append(
+                f"\n• 편집 정보 포함 폴더: {Path(output_path) / BATCH_EMBEDDED_OUTPUT_DIR_NAME}"
+            )
+            msg_parts.append(
+                f"\n• 일반 이미지 폴더: {Path(output_path) / BATCH_PLAIN_OUTPUT_DIR_NAME}"
+            )
+    if retry_summary:
+        msg_parts.append(retry_summary)
+    if results.get("success_zip_path"):
+        msg_parts.append(f"\n??Successful Files ZIP: {results['success_zip_path']}")
+    if results.get("failed_zip_path"):
+        msg_parts.append(f"\n??Failed Files ZIP: {results['failed_zip_path']}")
+    return ko("".join(msg_parts))
 
 
 def handle_translate_click(
@@ -752,7 +1370,7 @@ def handle_translate_click(
     models_dir: Path,
     fonts_base_dir: Path,
     target_device: Optional[torch.device],
-) -> Tuple[Optional[Image.Image], str]:
+) -> Tuple[Optional[Image.Image], gr.update, gr.update, gr.update, str, gr.update]:
     """Callback for the 'Translate' button click. Uses dataclasses for config."""
     input_image_path = args[0]
     start_time = time.time()
@@ -775,13 +1393,17 @@ def handle_translate_click(
         )
         selected_font_pack_name = ui_state.font_pack
 
-        result_image, save_path = logic.translate_manga_logic(
+        token_usage: Dict[str, int] = {}
+        result_image, save_path, edit_session_path = logic.translate_manga_logic(
             image=input_image_path,
             config=backend_config,
             selected_font_pack_name=selected_font_pack_name,
             models_dir=models_dir,
             fonts_base_dir=fonts_base_dir,
+            output_base_dir=ui_state.output.output_directory,
+            disable_auto_save=ui_state.output.disable_auto_save,
             cancellation_manager=CANCELLATION_MANAGER,
+            usage_out=token_usage,
         )
 
         # Re-get font path for success message (logic already validated it)
@@ -798,27 +1420,593 @@ def handle_translate_click(
             font_dir_path,
             save_path,
             processing_time,
+            token_usage,
         )
+        if edit_session_path:
+            status_msg = f"{status_msg}\n편집 세션: {edit_session_path}"
+        plain_copy_path = _plain_download_path(save_path, backend_config)
 
-        return result_image.copy(), _status_update(status_msg)
+        return (
+            result_image.copy(),
+            _status_update(status_msg),
+            _download_file_update(save_path),
+            _download_file_update(plain_copy_path),
+            str(edit_session_path or ""),
+            _editor_button_update(edit_session_path),
+        )
 
     except gr.Error as e:
         cleaned = _clean_error_message(e)
         gr.Error(cleaned)
-        return None, _status_update(cleaned)
-    except CancellationError:
-        return None, _status_update("Translation cancelled by user.")
+        return (
+            None,
+            _status_update(cleaned),
+            _download_file_update(),
+            _download_file_update(),
+            "",
+            _editor_button_update(),
+        )
+    except CancellationError as e:
+        message = str(e) or "Translation cancelled by user."
+        return (
+            None,
+            _status_update(message),
+            _download_file_update(),
+            _download_file_update(),
+            "",
+            _editor_button_update(),
+        )
     except (ValidationError, FileNotFoundError, ValueError, logic.LogicError) as e:
         cleaned = _clean_error_message(e)
         gr.Error(cleaned)
-        return None, _status_update(cleaned)
+        return (
+            None,
+            _status_update(cleaned),
+            _download_file_update(),
+            _download_file_update(),
+            "",
+            _editor_button_update(),
+        )
     except Exception as e:
         import traceback
 
         traceback.print_exc()
         cleaned = _clean_error_message(f"An unexpected error occurred: {str(e)}")
         gr.Error(cleaned)
+        return (
+            None,
+            _status_update(cleaned),
+            _download_file_update(),
+            _download_file_update(),
+            "",
+            _editor_button_update(),
+        )
+
+
+def handle_create_image_editor_sessions(
+    folder_path: str,
+    font_pack: str,
+    *,
+    fonts_base_dir: Path,
+) -> Tuple[gr.update, gr.update, gr.update]:
+    try:
+        selected_folder = Path(
+            os.path.expandvars(str(folder_path or "").strip())
+        ).expanduser()
+        if not selected_folder.is_absolute():
+            selected_folder = Path(__file__).resolve().parents[1] / selected_folder
+        selected_folder = selected_folder.resolve()
+        if not selected_folder.is_dir():
+            raise ValueError("먼저 '편집할 폴더 선택'을 눌러 이미지 폴더를 선택해 주세요.")
+
+        if not font_pack:
+            available_fonts = sorted(
+                path.name
+                for path in fonts_base_dir.iterdir()
+                if path.is_dir()
+            )
+            font_pack = available_fonts[0] if available_fonts else ""
+        if not font_pack:
+            raise ValueError("텍스트 렌더링에 사용할 글꼴 폴더가 없습니다.")
+
+        paths = sorted(
+            (
+                path.resolve()
+                for path in selected_folder.rglob("*")
+                if path.is_file()
+                and path.suffix.lower() in IMAGE_EDITOR_EXTENSIONS
+            ),
+            key=_natural_path_key,
+        )
+        if not paths:
+            raise ValueError(
+                f"선택한 폴더에서 편집할 이미지 파일을 찾지 못했습니다: {selected_folder}"
+            )
+
+        from core.editor_session import create_image_edit_sessions
+
+        source_references = {
+            str(path).casefold(): {
+                "kind": "file",
+                "path": str(path),
+                "display_path": str(path.relative_to(selected_folder)).replace(
+                    "\\", "/"
+                ),
+            }
+            for path in paths
+        }
+        _remember_image_editor_source_path(selected_folder)
+        created = create_image_edit_sessions(
+            paths,
+            font_dir=fonts_base_dir / font_pack,
+            source_references=source_references,
+        )
+        choices = [
+            (
+                f"{index}. {_image_editor_choice_label(source_path, session_path)}",
+                str(session_path),
+            )
+            for index, (source_path, session_path) in enumerate(created, start=1)
+        ]
+        selected = choices[0][1]
+        status = (
+            f"폴더에서 이미지 {len(choices)}장을 불러왔습니다.\n"
+            f"원본 폴더: {selected_folder}\n"
+            "목록에서 이미지를 선택한 뒤 '고급 편집기 열기'를 누르세요. "
+            "편집기의 원본 덮어쓰기는 이 폴더의 실제 파일에 적용됩니다."
+        )
+        return (
+            gr.update(choices=choices, value=selected, visible=True, interactive=True),
+            _editor_button_update(selected),
+            _status_update(status),
+        )
+    except Exception as exc:
+        cleaned = _clean_error_message(exc)
+        gr.Error(cleaned)
+        return (
+            gr.update(choices=[], value=None, visible=False),
+            _editor_button_update(),
+            _status_update(cleaned),
+        )
+
+
+def handle_launch_advanced_editor(session_path: str) -> gr.update:
+    try:
+        if not session_path:
+            raise ValueError("열 수 있는 편집 세션이 없습니다.")
+        repo_root = Path(__file__).resolve().parents[1]
+        raw_path = Path(session_path)
+        path = raw_path if raw_path.is_absolute() else repo_root / raw_path
+        path = path.resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"편집 세션을 찾을 수 없습니다: {path}")
+
+        log_dir = repo_root / "output" / "advanced_editor_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        stdout_path = log_dir / f"advanced_editor_stdout_{stamp}.log"
+        stderr_path = log_dir / f"advanced_editor_stderr_{stamp}.log"
+        lifecycle_path = log_dir / "advanced_editor_lifecycle.log"
+        lifecycle_offset = lifecycle_path.stat().st_size if lifecycle_path.exists() else 0
+        pythonw_path = Path(sys.executable).with_name("pythonw.exe")
+        python_exe = str(pythonw_path if pythonw_path.exists() else Path(sys.executable))
+
+        creationflags = 0
+        if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+            creationflags |= subprocess.CREATE_NEW_PROCESS_GROUP
+
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(repo_root)
+        env["PYTHONUNBUFFERED"] = "1"
+        env.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
+
+        with open(stdout_path, "w", encoding="utf-8") as stdout_file, open(
+            stderr_path, "w", encoding="utf-8"
+        ) as stderr_file:
+            process = subprocess.Popen(
+                [python_exe, "-m", "advanced_editor.launcher", str(path)],
+                cwd=str(repo_root),
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                close_fds=False,
+                creationflags=creationflags,
+                env=env,
+            )
+
+        window_ready = False
+        ready_marker = f"PID={process.pid} window shown"
+        for _ in range(150):
+            time.sleep(0.2)
+            if process.poll() is not None:
+                break
+            try:
+                with open(lifecycle_path, "r", encoding="utf-8", errors="replace") as lifecycle_file:
+                    lifecycle_file.seek(lifecycle_offset)
+                    if ready_marker in lifecycle_file.read():
+                        window_ready = True
+                        break
+            except (FileNotFoundError, OSError):
+                pass
+
+        if window_ready:
+            time.sleep(0.5)
+
+        if process.poll() is not None:
+            stderr_text = ""
+            try:
+                stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace").strip()
+            except Exception:
+                stderr_text = ""
+            stdout_text = ""
+            try:
+                stdout_text = stdout_path.read_text(encoding="utf-8", errors="replace").strip()
+            except Exception:
+                stdout_text = ""
+            details = stderr_text or stdout_text or "프로세스 로그가 기록되지 않았습니다."
+            raise RuntimeError(
+                "고급 편집기가 실행 직후 종료되었습니다.\n"
+                f"종료 코드: {process.returncode}\n"
+                f"stderr: {stderr_path}\n"
+                f"stdout: {stdout_path}\n"
+                f"실행 기록: {lifecycle_path}\n"
+                f"{details}"
+            )
+
+        launch_state = "열렸습니다" if window_ready else "실행되었으며 불러오는 중입니다"
+        return _status_update(
+            f"고급 편집기가 {launch_state}. PID: {process.pid}\n"
+            f"편집 세션: {path}\n"
+            f"오류 로그: {stderr_path}\n"
+            f"실행 기록: {lifecycle_path}"
+        )
+    except Exception as e:
+        cleaned = _clean_error_message(e)
+        gr.Error(cleaned)
+        return _status_update(cleaned)
+
+
+def _editor_blank_outputs(message: str = "") -> Tuple[Any, ...]:
+    return (
+        None,
+        gr.update(choices=[], value=None),
+        "",
+        "",
+        0,
+        0,
+        1,
+        1,
+        16,
+        8,
+        0.0,
+        False,
+        "#000000",
+        True,
+        _status_update(message),
+    )
+
+
+def _editor_form_outputs(session_path: str, region_id: Optional[str]) -> Tuple[Any, ...]:
+    from core.editor_session import get_region_form_values
+
+    (
+        source_text,
+        translation,
+        x,
+        y,
+        width,
+        height,
+        max_font_size,
+        min_font_size,
+        rotation,
+        vertical_stack,
+        font_color,
+        enabled,
+        preview,
+    ) = get_region_form_values(session_path, region_id)
+    return (
+        preview,
+        source_text,
+        translation,
+        x,
+        y,
+        width,
+        height,
+        max_font_size,
+        min_font_size,
+        rotation,
+        vertical_stack,
+        font_color,
+        enabled,
+    )
+
+
+def handle_editor_load(session_path: str) -> Tuple[Any, ...]:
+    """Load the post-translation editor session into the editor tab."""
+    try:
+        if not session_path:
+            return _editor_blank_outputs("No translated editor session is available yet.")
+        from core.editor_session import load_session, region_choices
+
+        session = load_session(session_path)
+        choices = region_choices(session)
+        if not choices:
+            return _editor_blank_outputs("This editor session has no editable regions.")
+        selected_id = choices[0][1]
+        (
+            preview,
+            source_text,
+            translation,
+            x,
+            y,
+            width,
+            height,
+            max_font_size,
+            min_font_size,
+            rotation,
+            vertical_stack,
+            font_color,
+            enabled,
+        ) = _editor_form_outputs(session_path, selected_id)
+        return (
+            preview,
+            gr.update(choices=choices, value=selected_id),
+            source_text,
+            translation,
+            x,
+            y,
+            width,
+            height,
+            max_font_size,
+            min_font_size,
+            rotation,
+            vertical_stack,
+            font_color,
+            enabled,
+            _status_update(f"Loaded editor session: {session_path}"),
+        )
+    except Exception as e:
+        cleaned = _clean_error_message(e)
+        return _editor_blank_outputs(cleaned)
+
+
+def handle_editor_region_change(session_path: str, region_id: str) -> Tuple[Any, ...]:
+    try:
+        if not session_path or not region_id:
+            return (
+                None,
+                "",
+                "",
+                0,
+                0,
+                1,
+                1,
+                16,
+                8,
+                0.0,
+                False,
+                "#000000",
+                True,
+                _status_update("Select an editable region."),
+            )
+        return (*_editor_form_outputs(session_path, region_id), _status_update(""))
+    except Exception as e:
+        cleaned = _clean_error_message(e)
+        return (
+            None,
+            "",
+            "",
+            0,
+            0,
+            1,
+            1,
+            16,
+            8,
+            0.0,
+            False,
+            "#000000",
+            True,
+            _status_update(cleaned),
+        )
+
+
+def handle_editor_save_region(
+    session_path: str,
+    region_id: str,
+    translation: str,
+    x: Any,
+    y: Any,
+    width: Any,
+    height: Any,
+    max_font_size: Any,
+    min_font_size: Any,
+    rotation_deg: Any,
+    vertical_stack: bool,
+    font_color: str,
+    enabled: bool,
+) -> Tuple[Any, str]:
+    try:
+        if not session_path or not region_id:
+            raise ValueError("No editor region is selected.")
+        from core.editor_session import update_region_from_form
+
+        _, preview = update_region_from_form(
+            session_path,
+            region_id,
+            translation,
+            x,
+            y,
+            width,
+            height,
+            max_font_size,
+            min_font_size,
+            rotation_deg,
+            vertical_stack,
+            font_color,
+            enabled,
+        )
+        return preview, _status_update("Region changes saved.")
+    except Exception as e:
+        cleaned = _clean_error_message(e)
         return None, _status_update(cleaned)
+
+
+def handle_editor_add_region(session_path: str) -> Tuple[Any, ...]:
+    try:
+        if not session_path:
+            return _editor_blank_outputs("No translated editor session is available yet.")
+        from core.editor_session import add_region, region_choices
+
+        session, selected_id, preview = add_region(session_path)
+        choices = region_choices(session)
+        (
+            _preview,
+            source_text,
+            translation,
+            x,
+            y,
+            width,
+            height,
+            max_font_size,
+            min_font_size,
+            rotation,
+            vertical_stack,
+            font_color,
+            enabled,
+        ) = _editor_form_outputs(session_path, selected_id)
+        return (
+            preview,
+            gr.update(choices=choices, value=selected_id),
+            source_text,
+            translation,
+            x,
+            y,
+            width,
+            height,
+            max_font_size,
+            min_font_size,
+            rotation,
+            vertical_stack,
+            font_color,
+            enabled,
+            _status_update("Added a new text region."),
+        )
+    except Exception as e:
+        cleaned = _clean_error_message(e)
+        return _editor_blank_outputs(cleaned)
+
+
+def handle_editor_delete_region(session_path: str, region_id: str) -> Tuple[Any, ...]:
+    try:
+        if not session_path or not region_id:
+            return _editor_blank_outputs("No editor region is selected.")
+        from core.editor_session import delete_region, region_choices
+
+        session, selected_id, preview = delete_region(session_path, region_id)
+        choices = region_choices(session)
+        if not selected_id:
+            return (
+                preview,
+                gr.update(choices=[], value=None),
+                "",
+                "",
+                0,
+                0,
+                1,
+                1,
+                16,
+                8,
+                0.0,
+                False,
+                "#000000",
+                True,
+                _status_update("Deleted region. No regions remain."),
+            )
+        (
+            _preview,
+            source_text,
+            translation,
+            x,
+            y,
+            width,
+            height,
+            max_font_size,
+            min_font_size,
+            rotation,
+            vertical_stack,
+            font_color,
+            enabled,
+        ) = _editor_form_outputs(session_path, selected_id)
+        return (
+            preview,
+            gr.update(choices=choices, value=selected_id),
+            source_text,
+            translation,
+            x,
+            y,
+            width,
+            height,
+            max_font_size,
+            min_font_size,
+            rotation,
+            vertical_stack,
+            font_color,
+            enabled,
+            _status_update("Deleted region."),
+        )
+    except Exception as e:
+        cleaned = _clean_error_message(e)
+        return _editor_blank_outputs(cleaned)
+
+
+def handle_editor_rerender(
+    session_path: str,
+    region_id: str,
+    translation: str,
+    x: Any,
+    y: Any,
+    width: Any,
+    height: Any,
+    max_font_size: Any,
+    min_font_size: Any,
+    rotation_deg: Any,
+    vertical_stack: bool,
+    font_color: str,
+    enabled: bool,
+) -> Tuple[Any, gr.update, gr.update, Any]:
+    try:
+        if not session_path:
+            raise ValueError("No translated editor session is available yet.")
+        if region_id:
+            from core.editor_session import update_region_from_form
+
+            update_region_from_form(
+                session_path,
+                region_id,
+                translation,
+                x,
+                y,
+                width,
+                height,
+                max_font_size,
+                min_font_size,
+                rotation_deg,
+                vertical_stack,
+                font_color,
+                enabled,
+            )
+        from core.editor_session import rerender_session
+
+        image, output_path, errors = rerender_session(session_path)
+        message = f"Edited image saved: {output_path}"
+        if errors:
+            message += "\n" + "\n".join(errors[:8])
+            if len(errors) > 8:
+                message += f"\n...and {len(errors) - 8} more render warning(s)."
+        return image, _status_update(message), _download_file_update(output_path), image.copy()
+    except Exception as e:
+        cleaned = _clean_error_message(e)
+        return None, _status_update(cleaned), _download_file_update(), None
 
 
 def handle_batch_click(
@@ -827,18 +2015,19 @@ def handle_batch_click(
     fonts_base_dir: Path,
     target_device: Optional[torch.device],
     progress=gr.Progress(track_tqdm=True),
-) -> Tuple[List[str], str]:
+) -> Tuple[List[str], str, Optional[str], Optional[str], gr.update, gr.update]:
     """Callback for the 'Start Batch Translating' button click. Uses dataclasses."""
     input_files = args[0]
     input_zip = args[1] if len(args) > 1 else None
-    progress(0, desc="Starting batch process...")
+    progress(0, desc=ko("Starting batch process..."))
     global CANCELLATION_MANAGER
     CANCELLATION_MANAGER = CancellationManager()
     try:
         zip_file_path = None
         if input_zip:
             try:
-                zip_file_path = validate_zip_file(input_zip)
+                zip_path_str = normalize_zip_file_input(input_zip)
+                zip_file_path = validate_zip_file(zip_path_str)
             except (ValidationError, FileNotFoundError) as e:
                 raise gr.Error(f"{ERROR_PREFIX}{str(e)}")
 
@@ -881,6 +2070,8 @@ def handle_batch_click(
             selected_font_pack_name=selected_font_pack_name,
             models_dir=models_dir,
             fonts_base_dir=fonts_base_dir,
+            output_base_dir=ui_state.output.output_directory,
+            disable_auto_save=ui_state.output.disable_auto_save,
             gradio_progress=progress,
             cancellation_manager=CANCELLATION_MANAGER,
         )
@@ -895,6 +2086,8 @@ def handle_batch_click(
                 f
                 for f in processed_files
                 if f.is_file() and f.suffix.lower() in image_extensions
+                and not any(part.endswith("_edit_session_assets") for part in f.parts)
+                and "_edit_session" not in f.stem
             ]
             processed_files.sort(  # Sort naturally (e.g., page_1, page_2, page_10)
                 key=lambda x: tuple(
@@ -903,6 +2096,7 @@ def handle_batch_click(
                 )
             )
             gallery_images = [str(file_path) for file_path in processed_files]
+        editor_session_choices = _editor_session_choices_from_outputs(gallery_images)
 
         # Re-get font path for success message (logic already validated it)
         font_dir_path = (
@@ -914,24 +2108,56 @@ def handle_batch_click(
         status_msg = _format_batch_success_message(
             results, backend_config, font_dir_path
         )
-        progress(1.0, desc="Batch complete!")
-        return gallery_images, _status_update(status_msg)
+        success_zip_path = results.get("success_zip_path")
+        failed_zip_path = results.get("failed_zip_path")
+        progress(
+            1.0,
+            desc=(
+                ko("Batch cancelled; auto-save is off.")
+                if results.get("auto_save_disabled") and results.get("cancelled")
+                else ko("Batch complete; auto-save is off.")
+                if results.get("auto_save_disabled")
+                else ko("Batch cancelled; download ZIPs are ready.")
+                if results.get("cancelled")
+                else ko("Batch complete!")
+            ),
+        )
+        return (
+            gallery_images,
+            _status_update(status_msg),
+            _download_file_update(success_zip_path),
+            _download_file_update(failed_zip_path),
+            gr.update(
+                choices=editor_session_choices,
+                value=editor_session_choices[0][1] if editor_session_choices else None,
+                visible=bool(editor_session_choices),
+            ),
+            _editor_button_update(editor_session_choices[0][1] if editor_session_choices else None),
+        )
 
     except gr.Error as e:
-        progress(1.0, desc="Error occurred")
+        progress(1.0, desc=ko("Error occurred"))
         cleaned = _clean_error_message(e)
         gr.Error(cleaned)
-        return None, _status_update(cleaned)
-    except CancellationError:
-        progress(1.0, desc="Cancelled")
-        return None, _status_update("Batch process cancelled by user.")
+        return None, _status_update(cleaned), _download_file_update(), _download_file_update(), gr.update(choices=[], value=None, visible=False), _editor_button_update()
+    except CancellationError as e:
+        message = str(e) or "Batch process cancelled by user."
+        progress(1.0, desc=ko("Cancelled"))
+        return (
+            None,
+            _status_update(message),
+            _download_file_update(),
+            _download_file_update(),
+            gr.update(choices=[], value=None, visible=False),
+            _editor_button_update(),
+        )
     except (ValidationError, FileNotFoundError, ValueError, logic.LogicError) as e:
-        progress(1.0, desc="Error occurred")
+        progress(1.0, desc=ko("Error occurred"))
         cleaned = _clean_error_message(e)
         gr.Error(cleaned)
-        return None, _status_update(cleaned)
+        return None, _status_update(cleaned), _download_file_update(), _download_file_update(), gr.update(choices=[], value=None, visible=False), _editor_button_update()
     except Exception as e:
-        progress(1.0, desc="Error occurred")
+        progress(1.0, desc=ko("Error occurred"))
         import traceback
 
         traceback.print_exc()
@@ -939,7 +2165,7 @@ def handle_batch_click(
             f"An unexpected error occurred during batch processing: {str(e)}"
         )
         gr.Error(cleaned)
-        return None, _status_update(cleaned)
+        return None, _status_update(cleaned), _download_file_update(), _download_file_update(), gr.update(choices=[], value=None, visible=False), _editor_button_update()
 
 
 def handle_save_config_click(*args: Any) -> str:
@@ -957,16 +2183,29 @@ def handle_save_config_click(*args: Any) -> str:
         thresholding_val,
         otsu,
         inpaint_colored_bubbles,
+        colored_bubble_inpainting_size,
+        colored_bubble_inpainting_precision,
+        colored_bubble_mask_kernel_size,
+        colored_bubble_mask_dilation_offset,
         roi_shrink_px,
         prov,
         gem_key,
+        google_rate_limit_enabled_val,
+        google_request_interval_seconds_val,
+        google_requests_per_minute_val,
+        google_burst_requests_val,
+        google_burst_cooldown_seconds_val,
+        google_429_cooldown_seconds_val,
+        google_max_retries_val,
+        google_429_hourly_limit_val,
+        google_429_hourly_action_val,
+        google_429_pause_minutes_val,
         oai_key,
         ant_key,
         xai_key,
         deepseek_key,
         zai_key,
         moonshot_key,
-        mimo_key,
         or_key,
         comp_url,
         comp_key,
@@ -974,19 +2213,42 @@ def handle_save_config_click(*args: Any) -> str:
         temp,
         tp,
         tk,
-        use_custom_sampling_val,
         max_tokens,
         trans_mode,
         ocr_method_val,
         max_fs,
+        emphasis_max_fs,
         min_fs,
         ls,
+        emphasis_ls,
+        vertical_ls,
+        vertical_emphasis_ls,
+        vertical_font_size_mult,
+        vertical_max_chars,
+        vertical_emphasis_max_chars,
+        tag_style_table_val,
         subpix,
         hint,
         liga,
+        inside_light_text_color,
+        inside_light_outline_color,
+        inside_light_outline_width,
+        inside_dark_text_color,
+        inside_dark_outline_color,
+        inside_dark_outline_width,
+        outside_light_text_color,
+        outside_light_outline_color,
+        outside_light_outline_width,
+        outside_dark_text_color,
+        outside_dark_outline_color,
+        outside_dark_outline_width,
         out_fmt,
         jq,
         pngc,
+        output_directory_val,
+        disable_auto_save_val,
+        embed_editor_package_val,
+        save_plain_image_copy_val,
         verb,
         cleaning_only_val,
         upscaling_only_val,
@@ -994,6 +2256,7 @@ def handle_save_config_click(*args: Any) -> str:
         s_in_lang,
         s_out_lang,
         s_font,
+        emphasis_font_pack_val,
         b_in_lang,
         b_out_lang,
         b_font,
@@ -1007,6 +2270,7 @@ def handle_save_config_click(*args: Any) -> str:
         effort_val,
         verbosity_val,
         send_full_page_context_val,
+        parallel_inpaint_translation_val,
         whiteout_conjoined_bubbles_val,
         upscale_method_val,
         bubble_min_side_pixels_val,
@@ -1020,33 +2284,43 @@ def handle_save_config_click(*args: Any) -> str:
         hyphen_penalty_val,
         hyphenation_min_word_length_val,
         badness_exponent_val,
-        padding_pixels_val,
+        padding_horizontal_pixels_val,
+        padding_vertical_pixels_val,
         supersampling_factor_val,
         outside_text_enabled_val,
         outside_text_seed_val,
         outside_text_inpainting_method_val,
-        outside_text_flux_backend_val,
-        outside_text_flux_low_vram_val,
-        outside_text_flux_sdcpp_cache_mode_val,
-        outside_text_flux_sdcpp_diffusion_quant_val,
-        outside_text_flux_sdcpp_text_encoder_quant_val,
+        outside_text_kontext_backend_val,
+        outside_text_flux_offload_mode_val,
         outside_text_flux_num_inference_steps_val,
+        outside_text_flux_kontext_prompt_val,
+        outside_text_flux_klein_prompt_val,
         outside_text_flux_luminance_correction_val,
         outside_text_flux_upscale_small_crops_val,
         outside_text_flux_group_regions_val,
         outside_text_flux_residual_diff_threshold_val,
+        outside_text_osb_residual_render_guard_action_val,
         outside_text_osb_confidence_val,
-        outside_text_min_area_ignore_ratio_percent_val,
         outside_text_enable_page_number_filtering_val,
         outside_text_page_filter_margin_threshold_val,
         outside_text_page_filter_min_area_ratio_val,
         outside_text_huggingface_token_val,
         outside_text_osb_font_pack_val,
+        outside_text_osb_emphasis_font_pack_val,
         outside_text_osb_max_font_size_val,
+        outside_text_osb_emphasis_max_font_size_val,
         outside_text_osb_min_font_size_val,
         outside_text_osb_use_ligatures_val,
         outside_text_osb_outline_width_val,
+        outside_text_osb_padding_pixels_val,
         outside_text_osb_line_spacing_val,
+        outside_text_osb_vertical_line_spacing_val,
+        outside_text_osb_auto_vertical_val,
+        outside_text_osb_vertical_aspect_ratio_val,
+        outside_text_osb_vertical_max_chars_val,
+        outside_text_osb_tall_box_expand_aspect_ratio_val,
+        outside_text_osb_tall_box_expand_width_percent_val,
+        outside_text_osb_rotation_max_degrees_val,
         outside_text_osb_use_subpixel_rendering_val,
         outside_text_osb_font_hinting_val,
         outside_text_bbox_expansion_percent_val,
@@ -1060,10 +2334,15 @@ def handle_save_config_click(*args: Any) -> str:
         image_upscale_model_val,
         auto_scale_val,
         batch_parallel_requests_val,
-        batch_parallel_within_pages_val,
+        batch_retry_failed_once_val,
         batch_previous_context_image_count_val,
         batch_previous_context_text_count_val,
+        batch_previous_context_text_mode_val,
     ) = args
+    flux_cpu_offload, flux_low_vram = flux_offload_flags(
+        outside_text_flux_offload_mode_val
+    )
+
     ui_state = UIConfigState(
         detection=UIDetectionSettings(
             confidence=conf,
@@ -1079,6 +2358,18 @@ def handle_save_config_click(*args: Any) -> str:
             thresholding_value=thresholding_val,
             use_otsu_threshold=otsu,
             inpaint_colored_bubbles=inpaint_colored_bubbles,
+            colored_bubble_inpainting_size=int(
+                colored_bubble_inpainting_size
+            ),
+            colored_bubble_inpainting_precision=(
+                colored_bubble_inpainting_precision
+            ),
+            colored_bubble_mask_kernel_size=int(
+                colored_bubble_mask_kernel_size
+            ),
+            colored_bubble_mask_dilation_offset=int(
+                colored_bubble_mask_dilation_offset
+            ),
             roi_shrink_px=int(max(0, min(8, roi_shrink_px))),
         ),
         outside_text=UIOutsideTextSettings(
@@ -1086,21 +2377,20 @@ def handle_save_config_click(*args: Any) -> str:
             seed=int(outside_text_seed_val),
             huggingface_token=outside_text_huggingface_token_val,
             inpainting_method=outside_text_inpainting_method_val,
-            flux_backend=outside_text_flux_backend_val,
-            flux_low_vram=outside_text_flux_low_vram_val,
-            flux_sdcpp_cache_mode=outside_text_flux_sdcpp_cache_mode_val,
-            flux_sdcpp_diffusion_quant=outside_text_flux_sdcpp_diffusion_quant_val,
-            flux_sdcpp_text_encoder_quant=outside_text_flux_sdcpp_text_encoder_quant_val,
+            kontext_backend=outside_text_kontext_backend_val,
+            flux_cpu_offload=flux_cpu_offload,
+            flux_low_vram=flux_low_vram,
             flux_num_inference_steps=int(outside_text_flux_num_inference_steps_val),
+            flux_kontext_prompt=outside_text_flux_kontext_prompt_val,
+            flux_klein_prompt=outside_text_flux_klein_prompt_val,
             flux_luminance_correction=outside_text_flux_luminance_correction_val,
             flux_upscale_small_crops=outside_text_flux_upscale_small_crops_val,
             flux_group_regions=outside_text_flux_group_regions_val,
             flux_residual_diff_threshold=float(
                 outside_text_flux_residual_diff_threshold_val
             ),
+            osb_residual_render_guard_action=outside_text_osb_residual_render_guard_action_val,
             osb_confidence=float(outside_text_osb_confidence_val),
-            min_area_ignore_ratio=float(outside_text_min_area_ignore_ratio_percent_val)
-            / 100.0,
             enable_page_number_filtering=outside_text_enable_page_number_filtering_val,
             page_filter_margin_threshold=float(
                 outside_text_page_filter_margin_threshold_val
@@ -1109,11 +2399,33 @@ def handle_save_config_click(*args: Any) -> str:
                 outside_text_page_filter_min_area_ratio_val
             ),
             osb_font_dir=outside_text_osb_font_pack_val,
+            osb_emphasis_font_dir=outside_text_osb_emphasis_font_pack_val,
             osb_max_font_size=int(outside_text_osb_max_font_size_val),
+            osb_emphasis_max_font_size=int(
+                outside_text_osb_emphasis_max_font_size_val
+            ),
             osb_min_font_size=int(outside_text_osb_min_font_size_val),
             osb_use_ligatures=outside_text_osb_use_ligatures_val,
             osb_outline_width=float(outside_text_osb_outline_width_val),
+            osb_padding_pixels=float(outside_text_osb_padding_pixels_val),
             osb_line_spacing=float(outside_text_osb_line_spacing_val),
+            osb_vertical_line_spacing=float(
+                outside_text_osb_vertical_line_spacing_val
+            ),
+            osb_auto_vertical=outside_text_osb_auto_vertical_val,
+            osb_vertical_aspect_ratio=float(
+                outside_text_osb_vertical_aspect_ratio_val
+            ),
+            osb_vertical_max_chars=int(outside_text_osb_vertical_max_chars_val),
+            osb_tall_box_expand_aspect_ratio=float(
+                outside_text_osb_tall_box_expand_aspect_ratio_val
+            ),
+            osb_tall_box_expand_width_percent=float(
+                outside_text_osb_tall_box_expand_width_percent_val
+            ),
+            osb_rotation_max_degrees=float(
+                outside_text_osb_rotation_max_degrees_val
+            ),
             osb_use_subpixel_rendering=outside_text_osb_use_subpixel_rendering_val,
             osb_font_hinting=outside_text_osb_font_hinting_val,
             bbox_expansion_percent=float(outside_text_bbox_expansion_percent_val),
@@ -1141,10 +2453,38 @@ def handle_save_config_click(*args: Any) -> str:
             deepseek_api_key=deepseek_key,
             zai_api_key=zai_key,
             moonshot_api_key=moonshot_key,
-            mimo_api_key=mimo_key,
             openrouter_api_key=or_key,
             openai_compatible_url=comp_url,
             openai_compatible_api_key=comp_key,
+        ),
+        google_rate_limit=UIGoogleRateLimitSettings(
+            enabled=bool(google_rate_limit_enabled_val),
+            request_interval_seconds=max(
+                0.0, float(google_request_interval_seconds_val or 0.0)
+            ),
+            requests_per_minute=max(
+                0, int(float(google_requests_per_minute_val or 0))
+            ),
+            burst_requests=max(0, int(float(google_burst_requests_val or 0))),
+            burst_cooldown_seconds=max(
+                0.0, float(google_burst_cooldown_seconds_val or 0.0)
+            ),
+            cooldown_429_seconds=max(
+                0.0, float(google_429_cooldown_seconds_val or 0.0)
+            ),
+            max_retries=max(0, int(float(google_max_retries_val or 0))),
+            hourly_429_limit=max(
+                0, int(float(google_429_hourly_limit_val or 0))
+            ),
+            hourly_429_action=(
+                str(google_429_hourly_action_val or "stop").strip().lower()
+                if str(google_429_hourly_action_val or "stop").strip().lower()
+                in {"stop", "pause"}
+                else "stop"
+            ),
+            pause_429_minutes=max(
+                0.0, float(google_429_pause_minutes_val or 0.0)
+            ),
         ),
         llm_settings=UITranslationLLMSettings(
             model_name=model,
@@ -1156,6 +2496,7 @@ def handle_save_config_click(*args: Any) -> str:
             translation_mode=trans_mode,
             ocr_method=ocr_method_val,
             send_full_page_context=send_full_page_context_val,
+            parallel_inpaint_translation=parallel_inpaint_translation_val,
             whiteout_conjoined_bubbles=whiteout_conjoined_bubbles_val,
             upscale_method=upscale_method_val,
             bubble_min_side_pixels=bubble_min_side_pixels_val,
@@ -1164,22 +2505,52 @@ def handle_save_config_click(*args: Any) -> str:
             special_instructions=special_instructions_val,
         ),
         rendering=UIRenderingSettings(
+            emphasis_font_dir=emphasis_font_pack_val,
             max_font_size=max_fs,
+            emphasis_max_font_size=emphasis_max_fs,
             min_font_size=min_fs,
             line_spacing_mult=ls,
+            emphasis_line_spacing_mult=emphasis_ls,
+            vertical_line_spacing_mult=vertical_ls,
+            vertical_emphasis_line_spacing_mult=vertical_emphasis_ls,
+            vertical_font_size_mult=vertical_font_size_mult,
+            vertical_max_chars=int(vertical_max_chars),
+            vertical_emphasis_max_chars=int(vertical_emphasis_max_chars),
+            tag_style_table=tag_style_table_val,
             use_subpixel_rendering=subpix,
             font_hinting=hint,
             use_ligatures=liga,
+            inside_light_text_color=inside_light_text_color,
+            inside_light_outline_color=inside_light_outline_color,
+            inside_light_outline_width=float(inside_light_outline_width),
+            inside_dark_text_color=inside_dark_text_color,
+            inside_dark_outline_color=inside_dark_outline_color,
+            inside_dark_outline_width=float(inside_dark_outline_width),
+            outside_light_text_color=outside_light_text_color,
+            outside_light_outline_color=outside_light_outline_color,
+            outside_light_outline_width=float(outside_light_outline_width),
+            outside_dark_text_color=outside_dark_text_color,
+            outside_dark_outline_color=outside_dark_outline_color,
+            outside_dark_outline_width=float(outside_dark_outline_width),
             hyphenate_before_scaling=hyphenate_before_scaling_val,
             detach_trailing_punctuation=detach_trailing_punctuation_val,
             auto_vertical_text=auto_vertical_text_val,
             hyphen_penalty=hyphen_penalty_val,
             hyphenation_min_word_length=hyphenation_min_word_length_val,
             badness_exponent=badness_exponent_val,
-            padding_pixels=padding_pixels_val,
+            padding_pixels=max(
+                float(padding_horizontal_pixels_val),
+                float(padding_vertical_pixels_val),
+            ),
+            padding_horizontal_pixels=float(padding_horizontal_pixels_val),
+            padding_vertical_pixels=float(padding_vertical_pixels_val),
             supersampling_factor=int(supersampling_factor_val),
         ),
         output=UIOutputSettings(
+            output_directory=output_directory_val,
+            disable_auto_save=bool(disable_auto_save_val),
+            embed_editor_package=bool(embed_editor_package_val),
+            save_plain_image_copy=bool(save_plain_image_copy_val),
             output_format=out_fmt,
             jpeg_quality=jq,
             png_compression=pngc,
@@ -1194,7 +2565,6 @@ def handle_save_config_click(*args: Any) -> str:
             test_mode=test_mode_val,
             enable_web_search=enable_web_search_val,
             enable_code_execution=enable_code_execution_val,
-            use_custom_sampling=use_custom_sampling_val,
             image_detail=image_detail_val,
             media_resolution=media_resolution_val,
             media_resolution_bubbles=media_resolution_bubbles_val,
@@ -1212,17 +2582,21 @@ def handle_save_config_click(*args: Any) -> str:
         batch_font_pack=b_font,
         batch_special_instructions=batch_special_instructions_val,
         batch_parallel_requests=int(batch_parallel_requests_val),
-        batch_parallel_within_pages=bool(batch_parallel_within_pages_val),
+        batch_retry_failed_once=bool(batch_retry_failed_once_val),
         batch_previous_context_image_count=int(batch_previous_context_image_count_val),
         batch_previous_context_text_count=int(batch_previous_context_text_count_val),
+        batch_previous_context_text_mode=str(batch_previous_context_text_mode_val),
     )
 
     # Convert UI state to dictionary for saving
     settings_dict = ui_state.to_save_dict()
     # Persist send_full_page_context from the single UI value (used for both single and batch flows).
     settings_dict["send_full_page_context"] = bool(send_full_page_context_val)
+    settings_dict["parallel_inpaint_translation"] = bool(
+        parallel_inpaint_translation_val
+    )
     message = settings_manager.save_config(settings_dict)
-    return message
+    return ko(message)
 
 
 def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
@@ -1264,7 +2638,6 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
     deepseek_visible = default_provider == "DeepSeek"
     zai_visible = default_provider == "Z.ai"
     moonshot_visible = default_provider == "Moonshot AI"
-    mimo_visible = default_provider == "Xiaomi MiMo"
     openrouter_visible = default_provider == "OpenRouter"
     compatible_visible = default_provider == "OpenAI-Compatible"
     (
@@ -1272,7 +2645,6 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
         top_p_update,
         top_k_update,
         _,  # max_tokens_update - unused (using saved default instead)
-        use_custom_sampling_update,
         enable_web_search_update,
         enable_code_execution_update,
         image_detail_update,
@@ -1290,7 +2662,6 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
     top_p_interactive = top_p_update.get("interactive", True)
     top_k_interactive = top_k_update.get("interactive", True)
     top_k_val = top_k_update.get("value", default_ui_state.llm_settings.top_k)
-    use_custom_sampling_visible = use_custom_sampling_update.get("visible", True)
     is_reasoning = utils.is_reasoning_model(default_provider, default_model_name)
     max_tokens_val = 16384 if is_reasoning else 4096
     enable_web_search_visible = enable_web_search_update.get("visible", False)
@@ -1311,13 +2682,6 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
     effort_val = effort_update.get("value", default_ui_state.general.effort)
     verbosity_visible = verbosity_update.get("visible", False)
     verbosity_val = verbosity_update.get("value", default_ui_state.general.verbosity)
-    text_encoder_quant = flux_sdcpp_valid_text_encoder_quant(
-        default_ui_state.outside_text.inpainting_method,
-        default_ui_state.outside_text.flux_sdcpp_text_encoder_quant,
-    )
-    text_encoder_quants = flux_sdcpp_text_encoder_quants(
-        default_ui_state.outside_text.inpainting_method
-    )
 
     return [
         default_ui_state.detection.confidence,
@@ -1335,12 +2699,42 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
         default_ui_state.cleaning.thresholding_value,
         default_ui_state.cleaning.use_otsu_threshold,
         default_ui_state.cleaning.inpaint_colored_bubbles,
+        gr.update(
+            value=default_ui_state.cleaning.colored_bubble_inpainting_size,
+            interactive=default_ui_state.cleaning.inpaint_colored_bubbles,
+        ),
+        gr.update(
+            value=default_ui_state.cleaning.colored_bubble_inpainting_precision,
+            interactive=default_ui_state.cleaning.inpaint_colored_bubbles,
+        ),
+        gr.update(
+            value=default_ui_state.cleaning.colored_bubble_mask_kernel_size,
+            interactive=default_ui_state.cleaning.inpaint_colored_bubbles,
+        ),
+        gr.update(
+            value=default_ui_state.cleaning.colored_bubble_mask_dilation_offset,
+            interactive=default_ui_state.cleaning.inpaint_colored_bubbles,
+        ),
         default_ui_state.cleaning.roi_shrink_px,
         gr.update(value=default_provider),
         gr.update(
             value=default_ui_state.provider_settings.google_api_key,
             visible=gemini_visible,
         ),
+        gr.update(value=default_ui_state.google_rate_limit.enabled),
+        gr.update(
+            value=default_ui_state.google_rate_limit.request_interval_seconds
+        ),
+        gr.update(value=default_ui_state.google_rate_limit.requests_per_minute),
+        gr.update(value=default_ui_state.google_rate_limit.burst_requests),
+        gr.update(
+            value=default_ui_state.google_rate_limit.burst_cooldown_seconds
+        ),
+        gr.update(value=default_ui_state.google_rate_limit.cooldown_429_seconds),
+        gr.update(value=default_ui_state.google_rate_limit.max_retries),
+        gr.update(value=default_ui_state.google_rate_limit.hourly_429_limit),
+        gr.update(value=default_ui_state.google_rate_limit.hourly_429_action),
+        gr.update(value=default_ui_state.google_rate_limit.pause_429_minutes),
         gr.update(
             value=default_ui_state.provider_settings.openai_api_key,
             visible=openai_visible,
@@ -1365,10 +2759,6 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
             visible=moonshot_visible,
         ),
         gr.update(
-            value=default_ui_state.provider_settings.mimo_api_key,
-            visible=mimo_visible,
-        ),
-        gr.update(
             value=default_ui_state.provider_settings.openrouter_api_key,
             visible=openrouter_visible,
         ),
@@ -1386,22 +2776,42 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
             value=default_ui_state.llm_settings.top_p, interactive=top_p_interactive
         ),
         gr.update(value=top_k_val, interactive=top_k_interactive),
-        gr.update(
-            value=default_ui_state.general.use_custom_sampling,
-            visible=use_custom_sampling_visible,
-        ),
         gr.update(value=max_tokens_val),
         gr.update(value=default_ui_state.llm_settings.translation_mode),
         gr.update(value=default_ui_state.llm_settings.ocr_method),
         default_ui_state.rendering.max_font_size,
+        default_ui_state.rendering.emphasis_max_font_size,
         default_ui_state.rendering.min_font_size,
         default_ui_state.rendering.line_spacing_mult,
+        default_ui_state.rendering.emphasis_line_spacing_mult,
+        default_ui_state.rendering.vertical_line_spacing_mult,
+        default_ui_state.rendering.vertical_emphasis_line_spacing_mult,
+        default_ui_state.rendering.vertical_font_size_mult,
+        default_ui_state.rendering.vertical_max_chars,
+        default_ui_state.rendering.vertical_emphasis_max_chars,
+        gr.update(value=tag_styles_to_table(default_ui_state.rendering.tag_style_table)),
         default_ui_state.rendering.use_subpixel_rendering,
         default_ui_state.rendering.font_hinting,
         default_ui_state.rendering.use_ligatures,
+        default_ui_state.rendering.inside_light_text_color,
+        default_ui_state.rendering.inside_light_outline_color,
+        default_ui_state.rendering.inside_light_outline_width,
+        default_ui_state.rendering.inside_dark_text_color,
+        default_ui_state.rendering.inside_dark_outline_color,
+        default_ui_state.rendering.inside_dark_outline_width,
+        default_ui_state.rendering.outside_light_text_color,
+        default_ui_state.rendering.outside_light_outline_color,
+        default_ui_state.rendering.outside_light_outline_width,
+        default_ui_state.rendering.outside_dark_text_color,
+        default_ui_state.rendering.outside_dark_outline_color,
+        default_ui_state.rendering.outside_dark_outline_width,
         default_ui_state.output.output_format,
         default_ui_state.output.jpeg_quality,
         default_ui_state.output.png_compression,
+        default_ui_state.output.output_directory,
+        default_ui_state.output.disable_auto_save,
+        default_ui_state.output.embed_editor_package,
+        default_ui_state.output.save_plain_image_copy,
         default_ui_state.general.verbose,
         default_ui_state.general.cleaning_only,
         default_ui_state.general.upscaling_only,
@@ -1409,6 +2819,7 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
         default_ui_state.input_language,
         default_ui_state.output_language,
         gr.update(value=default_ui_state.font_pack),
+        gr.update(value=default_ui_state.rendering.emphasis_font_dir),
         default_ui_state.batch_input_language,
         default_ui_state.batch_output_language,
         gr.update(value=default_ui_state.batch_font_pack),
@@ -1441,8 +2852,9 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
         gr.update(value=reasoning_effort_val, visible=reasoning_visible),
         gr.update(value=effort_val, visible=effort_visible),
         gr.update(value=verbosity_val, visible=verbosity_visible),
-        "Settings reset to defaults (API keys preserved).",
+        ko("Settings reset to defaults (API keys preserved)."),
         gr.update(value=default_ui_state.llm_settings.send_full_page_context),
+        gr.update(value=default_ui_state.llm_settings.parallel_inpaint_translation),
         gr.update(value=default_ui_state.llm_settings.whiteout_conjoined_bubbles),
         gr.update(value=default_ui_state.llm_settings.upscale_method),
         default_ui_state.llm_settings.bubble_min_side_pixels,
@@ -1451,37 +2863,23 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
         gr.update(value=default_ui_state.rendering.hyphenate_before_scaling),
         gr.update(value=default_ui_state.rendering.detach_trailing_punctuation),
         gr.update(value=default_ui_state.rendering.auto_vertical_text),
+        default_ui_state.rendering.padding_horizontal_pixels,
+        default_ui_state.rendering.padding_vertical_pixels,
         default_ui_state.llm_settings.special_instructions or "",
         default_ui_state.batch_special_instructions or "",
         default_ui_state.outside_text.enabled,
         default_ui_state.outside_text.seed,
         gr.update(value=default_ui_state.outside_text.inpainting_method),
-        gr.update(
-            value=default_ui_state.outside_text.flux_backend,
-            choices=_flux_backend_choices(
-                default_ui_state.outside_text.inpainting_method
-            ),
-        ),
-        default_ui_state.outside_text.flux_backend,
+        gr.update(value=default_ui_state.outside_text.kontext_backend),
         default_ui_state.outside_text.flux_low_vram,
-        default_ui_state.outside_text.flux_sdcpp_cache_mode,
-        gr.update(
-            value=default_ui_state.outside_text.flux_sdcpp_diffusion_quant,
-            choices=_radio_choices(FLUX_SDCPP_DIFFUSION_QUANTS),
-        ),
-        default_ui_state.outside_text.flux_sdcpp_diffusion_quant,
-        gr.update(
-            value=text_encoder_quant,
-            choices=_radio_choices(text_encoder_quants),
-        ),
-        text_encoder_quant,
         default_ui_state.outside_text.flux_num_inference_steps,
+        default_ui_state.outside_text.flux_kontext_prompt,
+        default_ui_state.outside_text.flux_klein_prompt,
         default_ui_state.outside_text.flux_luminance_correction,
         default_ui_state.outside_text.flux_upscale_small_crops,
-        default_ui_state.outside_text.flux_group_regions,
+        gr.update(value=default_ui_state.outside_text.flux_group_regions),
         default_ui_state.outside_text.flux_residual_diff_threshold,
         default_ui_state.outside_text.osb_confidence,
-        default_ui_state.outside_text.min_area_ignore_ratio * 100.0,
         gr.update(value=default_ui_state.outside_text.enable_page_number_filtering),
         gr.update(
             value=default_ui_state.outside_text.page_filter_margin_threshold,
@@ -1493,11 +2891,21 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
         ),
         default_ui_state.outside_text.huggingface_token,
         gr.update(value=default_ui_state.outside_text.osb_font_dir),
+        gr.update(value=default_ui_state.outside_text.osb_emphasis_font_dir),
         default_ui_state.outside_text.osb_max_font_size,
+        default_ui_state.outside_text.osb_emphasis_max_font_size,
         default_ui_state.outside_text.osb_min_font_size,
         default_ui_state.outside_text.osb_use_ligatures,
         default_ui_state.outside_text.osb_outline_width,
+        default_ui_state.outside_text.osb_padding_pixels,
         default_ui_state.outside_text.osb_line_spacing,
+        default_ui_state.outside_text.osb_vertical_line_spacing,
+        default_ui_state.outside_text.osb_auto_vertical,
+        default_ui_state.outside_text.osb_vertical_aspect_ratio,
+        default_ui_state.outside_text.osb_vertical_max_chars,
+        default_ui_state.outside_text.osb_tall_box_expand_aspect_ratio,
+        default_ui_state.outside_text.osb_tall_box_expand_width_percent,
+        default_ui_state.outside_text.osb_rotation_max_degrees,
         default_ui_state.outside_text.osb_use_subpixel_rendering,
         default_ui_state.outside_text.osb_font_hinting,
         default_ui_state.outside_text.bbox_expansion_percent,
@@ -1517,24 +2925,21 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
         ),
         default_ui_state.general.auto_scale,
         default_ui_state.batch_parallel_requests,
-        default_ui_state.batch_parallel_within_pages,
+        default_ui_state.batch_retry_failed_once,
         default_ui_state.batch_previous_context_image_count,
         default_ui_state.batch_previous_context_text_count,
+        default_ui_state.batch_previous_context_text_mode,
     ]
 
 
-def handle_provider_change(
-    provider: str,
-    ocr_method: str = "LLM",
-    use_custom_sampling: bool = True,
-):
+def handle_provider_change(provider: str, current_temp: float, ocr_method: str = "LLM"):
     """Handles changes in the provider selector."""
     from core.caching import get_cache
 
     cache = get_cache()
     cache.clear_translation_cache()
     cache.clear_manga_ocr_cache()
-    return utils.update_translation_ui(provider, ocr_method, use_custom_sampling)
+    return utils.update_translation_ui(provider, current_temp, ocr_method)
 
 
 def handle_output_format_change(output_format_value: str):
@@ -1555,6 +2960,25 @@ def handle_refresh_resources_click(fonts_base_dir: Path):
     return utils.refresh_models_and_fonts(fonts_base_dir)
 
 
+def handle_apply_tag_style_font(table_value, tag_name: str, font_pack: str):
+    """Apply a selected font pack to one tag row in the tag style table."""
+    rows = tag_styles_to_table(table_value)
+    normalized_tag = str(tag_name or "").upper().strip().strip("<>")
+    selected_font = str(font_pack or "").strip()
+
+    for row in rows:
+        if not isinstance(row, list) or not row:
+            continue
+        row_tag = str(row[0]).upper().strip().strip("<>")
+        if row_tag == normalized_tag:
+            while len(row) < 3:
+                row.append("")
+            row[2] = selected_font
+            break
+
+    return gr.update(value=rows)
+
+
 def handle_unload_models_click():
     """Callback for the 'Unload Models' button."""
     try:
@@ -1567,58 +2991,24 @@ def handle_unload_models_click():
         gr.Error(f"Error unloading models: {str(e)}")
 
 
-def handle_model_change(
-    provider: str,
-    model_name: Optional[str],
-    current_temp: float,
-    use_custom_sampling: bool = True,
-):
+def handle_model_change(provider: str, model_name: Optional[str], current_temp: float):
     """Handles changes in the model name dropdown."""
     from core.caching import get_cache
 
     cache = get_cache()
     cache.clear_translation_cache()
     cache.clear_manga_ocr_cache()
-    return utils.update_params_for_model(
-        provider, model_name, current_temp, use_custom_sampling
-    )
+    return utils.update_params_for_model(provider, model_name, current_temp)
 
 
 def handle_reasoning_effort_change(
-    provider: str,
-    model_name: Optional[str],
-    reasoning_effort: Optional[str],
-    use_custom_sampling: bool = True,
+    provider: str, model_name: Optional[str], reasoning_effort: Optional[str]
 ):
     """Updates temp/top_p slider interactivity when reasoning effort changes."""
-    temp_ok, top_p_ok, top_k_ok = utils.get_sampling_slider_interactivity(
-        provider,
-        model_name,
-        reasoning_effort,
-        use_custom_sampling=use_custom_sampling,
-    )
-    visible = utils.is_use_custom_sampling_visible(
+    temp_ok, top_p_ok = utils.get_sampling_interactivity_for_effort(
         provider, model_name, reasoning_effort
     )
-    return (
-        gr.update(interactive=temp_ok),
-        gr.update(interactive=top_p_ok),
-        gr.update(interactive=top_k_ok),
-        gr.update(visible=visible),
-    )
-
-
-def handle_use_custom_sampling_change(
-    provider: str,
-    model_name: Optional[str],
-    current_temp: float,
-    use_custom_sampling: bool,
-):
-    """Updates sampling slider interactivity when custom sampling is toggled."""
-    updates = utils.update_params_for_model(
-        provider, model_name, current_temp, use_custom_sampling
-    )
-    return updates[0], updates[1], updates[2]
+    return gr.update(interactive=temp_ok), gr.update(interactive=top_p_ok)
 
 
 def handle_app_load(provider: str, url: str, key: Optional[str]):
@@ -1753,9 +3143,7 @@ def handle_ocr_method_change(
     current_provider = (
         provider
         if provider in available_providers
-        else available_providers[0]
-        if available_providers
-        else "Google"
+        else available_providers[0] if available_providers else "Google"
     )
     provider_selector_update = gr.update(
         choices=available_providers, value=current_provider
@@ -1785,6 +3173,7 @@ def handle_ocr_method_change(
 
         updates.append(gr.update(value=False, interactive=False))
         updates.append(gr.update(value=0, interactive=False))
+        updates.append(gr.update(value=False, interactive=False))
         updates.append(gr.update())
         # Disable code execution checkbox (Gemini Flash only, disabled in text-only mode)
         updates.append(gr.update(value=False, interactive=False))
@@ -1833,19 +3222,6 @@ def handle_ocr_method_change(
                 else (models[0] if models else None)
             )
             updates.append(gr.update(choices=models, value=selected_model))
-        elif current_provider == "Xiaomi MiMo":
-            models = settings_manager.PROVIDER_MODELS.get("Xiaomi MiMo", [])
-            saved_settings = settings_manager.get_saved_settings()
-            provider_models_dict = saved_settings.get(
-                "provider_models", settings_manager.DEFAULT_SETTINGS["provider_models"]
-            )
-            remembered_model = provider_models_dict.get("Xiaomi MiMo")
-            selected_model = (
-                remembered_model
-                if remembered_model in models
-                else (models[0] if models else None)
-            )
-            updates.append(gr.update(choices=models, value=selected_model))
         else:
             updates.append(gr.update())
     elif ocr_method == "paddleocr-vl":
@@ -1881,6 +3257,7 @@ def handle_ocr_method_change(
 
         updates.append(gr.update(value=False, interactive=False))
         updates.append(gr.update(value=0, interactive=False))
+        updates.append(gr.update(value=False, interactive=False))
         updates.append(gr.update())
         updates.append(gr.update(value=False, interactive=False))
         updates.append(gr.update(interactive=False))
@@ -1919,19 +3296,6 @@ def handle_ocr_method_change(
                 "provider_models", settings_manager.DEFAULT_SETTINGS["provider_models"]
             )
             remembered_model = provider_models_dict.get("Moonshot AI")
-            selected_model = (
-                remembered_model
-                if remembered_model in models
-                else (models[0] if models else None)
-            )
-            updates.append(gr.update(choices=models, value=selected_model))
-        elif current_provider == "Xiaomi MiMo":
-            models = settings_manager.PROVIDER_MODELS.get("Xiaomi MiMo", [])
-            saved_settings = settings_manager.get_saved_settings()
-            provider_models_dict = saved_settings.get(
-                "provider_models", settings_manager.DEFAULT_SETTINGS["provider_models"]
-            )
-            remembered_model = provider_models_dict.get("Xiaomi MiMo")
             selected_model = (
                 remembered_model
                 if remembered_model in models
@@ -1987,6 +3351,8 @@ def handle_ocr_method_change(
                 interactive=restored_send_full_page_context,
             )
         )
+        restored_parallel = saved_settings.get("parallel_inpaint_translation", False)
+        updates.append(gr.update(value=restored_parallel, interactive=True))
         restored_whiteout = saved_settings.get("whiteout_conjoined_bubbles", True)
         updates.append(gr.update(value=restored_whiteout, interactive=True))
         updates.append(gr.update(interactive=True))
@@ -2031,23 +3397,6 @@ def handle_ocr_method_change(
                 "provider_models", settings_manager.DEFAULT_SETTINGS["provider_models"]
             )
             remembered_model = provider_models_dict.get("Moonshot AI")
-            selected_model = (
-                remembered_model
-                if remembered_model in models
-                else (models[0] if models else None)
-            )
-            updates.append(gr.update(choices=models, value=selected_model))
-        elif current_provider == "Xiaomi MiMo":
-            models = [
-                m
-                for m in settings_manager.PROVIDER_MODELS.get("Xiaomi MiMo", [])
-                if m.lower() == "mimo-v2.5"
-            ]
-            saved_settings = settings_manager.get_saved_settings()
-            provider_models_dict = saved_settings.get(
-                "provider_models", settings_manager.DEFAULT_SETTINGS["provider_models"]
-            )
-            remembered_model = provider_models_dict.get("Xiaomi MiMo")
             selected_model = (
                 remembered_model
                 if remembered_model in models

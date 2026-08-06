@@ -1,6 +1,8 @@
 import argparse
 import os
+import socket
 import sys
+import tempfile
 from pathlib import Path
 from threading import Thread
 
@@ -20,6 +22,49 @@ def _get_pytorch_version_tuple(version_str):
     """Convert version string like '2.9.0' to tuple (2, 9, 0) for comparison."""
     parts = version_str.split("+")[0].split("-")[0].split(".")
     return tuple(int(part) for part in parts[:3])
+
+
+def _find_available_port(preferred_port, max_attempts=50):
+    for port in range(preferred_port, preferred_port + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    return preferred_port
+
+
+def _build_gradio_allowed_paths() -> list[str]:
+    """Allow Gradio to serve result files saved outside the repo output folder."""
+    paths: list[Path] = [
+        Path(__file__).resolve().parent,
+        Path.cwd().resolve(),
+        Path(tempfile.gettempdir()).resolve(),
+        Path.home().resolve(),
+    ]
+
+    if os.name == "nt":
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            drive = Path(f"{letter}:\\")
+            if drive.exists():
+                paths.append(drive)
+    else:
+        paths.append(Path("/"))
+
+    allowed: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        try:
+            resolved = str(path.resolve())
+        except OSError:
+            continue
+        key = resolved.lower() if os.name == "nt" else resolved
+        if key not in seen:
+            seen.add(key)
+            allowed.append(resolved)
+    return allowed
 
 
 def main():
@@ -112,7 +157,15 @@ def main():
     )
 
     app.queue()
-    app.launch(inbrowser=args.open_browser, server_port=args.port, show_error=True)
+    launch_port = _find_available_port(args.port)
+    if launch_port != args.port:
+        print(f"Port {args.port} is already in use. Launching on port {launch_port} instead.")
+    app.launch(
+        inbrowser=args.open_browser,
+        server_port=launch_port,
+        show_error=True,
+        allowed_paths=_build_gradio_allowed_paths(),
+    )
 
 
 if __name__ == "__main__":

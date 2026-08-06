@@ -5,13 +5,6 @@ import time
 import zipfile
 from pathlib import Path
 
-from utils.archive import safe_extract_zip
-from utils.model_metadata import (
-    FLUX_SDCPP_DIFFUSION_QUANTS,
-    FLUX_SDCPP_TEXT_ENCODER_QUANTS,
-    flux_sdcpp_text_encoder_quants,
-)
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -39,17 +32,7 @@ def main():
         "--parallel-requests",
         type=int,
         default=1,
-        help=(
-            "Batch only: number of parallel workers, one per page (1-20, default: 1)"
-        ),
-    )
-    parser.add_argument(
-        "--batch-parallel-within-pages",
-        action="store_true",
-        help=(
-            "Batch only: allows parallel workers to be shared with "
-            "independent LLM/Flux work within each page"
-        ),
+        help="Batch only: number of images to process simultaneously (1-10, default: 1)",
     )
     parser.add_argument(
         "--batch-previous-context-images",
@@ -66,6 +49,15 @@ def main():
             "as narrative context (0-50, default: 3)"
         ),
     )
+    parser.add_argument(
+        "--batch-previous-context-text-mode",
+        choices=["strict", "available"],
+        default="strict",
+        help=(
+            "Batch only: strict waits for previous page OCR before translation; "
+            "available uses completed previous OCR without waiting (default: strict)"
+        ),
+    )
     # --- Provider and API Key Arguments ---
     parser.add_argument(
         "--provider",
@@ -79,7 +71,6 @@ def main():
             "DeepSeek",
             "Z.ai",
             "Moonshot AI",
-            "Xiaomi MiMo",
             "OpenRouter",
             "OpenAI-Compatible",
         ],
@@ -127,15 +118,6 @@ def main():
         type=str,
         default=None,
         help="Moonshot API key (overrides MOONSHOT_API_KEY env var if --provider is Moonshot)",
-    )
-    parser.add_argument(
-        "--mimo-api-key",
-        type=str,
-        default=None,
-        help=(
-            "Xiaomi MiMo API key, sk-... (pay-as-you-go) or tp-... (Token Plan); "
-            "overrides MIMO_API_KEY env var if --provider is Xiaomi MiMo"
-        ),
     )
     parser.add_argument(
         "--openrouter-api-key",
@@ -258,7 +240,7 @@ def main():
     parser.add_argument(
         "--inpaint-colored-bubbles",
         action="store_true",
-        help="Use Flux model to inpaint colored/grayscale bubbles",
+        help="Use LAMA Large to inpaint colored/grayscale/gradient bubbles",
     )
     # Translation args
     parser.add_argument(
@@ -506,12 +488,12 @@ def main():
         help="Enable Gemini's code execution tool for image zoom/inspection (Gemini 3 Flash only)",
     )
     parser.add_argument(
-        "--no-custom-sampling",
-        dest="use_custom_sampling",
+        "--no-gemini-3-custom-sampling",
+        dest="gemini_3_custom_sampling",
         action="store_false",
-        help="Omit temperature, top-p, and top-k from API requests",
+        help="Omit temperature, top-p, and top-k for Gemini 3.x models",
     )
-    parser.set_defaults(use_custom_sampling=True)
+    parser.set_defaults(gemini_3_custom_sampling=True)
     parser.add_argument(
         "--media-resolution",
         type=str,
@@ -598,50 +580,29 @@ def main():
         help="Inpainting method for outside text removal.",
     )
     parser.add_argument(
-        "--osb-flux-backend",
+        "--osb-kontext-backend",
         type=str,
-        choices=["sdcpp", "sdnq", "nunchaku"],
+        choices=["sdnq", "nunchaku"],
         default="sdnq",
         help=(
-            "Backend for Flux inpainting. "
-            "'sdcpp' and 'sdnq' support Flux Klein/Kontext; "
-            "'nunchaku' is CUDA-only and Kontext-only."
+            "Backend for Flux.1 Kontext model. "
+            "'sdnq' is cross-platform (Nvidia/AMD/Intel/macOS), "
+            "'nunchaku' is CUDA-only but faster"
         ),
     )
     parser.add_argument(
         "--osb-flux-low-vram",
         action="store_true",
-        help="Enable CPU offload for Flux SDNQ models (reduces VRAM usage)",
+        help="Enable sequential CPU offload for Flux Klein/Kontext SDNQ models (reduces VRAM usage)",
     )
     parser.add_argument(
-        "--osb-flux-sdcpp-cache-mode",
-        type=str,
-        choices=["spectrum", "cache-dit", "taylorseer", "dbcache", "none"],
-        default="none",
+        "--osb-no-flux-cpu-offload",
+        dest="osb_flux_cpu_offload",
+        action="store_false",
+        default=True,
         help=(
-            "Caching method for Flux via sd.cpp. Ordered from fastest/worst quality to slowest/best quality."
-            "Warmup is 25%% of the selected step count."
-        ),
-    )
-    parser.add_argument(
-        "--osb-flux-sdcpp-diffusion-quant",
-        type=str,
-        choices=FLUX_SDCPP_DIFFUSION_QUANTS,
-        default="Q4_K_M",
-        help=(
-            "Quantization level for the Flux model via sd.cpp. "
-            "Ordered from largest/best quality to smallest/lowest quality."
-        ),
-    )
-    parser.add_argument(
-        "--osb-flux-sdcpp-text-encoder-quant",
-        type=str,
-        choices=FLUX_SDCPP_TEXT_ENCODER_QUANTS,
-        default=None,
-        help=(
-            "Quantization level for the text encoder model via sd.cpp. "
-            "Ordered from largest/best quality to smallest/lowest quality. "
-            "(defaults: Q4_K_XL for Klein and Q4_K_M for Kontext)."
+            "Disable Flux CPU offload and keep the full SDNQ pipeline on the selected "
+            "device. Requires enough VRAM."
         ),
     )
     parser.add_argument(
@@ -678,7 +639,7 @@ def main():
         "--osb-flux-residual-threshold",
         type=float,
         default=0.15,
-        help="Residual diff threshold for Flux.1 Kontext via Nunchaku (0.0-1.0)",
+        help="Residual diff threshold for Flux.1 Kontext inference (0.0-1.0)",
     )
     parser.add_argument(
         "--osb-seed",
@@ -801,15 +762,6 @@ def main():
         ),
     )
     parser.add_argument(
-        "--osb-min-area-ignore-ratio",
-        type=float,
-        default=0.0,
-        help=(
-            "Skip OSB regions whose bounding-box area is below this ratio of the image "
-            "(0.0-0.05)"
-        ),
-    )
-    parser.add_argument(
         "--bubble-min-side-pixels",
         type=int,
         default=128,
@@ -839,30 +791,6 @@ def main():
     )
 
     args = parser.parse_args()
-
-    if args.osb_flux_backend == "nunchaku" and args.osb_inpainting_method in (
-        "flux_klein_9b",
-        "flux_klein_4b",
-    ):
-        parser.error(
-            "--osb-flux-backend nunchaku is only supported with "
-            "--osb-inpainting-method flux_kontext."
-        )
-    if args.osb_flux_backend == "sdcpp" and args.osb_flux_sdcpp_text_encoder_quant:
-        valid_text_encoder_quants = flux_sdcpp_text_encoder_quants(
-            args.osb_inpainting_method
-        )
-        if (
-            not valid_text_encoder_quants
-            or args.osb_flux_sdcpp_text_encoder_quant not in valid_text_encoder_quants
-        ):
-            parser.error(
-                "--osb-flux-sdcpp-text-encoder-quant "
-                f"{args.osb_flux_sdcpp_text_encoder_quant} is not available for "
-                f"{args.osb_inpainting_method}. "
-                "Valid text encoder quants: "
-                f"{', '.join(valid_text_encoder_quants) or 'none'}."
-            )
 
     import torch
 
@@ -934,11 +862,6 @@ def main():
         api_key_arg_name = "--moonshot-api-key"
         api_key_env_var = "MOONSHOT_API_KEY"
         default_model = "kimi-k2.6"
-    elif provider == "Xiaomi MiMo":
-        api_key = args.mimo_api_key or os.environ.get("MIMO_API_KEY")
-        api_key_arg_name = "--mimo-api-key"
-        api_key_env_var = "MIMO_API_KEY"
-        default_model = "mimo-v2.5"
     elif provider == "OpenRouter":
         api_key = args.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY")
         api_key_arg_name = "--openrouter-api-key"
@@ -1000,9 +923,6 @@ def main():
         cleaning_only=args.cleaning_only,
         upscaling_only=args.upscaling_only,
         parallel_requests=args.parallel_requests,
-        batch_parallel_within_pages=bool(
-            args.batch and args.batch_parallel_within_pages
-        ),
         detection=DetectionConfig(
             confidence=args.confidence,
             conjoined_confidence=args.conjoined_confidence,
@@ -1050,11 +970,6 @@ def main():
                 if provider == "Moonshot AI"
                 else os.environ.get("MOONSHOT_API_KEY", "")
             ),
-            mimo_api_key=(
-                api_key
-                if provider == "Xiaomi MiMo"
-                else os.environ.get("MIMO_API_KEY", "")
-            ),
             openrouter_api_key=(
                 api_key
                 if provider == "OpenRouter"
@@ -1077,7 +992,7 @@ def main():
             translation_mode=args.translation_mode,
             enable_web_search=args.enable_web_search,
             enable_code_execution=args.enable_code_execution,
-            use_custom_sampling=args.use_custom_sampling,
+            gemini_3_custom_sampling=args.gemini_3_custom_sampling,
             image_detail=args.image_detail,
             media_resolution=args.media_resolution,
             media_resolution_bubbles=args.media_resolution_bubbles,
@@ -1101,6 +1016,9 @@ def main():
             ),
             previous_context_text_count=(
                 args.batch_previous_context_texts if args.batch else 0
+            ),
+            previous_context_text_mode=(
+                args.batch_previous_context_text_mode if args.batch else "strict"
             ),
             osb_min_side_pixels=args.osb_min_side_pixels,
             special_instructions=args.special_instructions,
@@ -1135,14 +1053,11 @@ def main():
             enable_page_number_filtering=args.osb_filter_page_numbers,
             page_filter_margin_threshold=args.osb_page_filter_margin,
             page_filter_min_area_ratio=args.osb_page_filter_min_area,
-            min_area_ignore_ratio=args.osb_min_area_ignore_ratio,
             huggingface_token=args.osb_hf_token or os.environ.get("HF_TOKEN", ""),
             inpainting_method=args.osb_inpainting_method,
-            flux_backend=args.osb_flux_backend,
+            kontext_backend=args.osb_kontext_backend,
+            flux_cpu_offload=args.osb_flux_cpu_offload,
             flux_low_vram=args.osb_flux_low_vram,
-            flux_sdcpp_cache_mode=args.osb_flux_sdcpp_cache_mode,
-            flux_sdcpp_diffusion_quant=args.osb_flux_sdcpp_diffusion_quant,
-            flux_sdcpp_text_encoder_quant=args.osb_flux_sdcpp_text_encoder_quant or "",
             flux_num_inference_steps=args.osb_flux_steps,
             flux_luminance_correction=args.osb_flux_luminance_correction,
             flux_upscale_small_crops=args.osb_flux_upscale_small_crops,
@@ -1178,6 +1093,7 @@ def main():
     )
 
     clamp_settings(config)
+
     # --- Execute ---
     if args.batch:
         input_path = Path(args.input)
@@ -1192,7 +1108,7 @@ def main():
                 zip_temp_dir_obj = temp_dir_obj
 
                 with zipfile.ZipFile(input_path, "r") as zip_ref:
-                    safe_extract_zip(zip_ref, temp_dir_path)
+                    zip_ref.extractall(temp_dir_path)
 
                 log_message(
                     "Extracted ZIP archive to temporary directory",
@@ -1237,11 +1153,9 @@ def main():
                 exit(1)
 
         try:
-            results = batch_translate_images(
+            batch_translate_images(
                 input_path, config, output_dir, preserve_structure=preserve_structure
             )
-            if results.get("error_count", 0) > 0:
-                raise SystemExit(1)
         finally:
             if zip_temp_dir_obj:
                 try:
@@ -1264,23 +1178,10 @@ def main():
             exit(1)
 
         output_path_arg = args.output
-        original_ext = input_path.suffix.lower()
-        output_format = args.output_format
-        if output_format == "auto":
-            output_ext = (
-                original_ext
-                if original_ext in [".jpg", ".jpeg", ".png", ".webp"]
-                else ".png"
-            )
-        elif output_format == "png":
-            output_ext = ".png"
-        elif output_format == "jpeg":
-            output_ext = ".jpg"
-        else:
-            output_ext = ".png"
-
         if not output_path_arg:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
+            original_ext = input_path.suffix.lower()
+            output_ext = original_ext
             output_dir = Path("./output")
             output_dir.mkdir(parents=True, exist_ok=True)
             output_path = (
@@ -1292,8 +1193,6 @@ def main():
             )
         else:
             output_path = Path(output_path_arg)
-            if args.output_format != "auto" or not output_path.suffix:
-                output_path = output_path.with_suffix(output_ext)
             if not output_path.parent.exists():
                 log_message(
                     f"Creating directory for output file: {output_path.parent}",
@@ -1310,7 +1209,6 @@ def main():
             )
         except Exception as e:
             log_message(f"Error processing {input_path}: {e}", always_print=True)
-            raise SystemExit(1) from e
 
 
 if __name__ == "__main__":

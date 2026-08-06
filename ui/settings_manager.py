@@ -4,7 +4,9 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List
 
+from core.config import DEFAULT_FLUX_KLEIN_PROMPT, DEFAULT_FLUX_KONTEXT_PROMPT
 from core.llm_defaults import DEFAULT_LLM_PROVIDER, get_provider_sampling_defaults
+from core.tag_styles import normalize_tag_style_table
 from core.validation import clamp_settings
 from utils.logging import log_message
 
@@ -17,12 +19,14 @@ CONFIG_FILE = (
 PROVIDER_MODELS: Dict[str, List[str]] = {
     "Google": [
         "gemini-3.5-flash",
-        "gemini-3.1-flash-lite",
         "gemini-3.1-pro-preview",
+        "gemini-3.1-flash-lite",
         "gemini-3-flash-preview",
         "gemini-2.5-pro",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
         "gemma-4-31b-it",
         "gemma-4-26b-a4b-it",
     ],
@@ -31,32 +35,42 @@ PROVIDER_MODELS: Dict[str, List[str]] = {
         "gpt-5.4-2026-03-05",
         "gpt-5.4-mini-2026-03-17",
         "gpt-5.4-nano-2026-03-17",
+        "gpt-5.3-chat-latest",
         "gpt-5.2-2025-12-11",
+        "gpt-5.2-chat-latest",
         "gpt-5.1-2025-11-13",
+        "gpt-5.1-chat-latest",
         "gpt-5-2025-08-07",
         "gpt-5-mini-2025-08-07",
         "gpt-5-nano-2025-08-07",
-        "o3-2025-04-16",
+        "gpt-5-chat-latest",
         "gpt-4.1-2025-04-14",
         "gpt-4.1-mini-2025-04-14",
+        "gpt-4.1-nano-2025-04-14",
         "gpt-4o-2024-11-20",
         "gpt-4o-2024-08-06",
+        "gpt-4o-2024-05-13",
         "gpt-4o-mini-2024-07-18",
+        "o4-mini-2025-04-16",
+        "o3-2025-04-16",
+        "o1-2024-12-17",
         "gpt-5.5-pro-2026-04-23",
         "gpt-5.4-pro-2026-03-05",
         "gpt-5.2-pro-2025-12-11",
         "gpt-5-pro-2025-10-06",
         "o3-pro-2025-06-10",
+        "o1-pro-2025-03-19",
     ],
     "Anthropic": [
-        "claude-fable-5",
-        "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-opus-4-6",
         "claude-sonnet-4-6",
         "claude-opus-4-5-20251101",
         "claude-sonnet-4-5-20250929",
         "claude-haiku-4-5-20251001",
+        "claude-opus-4-1-20250805",
+        "claude-opus-4-20250514",
+        "claude-sonnet-4-20250514",
     ],
     "xAI": [
         "grok-4.3",
@@ -83,10 +97,6 @@ PROVIDER_MODELS: Dict[str, List[str]] = {
         "kimi-k2.6",
         "kimi-k2.5",
     ],
-    "Xiaomi MiMo": [
-        "mimo-v2.5-pro",
-        "mimo-v2.5",
-    ],
     "OpenRouter": [],
     "OpenAI-Compatible": [],
 }
@@ -97,13 +107,22 @@ DEFAULT_PROVIDER_SAMPLING = get_provider_sampling_defaults(DEFAULT_PROVIDER)
 DEFAULT_SETTINGS = {
     "provider": DEFAULT_PROVIDER,
     "google_api_key": "",
+    "google_rate_limit_enabled": False,
+    "google_request_interval_seconds": 0.0,
+    "google_requests_per_minute": 0,
+    "google_burst_requests": 0,
+    "google_burst_cooldown_seconds": 60.0,
+    "google_429_cooldown_seconds": 60.0,
+    "google_max_retries": 3,
+    "google_429_hourly_limit": 0,
+    "google_429_hourly_action": "stop",
+    "google_429_pause_minutes": 5.0,
     "openai_api_key": "",
     "anthropic_api_key": "",
     "xai_api_key": "",
     "deepseek_api_key": "",
     "zai_api_key": "",
     "moonshot_api_key": "",
-    "mimo_api_key": "",
     "openrouter_api_key": "",
     "openai_compatible_url": "http://localhost:8080/v1",
     "openai_compatible_api_key": "",
@@ -128,11 +147,6 @@ DEFAULT_SETTINGS = {
             if PROVIDER_MODELS["Moonshot AI"]
             else None
         ),
-        "Xiaomi MiMo": (
-            PROVIDER_MODELS["Xiaomi MiMo"][0]
-            if PROVIDER_MODELS["Xiaomi MiMo"]
-            else None
-        ),
         "OpenRouter": None,
         "OpenAI-Compatible": None,
     },
@@ -153,13 +167,26 @@ DEFAULT_SETTINGS = {
     "thresholding_value": 200,
     "roi_shrink_px": 5,
     "inpaint_colored_bubbles": False,
+    "colored_bubble_inpainting_size": 2048,
+    "colored_bubble_inpainting_precision": "fp32",
+    "colored_bubble_mask_kernel_size": 3,
+    "colored_bubble_mask_dilation_offset": 50,
     "temperature": DEFAULT_PROVIDER_SAMPLING["temperature"],
     "top_p": DEFAULT_PROVIDER_SAMPLING["top_p"],
     "top_k": DEFAULT_PROVIDER_SAMPLING["top_k"],
     "max_tokens": 4096,
+    "emphasis_font_pack": "",
     "max_font_size": 16,
+    "emphasis_max_font_size": 16,
     "min_font_size": 8,
     "line_spacing_mult": 1.0,
+    "emphasis_line_spacing_mult": 1.0,
+    "vertical_line_spacing_mult": 1.0,
+    "vertical_emphasis_line_spacing_mult": 1.0,
+    "vertical_font_size_mult": 1.0,
+    "vertical_max_chars": 4,
+    "vertical_emphasis_max_chars": 4,
+    "tag_styles": normalize_tag_style_table(None),
     "use_subpixel_rendering": True,
     "font_hinting": "none",
     "use_ligatures": False,
@@ -168,14 +195,33 @@ DEFAULT_SETTINGS = {
     "hyphenation_min_word_length": 8,
     "badness_exponent": 3.0,
     "padding_pixels": 5.0,
+    "padding_horizontal_pixels": 5.0,
+    "padding_vertical_pixels": 5.0,
     "supersampling_factor": 4,
     "detach_trailing_punctuation": True,
     "auto_vertical_text": False,
+    "inside_light_text_color": "#000000",
+    "inside_light_outline_color": "#ffffff",
+    "inside_light_outline_width": 0.0,
+    "inside_dark_text_color": "#ffffff",
+    "inside_dark_outline_color": "#000000",
+    "inside_dark_outline_width": 0.0,
+    "outside_light_text_color": "#000000",
+    "outside_light_outline_color": "#ffffff",
+    "outside_light_outline_width": 3.0,
+    "outside_dark_text_color": "#ffffff",
+    "outside_dark_outline_color": "#000000",
+    "outside_dark_outline_width": 3.0,
     "font_pack": None,
     "verbose": False,
     "jpeg_quality": 95,
     "png_compression": 2,
+    "output_directory": "output",
+    "image_editor_source_path": "",
+    "disable_auto_save": False,
     "output_format": "png",
+    "embed_editor_package": True,
+    "save_plain_image_copy": False,
     "image_upscale_mode": "off",
     "image_upscale_factor": 2.0,
     "image_upscale_model": "model_lite",
@@ -183,17 +229,17 @@ DEFAULT_SETTINGS = {
     "upscaling_only": False,
     "test_mode": False,
     "reasoning_effort": None,  # Default: Google uses "auto", Anthropic uses "none", others use "medium"
-    "effort": "medium",  # Opus 4.5+, Sonnet 4.6 only: token spending eagerness (xhigh/high/medium/low)
+    "effort": "medium",  # Opus 4.5/4.6/4.7, Sonnet 4.6 only: token spending eagerness (xhigh/high/medium/low)
     "verbosity": "low",  # GPT-5 series only: controls response verbosity (high/medium/low)
     "enable_web_search": False,  # Enable model's built-in web search for up-to-date information.
     "enable_code_execution": False,  # Enable Gemini's code execution for image zoom/inspection.
-    "use_custom_sampling": True,
     "image_detail": "auto",  # OpenAI image detail (auto/high/low/original)
     "media_resolution": "auto",  # Only available via Google provider (auto/high/medium/low)
     "media_resolution_bubbles": "auto",  # Gemini 3 models
     "media_resolution_context": "auto",  # Gemini 3 models
     "auto_scale": True,
     "send_full_page_context": True,
+    "parallel_inpaint_translation": False,
     "whiteout_conjoined_bubbles": True,
     "special_instructions": "",
     "upscale_method": "model_lite",  # "model", "model_lite", "lanczos", or "none"
@@ -205,32 +251,43 @@ DEFAULT_SETTINGS = {
     "outside_text_seed": 1,
     "outside_text_huggingface_token": "",
     "outside_text_inpainting_method": "flux_klein_4b",
-    "outside_text_flux_backend": "sdnq",
+    "outside_text_kontext_backend": "sdnq",
+    "outside_text_flux_offload_mode": "model",
+    "outside_text_flux_cpu_offload": True,
     "outside_text_flux_low_vram": False,
-    "outside_text_flux_sdcpp_cache_mode": "none",
-    "outside_text_flux_sdcpp_diffusion_quant": "Q4_K_M",
-    "outside_text_flux_sdcpp_text_encoder_quant": "Q4_K_XL",
     "outside_text_flux_num_inference_steps": 8,
+    "outside_text_flux_kontext_prompt": DEFAULT_FLUX_KONTEXT_PROMPT,
+    "outside_text_flux_klein_prompt": DEFAULT_FLUX_KLEIN_PROMPT,
     "outside_text_flux_luminance_correction": True,
     "outside_text_flux_upscale_small_crops": True,
     "outside_text_flux_group_regions": False,
     "outside_text_flux_residual_diff_threshold": 0.15,
+    "outside_text_osb_residual_render_guard_action": "restore_original",
     "outside_text_osb_confidence": 0.6,
     "outside_text_enable_page_number_filtering": False,
     "outside_text_page_filter_margin_threshold": 0.1,
     "outside_text_page_filter_min_area_ratio": 0.05,
-    "outside_text_min_area_ignore_ratio": 0.0,
     "outside_text_bbox_expansion_percent": 0.1,
     "outside_text_osb_render_expansion_narrow_multiplier": 1.0,
     "outside_text_osb_render_expansion_tiny_multiplier": 1.0,
     "outside_text_osb_render_expansion_aspect_ratio_threshold": 0.4,
     "outside_text_osb_render_expansion_area_ratio_threshold": 0.005,
     "outside_text_osb_font_pack": "",
+    "outside_text_osb_emphasis_font_pack": "",
     "outside_text_osb_max_font_size": 64,
+    "outside_text_osb_emphasis_max_font_size": 64,
     "outside_text_osb_min_font_size": 10,
     "outside_text_osb_use_ligatures": False,
     "outside_text_osb_outline_width": 3.0,
+    "outside_text_osb_padding_pixels": 1.0,
     "outside_text_osb_line_spacing": 1.0,
+    "outside_text_osb_vertical_line_spacing": 1.0,
+    "outside_text_osb_auto_vertical": True,
+    "outside_text_osb_vertical_aspect_ratio": 1.45,
+    "outside_text_osb_vertical_max_chars": 30,
+    "outside_text_osb_tall_box_expand_aspect_ratio": 2.0,
+    "outside_text_osb_tall_box_expand_width_percent": 20.0,
+    "outside_text_osb_rotation_max_degrees": 15.0,
     "outside_text_osb_use_subpixel_rendering": True,
     "outside_text_osb_font_hinting": "none",
     "outside_text_text_box_proximity_ratio": 0.02,
@@ -242,9 +299,10 @@ DEFAULT_BATCH_SETTINGS = {
     "batch_font_pack": None,
     "batch_special_instructions": "",
     "batch_parallel_requests": 1,
-    "batch_parallel_within_pages": False,
+    "batch_retry_failed_once": False,
     "batch_previous_context_image_count": 0,
     "batch_previous_context_text_count": 3,
+    "batch_previous_context_text_mode": "strict",
 }
 
 
@@ -262,13 +320,22 @@ CANONICAL_CONFIG_KEY_ORDER: List[str] = [
     "provider",
     "model_name",
     "google_api_key",
+    "google_rate_limit_enabled",
+    "google_request_interval_seconds",
+    "google_requests_per_minute",
+    "google_burst_requests",
+    "google_burst_cooldown_seconds",
+    "google_429_cooldown_seconds",
+    "google_max_retries",
+    "google_429_hourly_limit",
+    "google_429_hourly_action",
+    "google_429_pause_minutes",
     "openai_api_key",
     "anthropic_api_key",
     "xai_api_key",
     "deepseek_api_key",
     "zai_api_key",
     "moonshot_api_key",
-    "mimo_api_key",
     "openrouter_api_key",
     "openai_compatible_url",
     "openai_compatible_api_key",
@@ -282,20 +349,28 @@ CANONICAL_CONFIG_KEY_ORDER: List[str] = [
     "top_k",
     "max_tokens",
     "send_full_page_context",
+    "parallel_inpaint_translation",
     "whiteout_conjoined_bubbles",
     "reasoning_effort",
     "effort",
     "verbosity",
     "enable_web_search",
-    "use_custom_sampling",
     "image_detail",
     "special_instructions",
     "batch_special_instructions",
     # Rendering
     "font_pack",
+    "emphasis_font_pack",
     "max_font_size",
+    "emphasis_max_font_size",
     "min_font_size",
     "line_spacing_mult",
+    "emphasis_line_spacing_mult",
+    "vertical_line_spacing_mult",
+    "vertical_emphasis_line_spacing_mult",
+    "vertical_font_size_mult",
+    "vertical_max_chars",
+    "vertical_emphasis_max_chars",
     "use_subpixel_rendering",
     "font_hinting",
     "use_ligatures",
@@ -303,9 +378,23 @@ CANONICAL_CONFIG_KEY_ORDER: List[str] = [
     "hyphen_penalty",
     "hyphenation_min_word_length",
     "badness_exponent",
+    "padding_horizontal_pixels",
+    "padding_vertical_pixels",
     "supersampling_factor",
     "detach_trailing_punctuation",
     "auto_vertical_text",
+    "inside_light_text_color",
+    "inside_light_outline_color",
+    "inside_light_outline_width",
+    "inside_dark_text_color",
+    "inside_dark_outline_color",
+    "inside_dark_outline_width",
+    "outside_light_text_color",
+    "outside_light_outline_color",
+    "outside_light_outline_width",
+    "outside_dark_text_color",
+    "outside_dark_outline_color",
+    "outside_dark_outline_width",
     # Models / Detection
     "confidence",
     "conjoined_confidence",
@@ -320,26 +409,31 @@ CANONICAL_CONFIG_KEY_ORDER: List[str] = [
     "use_otsu_threshold",
     "roi_shrink_px",
     "inpaint_colored_bubbles",
+    "colored_bubble_inpainting_size",
+    "colored_bubble_inpainting_precision",
+    "colored_bubble_mask_kernel_size",
+    "colored_bubble_mask_dilation_offset",
     # Outside Text Removal
     "outside_text_enabled",
     "outside_text_seed",
     "outside_text_huggingface_token",
     "outside_text_inpainting_method",
-    "outside_text_flux_backend",
+    "outside_text_kontext_backend",
+    "outside_text_flux_offload_mode",
+    "outside_text_flux_cpu_offload",
     "outside_text_flux_low_vram",
-    "outside_text_flux_sdcpp_cache_mode",
-    "outside_text_flux_sdcpp_diffusion_quant",
-    "outside_text_flux_sdcpp_text_encoder_quant",
     "outside_text_flux_num_inference_steps",
+    "outside_text_flux_kontext_prompt",
+    "outside_text_flux_klein_prompt",
     "outside_text_flux_luminance_correction",
     "outside_text_flux_upscale_small_crops",
     "outside_text_flux_group_regions",
     "outside_text_flux_residual_diff_threshold",
+    "outside_text_osb_residual_render_guard_action",
     "outside_text_osb_confidence",
     "outside_text_enable_page_number_filtering",
     "outside_text_page_filter_margin_threshold",
     "outside_text_page_filter_min_area_ratio",
-    "outside_text_min_area_ignore_ratio",
     "outside_text_bbox_expansion_percent",
     "outside_text_osb_render_expansion_narrow_multiplier",
     "outside_text_osb_render_expansion_tiny_multiplier",
@@ -347,15 +441,30 @@ CANONICAL_CONFIG_KEY_ORDER: List[str] = [
     "outside_text_osb_render_expansion_area_ratio_threshold",
     "outside_text_text_box_proximity_ratio",
     "outside_text_osb_font_pack",
+    "outside_text_osb_emphasis_font_pack",
     "outside_text_osb_max_font_size",
+    "outside_text_osb_emphasis_max_font_size",
     "outside_text_osb_min_font_size",
     "outside_text_osb_use_ligatures",
     "outside_text_osb_outline_width",
+    "outside_text_osb_padding_pixels",
     "outside_text_osb_line_spacing",
+    "outside_text_osb_vertical_line_spacing",
+    "outside_text_osb_auto_vertical",
+    "outside_text_osb_vertical_aspect_ratio",
+    "outside_text_osb_vertical_max_chars",
+    "outside_text_osb_tall_box_expand_aspect_ratio",
+    "outside_text_osb_tall_box_expand_width_percent",
+    "outside_text_osb_rotation_max_degrees",
     "outside_text_osb_use_subpixel_rendering",
     "outside_text_osb_font_hinting",
     # Output
+    "output_directory",
+    "image_editor_source_path",
+    "disable_auto_save",
     "output_format",
+    "embed_editor_package",
+    "save_plain_image_copy",
     "jpeg_quality",
     "png_compression",
     "image_upscale_mode",
@@ -371,9 +480,10 @@ CANONICAL_CONFIG_KEY_ORDER: List[str] = [
     "batch_output_language",
     "batch_font_pack",
     "batch_parallel_requests",
-    "batch_parallel_within_pages",
+    "batch_retry_failed_once",
     "batch_previous_context_image_count",
     "batch_previous_context_text_count",
+    "batch_previous_context_text_mode",
 ]
 
 
@@ -531,6 +641,28 @@ def get_saved_settings() -> Dict[str, Any]:
                     except Exception:
                         pass
                     settings["provider_models"] = pm
+
+                # 4) Flux memory mode: derive the new three-state setting from
+                # the legacy CPU-offload booleans when needed.
+                if "outside_text_flux_offload_mode" not in saved_config:
+                    if not saved_config.get("outside_text_flux_cpu_offload", True):
+                        settings["outside_text_flux_offload_mode"] = "device"
+                    elif saved_config.get("outside_text_flux_low_vram", False):
+                        settings["outside_text_flux_offload_mode"] = "sequential"
+                    else:
+                        settings["outside_text_flux_offload_mode"] = "model"
+
+                # 5) Rendering padding: older configs had one inside-bubble
+                # padding value. When the split values are missing, keep that
+                # legacy value for both axes instead of silently reverting to 5px.
+                if "padding_pixels" in saved_config:
+                    legacy_padding_pixels = saved_config.get(
+                        "padding_pixels", DEFAULT_SETTINGS.get("padding_pixels", 5.0)
+                    )
+                    if "padding_horizontal_pixels" not in saved_config:
+                        settings["padding_horizontal_pixels"] = legacy_padding_pixels
+                    if "padding_vertical_pixels" not in saved_config:
+                        settings["padding_vertical_pixels"] = legacy_padding_pixels
             except Exception:
                 pass
 
@@ -625,7 +757,6 @@ def reset_to_defaults() -> Dict[str, Any]:
             "deepseek_api_key",
             "zai_api_key",
             "moonshot_api_key",
-            "mimo_api_key",
             "openrouter_api_key",
             "openai_compatible_api_key",
             "outside_text_huggingface_token",
@@ -637,11 +768,19 @@ def reset_to_defaults() -> Dict[str, Any]:
         # Preserve font pack selections if they exist
         if "font_pack" in current_saved:
             settings["font_pack"] = current_saved["font_pack"]
+        if "emphasis_font_pack" in current_saved:
+            settings["emphasis_font_pack"] = current_saved["emphasis_font_pack"]
+        if "tag_styles" in current_saved:
+            settings["tag_styles"] = current_saved["tag_styles"]
         if "batch_font_pack" in current_saved:
             settings["batch_font_pack"] = current_saved["batch_font_pack"]
         if "outside_text_osb_font_pack" in current_saved:
             settings["outside_text_osb_font_pack"] = current_saved[
                 "outside_text_osb_font_pack"
+            ]
+        if "outside_text_osb_emphasis_font_pack" in current_saved:
+            settings["outside_text_osb_emphasis_font_pack"] = current_saved[
+                "outside_text_osb_emphasis_font_pack"
             ]
 
         # Preserve provider and model selection if they exist

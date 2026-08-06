@@ -1,5 +1,6 @@
 import math
-from typing import Dict, Optional, Tuple
+import secrets
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -8,15 +9,10 @@ from PIL import Image
 from scipy.ndimage import distance_transform_edt
 
 from core.caching import get_cache
+from core.config import DEFAULT_FLUX_KLEIN_PROMPT, DEFAULT_FLUX_KONTEXT_PROMPT
 from core.device import empty_cache, get_best_device, get_best_dtype
 from core.ml.model_manager import get_model_manager
-from core.ml.sdcpp_server import pil_to_base64_png, run_image_job
-from utils.exceptions import ModelError
 from utils.logging import log_message
-from utils.model_metadata import (
-    flux_sdcpp_quant_default,
-    flux_sdcpp_text_encoder_default,
-)
 
 # Blur Parameters
 BLUR_SCALE_FACTOR = (
@@ -85,6 +81,16 @@ def _flux_prompt_kwargs(
     return kwargs
 
 
+def _resolve_flux_seed(seed: int) -> tuple[int, bool]:
+    try:
+        seed_int = int(seed)
+    except (TypeError, ValueError):
+        seed_int = 1
+    if seed_int < 0:
+        return secrets.randbelow(2**63), True
+    return seed_int % (2**63), False
+
+
 class FluxKontextInpainter:
     """Inpainter using Flux Kontext models for text removal."""
 
@@ -95,10 +101,9 @@ class FluxKontextInpainter:
         num_inference_steps: int = 8,
         residual_diff_threshold: float = 0.15,
         backend: str = "nunchaku",
+        cpu_offload: bool = True,
         low_vram: bool = False,
-        sdcpp_cache_mode: str = "none",
-        sdcpp_diffusion_quant: str = "",
-        sdcpp_text_encoder_quant: str = "",
+        prompt: str = DEFAULT_FLUX_KONTEXT_PROMPT,
     ):
         """Initialize the Flux Kontext Inpaint class.
 
@@ -107,31 +112,19 @@ class FluxKontextInpainter:
             huggingface_token: HuggingFace token for model downloads (Nunchaku only).
             num_inference_steps: Number of denoising steps for inference.
             residual_diff_threshold: Residual diff threshold for Flux caching (Nunchaku only).
-            backend: "nunchaku" (CUDA + Nunchaku + HF token), "sdnq", or "sdcpp".
-            low_vram: If True, use sequential CPU offload for SDNQ.
-            sdcpp_cache_mode: sd.cpp cache mode to use when backend is "sdcpp".
-            sdcpp_diffusion_quant: Flux sd.cpp diffusion model quant.
-            sdcpp_text_encoder_quant: Flux sd.cpp T5 text encoder quant.
+            backend: 'nunchaku' (CUDA + Nunchaku + HF token) or 'sdnq' (cross-platform).
+            cpu_offload: If True, keep model weights in system RAM when supported.
+            low_vram: If True, request the lowest-VRAM offload mode.
+            prompt: Text instruction used for Flux Kontext inpainting.
         """
         self.DEVICE = device if device is not None else get_best_device()
         self.DTYPE = get_best_dtype(self.DEVICE)
         self.huggingface_token = huggingface_token
         self.num_inference_steps = num_inference_steps
         self.residual_diff_threshold = residual_diff_threshold
-        self.backend = backend.lower()
-        if self.backend not in ("nunchaku", "sdnq", "sdcpp"):
-            raise ValueError(
-                f"Invalid Kontext backend '{backend}'. "
-                "Must be 'nunchaku', 'sdnq', or 'sdcpp'."
-            )
+        self.backend = backend
+        self.cpu_offload = cpu_offload
         self.low_vram = low_vram
-        self.sdcpp_cache_mode = sdcpp_cache_mode
-        self.sdcpp_diffusion_quant = sdcpp_diffusion_quant or flux_sdcpp_quant_default(
-            "flux_kontext", "diffusion_model"
-        )
-        self.sdcpp_text_encoder_quant = (
-            sdcpp_text_encoder_quant or flux_sdcpp_text_encoder_default("flux_kontext")
-        )
         self.manager = get_model_manager()
         self.cache = get_cache()
 
@@ -159,13 +152,12 @@ class FluxKontextInpainter:
         self.pipeline = None
         self.transformer = None
         self.text_encoder_2 = None
-        self.sdcpp_assets = None
         self._prompt_embeds_cpu = None
         self._pooled_prompt_embeds_cpu = None
 
         # Fixed parameters optimized for text removal
         self.guidance_scale = FLUX_GUIDANCE_SCALE
-        self.prompt = "Remove all text."
+        self.prompt = (prompt or "").strip() or DEFAULT_FLUX_KONTEXT_PROMPT
         self.context_padding_ratio = CONTEXT_PADDING_RATIO
         self.max_context_padding = MAX_CONTEXT_PADDING
 
@@ -174,36 +166,29 @@ class FluxKontextInpainter:
         if self.pipeline is not None:
             return
 
-        if self.huggingface_token:
-            self.manager.set_flux_hf_token(self.huggingface_token)
-
         if self.backend == "sdnq":
             # SDNQ: cross-platform, no token required
             self.pipeline = self.manager.load_flux_kontext_sdnq(
+                cpu_offload=self.cpu_offload,
                 low_vram=self.low_vram,
                 verbose=True,
             )
-            # SDNQ uses CPU offload, no separate transformer/text_encoder management
-            self.transformer = None
-            self.text_encoder_2 = None
-        elif self.backend == "sdcpp":
-            self.sdcpp_assets = self.manager.ensure_flux_sdcpp_server(
-                "flux_kontext",
-                cache_mode=self.sdcpp_cache_mode,
-                diffusion_quant=self.sdcpp_diffusion_quant,
-                text_encoder_quant=self.sdcpp_text_encoder_quant,
-                num_inference_steps=self.num_inference_steps,
-                verbose=True,
-            )
-            self.pipeline = self.sdcpp_assets
+            # SDNQ owns its transformer/text encoder through the pipeline.
             self.transformer = None
             self.text_encoder_2 = None
         else:
             # Nunchaku: CUDA-only, requires token
+            if self.huggingface_token:
+                self.manager.set_flux_hf_token(self.huggingface_token)
+
             self.manager.set_flux_residual_diff_threshold(self.residual_diff_threshold)
 
             self.transformer, self.text_encoder_2, self.pipeline = (
-                self.manager.load_flux_models()
+                self.manager.load_flux_models(
+                    cpu_offload=self.cpu_offload,
+                    low_vram=self.low_vram,
+                    verbose=True,
+                )
             )
 
     def unload_models(self):
@@ -211,16 +196,13 @@ class FluxKontextInpainter:
         self.pipeline = None
         self.transformer = None
         self.text_encoder_2 = None
-        self.sdcpp_assets = None
         self._prompt_embeds_cpu = None
         self._pooled_prompt_embeds_cpu = None
 
         if self.backend == "sdnq":
             self.manager.unload_flux_kontext_sdnq_models()
-        elif self.backend == "nunchaku":
+        else:
             self.manager.unload_flux_kontext_models()
-        elif self.backend == "sdcpp":
-            self.manager.shutdown_sdcpp_server("flux_kontext")
 
     def _get_prompt_embeddings(self, device: torch.device, verbose: bool = False):
         if self._prompt_embeds_cpu is None:
@@ -236,41 +218,6 @@ class FluxKontextInpainter:
         return (
             _prompt_value_to_device(self._prompt_embeds_cpu, device),
             _prompt_value_to_device(self._pooled_prompt_embeds_cpu, device),
-        )
-
-    def _run_sdcpp_inference(
-        self,
-        image_pil: Image.Image,
-        width: int,
-        height: int,
-        seed: int,
-        verbose: bool = False,
-    ) -> Image.Image:
-        if self.sdcpp_assets is None:
-            raise ModelError("Flux.1 Kontext sd.cpp server is not loaded.")
-
-        payload = {
-            "prompt": self.prompt,
-            "negative_prompt": "",
-            "width": int(width),
-            "height": int(height),
-            "seed": int(seed),
-            "batch_count": 1,
-            "ref_images": [pil_to_base64_png(image_pil)],
-            "sample_params": {
-                "sample_method": "euler",
-                "sample_steps": int(self.num_inference_steps),
-                "guidance": {
-                    "txt_cfg": 1.0,
-                    "img_cfg": 1.0,
-                    "distilled_guidance": float(self.guidance_scale),
-                },
-            },
-            "output_format": "png",
-            "output_compression": 100,
-        }
-        return run_image_job(
-            self.sdcpp_assets, payload, verbose=verbose, timeout_sec=900
         )
 
     def convert_mask_to_tensor(self, mask_np):
@@ -666,6 +613,14 @@ class FluxKontextInpainter:
         if not np.any(mask_np):
             return image_pil
 
+        generator_seed, random_seed_requested = _resolve_flux_seed(seed)
+        cache_seed = -1 if random_seed_requested else generator_seed
+        if random_seed_requested:
+            log_message(
+                f"  - Random Flux seed selected: {generator_seed}",
+                verbose=verbose,
+            )
+
         log_message(
             "  - Computing optimized mask bounding box with blur and aspect ratio...",
             verbose=verbose,
@@ -782,12 +737,7 @@ class FluxKontextInpainter:
             "bbox": (x, y, width, height),
             "padding": padding,
             "blur": blur_radius,
-            "backend": self.backend,
         }
-        if self.backend == "sdcpp":
-            cache_params["sdcpp_cache"] = self.sdcpp_cache_mode
-            cache_params["sdcpp_diffusion_quant"] = self.sdcpp_diffusion_quant
-            cache_params["sdcpp_text_encoder_quant"] = self.sdcpp_text_encoder_quant
         if strict_mask_clipping:
             cache_params["strict_clip"] = True
         if composite_clip_bbox is not None:
@@ -797,7 +747,7 @@ class FluxKontextInpainter:
 
         cache_key = None
         cached_patch = None
-        if self.cache.should_use_inpaint_cache(seed):
+        if self.cache.should_use_inpaint_cache(cache_seed):
             # Downsample mask signature to reduce sensitivity to minor jitter
             if mask_crop_np.size > 0:
                 sig_h = min(64, max(4, mask_crop_np.shape[0]))
@@ -817,7 +767,7 @@ class FluxKontextInpainter:
             cache_key = self.cache.get_inpaint_cache_key(
                 image_cropped_pil,
                 mask_sig_np,
-                seed,
+                cache_seed,
                 self.num_inference_steps,
                 self.residual_diff_threshold,
                 self.guidance_scale,
@@ -831,6 +781,15 @@ class FluxKontextInpainter:
         patch_pil = cached_patch
 
         if patch_pil is None:
+            self.load_models()
+
+            if self.pipeline is None:
+                log_message(
+                    "Warning: Flux Kontext pipeline not available. Skipping inpainting.",
+                    always_print=True,
+                )
+                return image_pil
+
             image_scaled_for_inference_pil = self.flux_kontext_image_scale(
                 image_cropped_pil
             )
@@ -847,27 +806,12 @@ class FluxKontextInpainter:
 
             # CPU offload moves weights between devices; serialize access across threads
             with self.manager.flux_inference_lock:
-                self.load_models()
-
-                if self.pipeline is None:
-                    log_message(
-                        "Warning: Flux Kontext pipeline not available. Skipping inpainting.",
-                        always_print=True,
-                    )
-                    return image_pil
-
-                if self.backend == "sdcpp":
-                    generated_patch_pil = self._run_sdcpp_inference(
-                        image_scaled_for_inference_pil,
-                        inference_width,
-                        inference_height,
-                        seed,
-                        verbose=verbose,
-                    )
-                elif self.backend == "sdnq":
+                if self.backend == "sdnq":
                     with torch.inference_mode():
                         gen_device = "cpu" if self.low_vram else self.DEVICE
-                        gen = torch.Generator(device=gen_device).manual_seed(seed)
+                        gen = torch.Generator(device=gen_device).manual_seed(
+                            generator_seed
+                        )
                         prompt_device = _pipeline_execution_device(
                             self.pipeline, self.DEVICE
                         )
@@ -899,6 +843,7 @@ class FluxKontextInpainter:
                             )
                         )
                 else:
+                    nunchaku_cpu_offload = self.cpu_offload
                     should_encode_prompt = self._prompt_embeds_cpu is None
                     if should_encode_prompt:
                         self.pipeline.text_encoder_2.to(self.DEVICE)
@@ -907,14 +852,16 @@ class FluxKontextInpainter:
                         self.DEVICE, verbose=verbose
                     )
 
-                    if should_encode_prompt:
+                    if should_encode_prompt and nunchaku_cpu_offload:
                         self.pipeline.text_encoder_2.to("cpu")
                         empty_cache(self.DEVICE)
 
                     self.pipeline.transformer.to(self.DEVICE)
 
                     with torch.inference_mode():
-                        gen = torch.Generator(device=self.DEVICE).manual_seed(seed)
+                        gen = torch.Generator(device=self.DEVICE).manual_seed(
+                            generator_seed
+                        )
                         out = self.pipeline(
                             **_flux_prompt_kwargs(prompt_embeds, pooled_prompt_embeds),
                             image=image_scaled_for_inference_pil,
@@ -940,8 +887,9 @@ class FluxKontextInpainter:
                             )
                         )
 
-                    self.pipeline.transformer.to("cpu")
-                    empty_cache(self.DEVICE)
+                    if nunchaku_cpu_offload:
+                        self.pipeline.transformer.to("cpu")
+                        empty_cache(self.DEVICE)
 
             patch_pil = generated_patch_pil.resize(
                 (width, height), Image.Resampling.LANCZOS
@@ -968,7 +916,7 @@ class FluxKontextInpainter:
         )
 
         if (
-            self.cache.should_use_inpaint_cache(seed)
+            self.cache.should_use_inpaint_cache(cache_seed)
             and cache_key is not None
             and cached_patch is None
         ):
@@ -988,12 +936,7 @@ class FluxKleinInpainter:
     KLEIN_MAX_STEPS = 12  # Max steps for Klein models
     KLEIN_DEFAULT_STEPS = 4  # Recommended default
     KLEIN_GUIDANCE_SCALE = 1.0  # Fixed CFG for Klein
-    KLEIN_PROMPT = (
-        "Remove all text. Preserve all character line art, screentones, panel borders, "
-        "and background details exactly as they appear. Maintain the original "
-        "contrast and shading, ensuring character expressions and environmental textures "
-        "remain unchanged while leaving the text areas completely blank."
-    )
+    KLEIN_PROMPT = DEFAULT_FLUX_KLEIN_PROMPT
 
     # Resolution constraints: 64x64 to 2048x2048, multiple of 16
     MIN_RESOLUTION = 64
@@ -1008,14 +951,12 @@ class FluxKleinInpainter:
         device: Optional[torch.device] = None,
         huggingface_token: str = "",
         num_inference_steps: int = 4,
+        cpu_offload: bool = True,
         low_vram: bool = False,
         luminance_correction: bool = True,
         upscale_small_crops: bool = True,
-        backend: str = "sdnq",
-        sdcpp_cache_mode: str = "none",
-        sdcpp_diffusion_quant: str = "",
-        sdcpp_text_encoder_quant: str = "",
         verbose: bool = False,
+        prompt: str = DEFAULT_FLUX_KLEIN_PROMPT,
     ):
         """Initialize the Flux Klein Inpainter.
 
@@ -1024,38 +965,24 @@ class FluxKleinInpainter:
             device: PyTorch device to use. Auto-detects if None.
             huggingface_token: HuggingFace token (required for 9B gated repo).
             num_inference_steps: Number of denoising steps (1-12, default: 4).
-            low_vram: If True, use sequential CPU offload for SDNQ.
+            cpu_offload: If True, keep most model weights in system RAM.
+            low_vram: If True, use sequential CPU offload (slower but lower VRAM).
             luminance_correction: If True, match patch luminance to surrounding context.
             upscale_small_crops: If True, scale small crops to ~1MP before inference.
-            backend: "sdnq" for Diffusers/SDNQ or "sdcpp" for stable-diffusion.cpp.
-            sdcpp_cache_mode: sd.cpp cache mode to use when backend is "sdcpp".
-            sdcpp_diffusion_quant: Flux sd.cpp diffusion model quant.
-            sdcpp_text_encoder_quant: Flux sd.cpp Qwen text encoder quant.
             verbose: Whether to print verbose logging.
+            prompt: Text instruction used for Flux Klein inpainting.
         """
         self.variant = variant.lower()
         if self.variant not in ("9b", "4b"):
             raise ValueError(f"Invalid variant '{variant}'. Must be '9b' or '4b'.")
 
-        self.backend = backend.lower()
-        if self.backend not in ("sdnq", "sdcpp"):
-            raise ValueError(
-                f"Invalid Klein backend '{backend}'. Must be 'sdnq' or 'sdcpp'."
-            )
-
         self.num_inference_steps = num_inference_steps
+        self.cpu_offload = cpu_offload
         self.low_vram = low_vram
         self.luminance_correction = luminance_correction
         self.upscale_small_crops = upscale_small_crops
-        self.sdcpp_cache_mode = sdcpp_cache_mode
-        _model_key = f"flux_klein_{self.variant}"
-        self.sdcpp_diffusion_quant = sdcpp_diffusion_quant or flux_sdcpp_quant_default(
-            _model_key, "diffusion_model"
-        )
-        self.sdcpp_text_encoder_quant = (
-            sdcpp_text_encoder_quant or flux_sdcpp_text_encoder_default(_model_key)
-        )
         self.verbose = verbose
+        self.prompt = (prompt or "").strip() or self.KLEIN_PROMPT
 
         self.DEVICE = device if device is not None else get_best_device()
         self.DTYPE = get_best_dtype(self.DEVICE)
@@ -1063,7 +990,6 @@ class FluxKleinInpainter:
         self.manager = get_model_manager()
         self.cache = get_cache()
         self.pipeline = None
-        self.sdcpp_assets = None
         self._prompt_embeds_cpu = None
         self._pooled_prompt_embeds_cpu = None
 
@@ -1075,43 +1001,31 @@ class FluxKleinInpainter:
         if self.huggingface_token:
             self.manager.set_flux_hf_token(self.huggingface_token)
 
-        if self.backend == "sdcpp":
-            self.sdcpp_assets = self.manager.ensure_flux_sdcpp_server(
-                f"flux_klein_{self.variant}",
-                cache_mode=self.sdcpp_cache_mode,
-                diffusion_quant=self.sdcpp_diffusion_quant,
-                text_encoder_quant=self.sdcpp_text_encoder_quant,
-                num_inference_steps=self.num_inference_steps,
-                verbose=self.verbose,
-            )
-            self.pipeline = self.sdcpp_assets
-            return
-
         if self.variant == "9b":
             self.pipeline = self.manager.load_flux_klein_9b(
-                low_vram=self.low_vram, verbose=self.verbose
+                cpu_offload=self.cpu_offload,
+                low_vram=self.low_vram,
+                verbose=self.verbose,
             )
         else:
             self.pipeline = self.manager.load_flux_klein_4b(
-                low_vram=self.low_vram, verbose=self.verbose
+                cpu_offload=self.cpu_offload,
+                low_vram=self.low_vram,
+                verbose=self.verbose,
             )
 
     def unload_models(self):
         """Unload Flux.2 Klein models via model manager to free up memory."""
         self.pipeline = None
-        self.sdcpp_assets = None
         self._prompt_embeds_cpu = None
         self._pooled_prompt_embeds_cpu = None
-        if self.backend == "sdcpp":
-            self.manager.shutdown_sdcpp_server(f"flux_klein_{self.variant}")
-        else:
-            self.manager.unload_flux_klein_models()
+        self.manager.unload_flux_klein_models()
 
     def _get_prompt_embeddings(self, device: torch.device, verbose: bool = False):
         if self._prompt_embeds_cpu is None:
             log_message("  - Encoding Flux.2 Klein prompt embeddings", verbose=verbose)
             prompt_embeds, pooled_prompt_embeds = _encode_flux_prompt(
-                self.pipeline, self.KLEIN_PROMPT, device
+                self.pipeline, self.prompt, device
             )
             self._prompt_embeds_cpu = _prompt_value_to_cpu(prompt_embeds)
             self._pooled_prompt_embeds_cpu = _prompt_value_to_cpu(pooled_prompt_embeds)
@@ -1163,6 +1077,20 @@ class FluxKleinInpainter:
                     y1 = max(0, img_h - target_h)
 
         return x1, y1, x2, y2
+
+    @staticmethod
+    def _local_mask_signature_bbox(
+        mask_np: np.ndarray,
+    ) -> Optional[Tuple[int, int, int, int]]:
+        ys, xs = np.where(mask_np)
+        if xs.size == 0 or ys.size == 0:
+            return None
+        return (
+            int(xs.min()),
+            int(ys.min()),
+            int(xs.max()) + 1,
+            int(ys.max()) + 1,
+        )
 
     def _compute_luminance_stats(
         self, image_np: np.ndarray, mask_np: np.ndarray
@@ -1255,6 +1183,109 @@ class FluxKleinInpainter:
         corrected_np = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2RGB)
         return Image.fromarray(corrected_np)
 
+    def _match_luminance_per_region(
+        self,
+        generated_pil: Image.Image,
+        original_crop_pil: Image.Image,
+        grouped_mask_crop_np: np.ndarray,
+        region_mask_crops: List[np.ndarray],
+        verbose: bool = False,
+    ) -> Image.Image:
+        """Match luminance independently for each region in a grouped crop."""
+        if not region_mask_crops or not np.any(grouped_mask_crop_np):
+            return generated_pil
+
+        original_np = np.asarray(original_crop_pil.convert("RGB"))
+        generated_np = np.asarray(generated_pil.convert("RGB")).copy()
+        grouped_mask = np.asarray(grouped_mask_crop_np).astype(bool)
+        crop_h, crop_w = grouped_mask.shape
+        corrected_regions = 0
+
+        for region_mask in region_mask_crops:
+            region_mask = np.asarray(region_mask).astype(bool)
+            if region_mask.shape != grouped_mask.shape or not np.any(region_mask):
+                continue
+
+            ys, xs = np.where(region_mask)
+            x1 = int(xs.min())
+            x2 = int(xs.max()) + 1
+            y1 = int(ys.min())
+            y2 = int(ys.max()) + 1
+            region_w = x2 - x1
+            region_h = y2 - y1
+            pad = max(8, min(64, int(round(max(region_w, region_h) * 0.75))))
+            cx1 = max(0, x1 - pad)
+            cy1 = max(0, y1 - pad)
+            cx2 = min(crop_w, x2 + pad)
+            cy2 = min(crop_h, y2 + pad)
+            if cx2 <= cx1 or cy2 <= cy1:
+                continue
+
+            local_region_mask = region_mask[cy1:cy2, cx1:cx2]
+            local_grouped_mask = grouped_mask[cy1:cy2, cx1:cx2]
+            context_mask = ~local_grouped_mask
+            min_context_pixels = max(32, int(np.count_nonzero(local_region_mask) * 0.2))
+            if int(np.count_nonzero(context_mask)) < min_context_pixels:
+                context_mask = ~local_region_mask
+            if int(np.count_nonzero(context_mask)) < 16:
+                continue
+
+            original_crop_np = original_np[cy1:cy2, cx1:cx2]
+            generated_crop_np = generated_np[cy1:cy2, cx1:cx2]
+            original_lab = cv2.cvtColor(original_crop_np, cv2.COLOR_RGB2LAB).astype(
+                np.float32
+            )
+            generated_lab = cv2.cvtColor(generated_crop_np, cv2.COLOR_RGB2LAB).astype(
+                np.float32
+            )
+
+            orig_l = original_lab[:, :, 0][context_mask]
+            gen_l = generated_lab[:, :, 0][context_mask]
+            orig_mean = float(np.mean(orig_l))
+            gen_mean = float(np.mean(gen_l))
+            orig_std = float(np.std(orig_l)) + 1e-6
+            gen_std = float(np.std(gen_l)) + 1e-6
+
+            if abs(orig_mean - gen_mean) < 1.3 and abs(orig_std - gen_std) < 2.0:
+                continue
+
+            scale = max(0.5, min(2.0, orig_std / gen_std))
+            local_l = generated_lab[:, :, 0][local_region_mask]
+            generated_lab[:, :, 0][local_region_mask] = np.clip(
+                (local_l - gen_mean) * scale + orig_mean,
+                0,
+                255,
+            )
+
+            for ch in (1, 2):
+                orig_ch_mean = float(np.mean(original_lab[:, :, ch][context_mask]))
+                gen_ch_mean = float(np.mean(generated_lab[:, :, ch][context_mask]))
+                ch_shift = orig_ch_mean - gen_ch_mean
+                if abs(ch_shift) > 1.0:
+                    generated_lab[:, :, ch][local_region_mask] = np.clip(
+                        generated_lab[:, :, ch][local_region_mask] + ch_shift,
+                        0,
+                        255,
+                    )
+
+            corrected_crop = cv2.cvtColor(
+                generated_lab.astype(np.uint8), cv2.COLOR_LAB2RGB
+            )
+            generated_np[cy1:cy2, cx1:cx2][local_region_mask] = corrected_crop[
+                local_region_mask
+            ]
+            corrected_regions += 1
+
+        if corrected_regions <= 0:
+            return generated_pil
+
+        log_message(
+            "  - Per-region luminance correction: "
+            f"{corrected_regions}/{len(region_mask_crops)} region(s)",
+            verbose=verbose,
+        )
+        return Image.fromarray(generated_np)
+
     def _prepare_image_for_inference(
         self,
         image_pil: Image.Image,
@@ -1312,41 +1343,6 @@ class FluxKleinInpainter:
 
         return image_pil, orig_w, orig_h
 
-    def _run_sdcpp_inference(
-        self,
-        image_pil: Image.Image,
-        width: int,
-        height: int,
-        seed: int,
-        verbose: bool = False,
-    ) -> Image.Image:
-        if self.sdcpp_assets is None:
-            raise ModelError("Flux.2 Klein sd.cpp server is not loaded.")
-
-        payload = {
-            "prompt": self.KLEIN_PROMPT,
-            "negative_prompt": "",
-            "width": int(width),
-            "height": int(height),
-            "seed": int(seed),
-            "batch_count": 1,
-            "ref_images": [pil_to_base64_png(image_pil)],
-            "sample_params": {
-                "sample_method": "euler",
-                "sample_steps": int(self.num_inference_steps),
-                "guidance": {
-                    "txt_cfg": 1.0,
-                    "img_cfg": 1.0,
-                    "distilled_guidance": float(self.KLEIN_GUIDANCE_SCALE),
-                },
-            },
-            "output_format": "png",
-            "output_compression": 100,
-        }
-        return run_image_job(
-            self.sdcpp_assets, payload, verbose=verbose, timeout_sec=900
-        )
-
     def inpaint_mask(
         self,
         image_pil: Image.Image,
@@ -1356,6 +1352,7 @@ class FluxKleinInpainter:
         strict_mask_clipping: bool = False,
         composite_clip_bbox: Optional[Tuple[int, int, int, int]] = None,
         ocr_params: Optional[Dict] = None,
+        luminance_match_masks: Optional[List[np.ndarray]] = None,
     ) -> Image.Image:
         """Inpaint a specific mask region in the image using Flux.2 Klein.
 
@@ -1369,6 +1366,8 @@ class FluxKleinInpainter:
             composite_clip_bbox: Optional (x1, y1, x2, y2) bbox to clip the final
                 composite mask to
             ocr_params: Optional OCR parameters dict for cache key generation
+            luminance_match_masks: Optional original region masks to use for
+                independent luminance matching inside a grouped Flux crop
 
         Returns:
             PIL.Image: The inpainted image
@@ -1381,6 +1380,14 @@ class FluxKleinInpainter:
 
         if not np.any(mask_np):
             return image_pil
+
+        generator_seed, random_seed_requested = _resolve_flux_seed(seed)
+        cache_seed = -1 if random_seed_requested else generator_seed
+        if random_seed_requested:
+            log_message(
+                f"  - Random Flux seed selected: {generator_seed}",
+                verbose=verbose or self.verbose,
+            )
 
         log_message(
             f"  - Flux.2 Klein {self.variant.upper()} inpainting...", verbose=verbose
@@ -1440,6 +1447,7 @@ class FluxKleinInpainter:
 
         # Build cache parameters
         cache_params = {
+            "cache_version": "klein-v4-textfree-conditioning",
             "bbox": (x1, y1, width, height),
             "padding": padding,
             "blur": blur_radius,
@@ -1448,12 +1456,29 @@ class FluxKleinInpainter:
             "upscale_small": self.upscale_small_crops,
             "max_pixels": self.MAX_INFERENCE_PIXELS,
             "min_size": (self.MIN_RESOLUTION, self.MIN_RESOLUTION),
-            "backend": self.backend,
         }
-        if self.backend == "sdcpp":
-            cache_params["sdcpp_cache"] = self.sdcpp_cache_mode
-            cache_params["sdcpp_diffusion_quant"] = self.sdcpp_diffusion_quant
-            cache_params["sdcpp_text_encoder_quant"] = self.sdcpp_text_encoder_quant
+        local_luminance_masks: List[np.ndarray] = []
+        if luminance_match_masks:
+            lum_region_signature = []
+            for region_mask in luminance_match_masks:
+                region_mask_np = np.asarray(region_mask)
+                if region_mask_np.dtype != bool:
+                    region_mask_np = region_mask_np.astype(bool)
+                if region_mask_np.shape == mask_np.shape:
+                    region_crop = region_mask_np[y1:y2, x1:x2]
+                elif region_mask_np.shape == mask_crop_np.shape:
+                    region_crop = region_mask_np
+                else:
+                    continue
+                if not np.any(region_crop):
+                    continue
+                local_luminance_masks.append(region_crop)
+                local_bbox = self._local_mask_signature_bbox(region_crop)
+                lum_region_signature.append(
+                    (local_bbox, int(np.count_nonzero(region_crop)))
+                )
+            if lum_region_signature:
+                cache_params["lum_regions"] = tuple(lum_region_signature)
         if strict_mask_clipping:
             cache_params["strict_clip"] = True
         if composite_clip_bbox is not None:
@@ -1463,7 +1488,7 @@ class FluxKleinInpainter:
 
         cache_key = None
         cached_patch = None
-        if self.cache.should_use_inpaint_cache(seed):
+        if self.cache.should_use_inpaint_cache(cache_seed):
             # Downsample mask signature to reduce sensitivity to minor jitter
             if mask_crop_np.size > 0:
                 sig_h = min(64, max(4, mask_crop_np.shape[0]))
@@ -1483,11 +1508,11 @@ class FluxKleinInpainter:
             cache_key = self.cache.get_inpaint_cache_key(
                 image_cropped_pil,
                 mask_sig_np,
-                seed,
+                cache_seed,
                 self.num_inference_steps,
                 0.0,  # Klein doesn't use residual_diff_threshold
                 self.KLEIN_GUIDANCE_SCALE,
-                self.KLEIN_PROMPT,
+                self.prompt,
                 cache_params,
             )
             cached_patch = self.cache.get_inpainted_image(cache_key)
@@ -1543,51 +1568,42 @@ class FluxKleinInpainter:
             if inference_image.mode == "RGBA":
                 inference_image = inference_image.convert("RGB")
 
+            self.load_models()
+
+            if self.pipeline is None:
+                log_message(
+                    f"Warning: Flux Klein {self.variant.upper()} pipeline unavailable.",
+                    always_print=True,
+                )
+                return image_pil
+
             log_message("  - Running inference...", verbose=verbose)
 
             with self.manager.flux_inference_lock:
-                self.load_models()
-
-                if self.pipeline is None:
-                    log_message(
-                        f"Warning: Flux Klein {self.variant.upper()} pipeline unavailable.",
-                        always_print=True,
+                with torch.inference_mode():
+                    gen = torch.Generator(device=self.DEVICE).manual_seed(
+                        generator_seed
                     )
-                    return image_pil
-
-                if self.backend == "sdcpp":
-                    generated_patch_pil = self._run_sdcpp_inference(
-                        inference_image,
-                        inference_w,
-                        inference_h,
-                        seed,
-                        verbose=verbose or self.verbose,
+                    prompt_device = _pipeline_execution_device(
+                        self.pipeline, self.DEVICE
                     )
-                else:
-                    with torch.inference_mode():
-                        gen = torch.Generator(device=self.DEVICE).manual_seed(seed)
-                        prompt_device = _pipeline_execution_device(
-                            self.pipeline, self.DEVICE
-                        )
-                        prompt_embeds, pooled_prompt_embeds = (
-                            self._get_prompt_embeddings(
-                                prompt_device, verbose=verbose or self.verbose
-                            )
-                        )
-                        out = self.pipeline(
-                            **_flux_prompt_kwargs(
-                                prompt_embeds,
-                                pooled_prompt_embeds,
-                                include_pooled=False,
-                            ),
-                            image=inference_image,
-                            height=inference_h,
-                            width=inference_w,
-                            guidance_scale=self.KLEIN_GUIDANCE_SCALE,
-                            num_inference_steps=self.num_inference_steps,
-                            generator=gen,
-                        )
-                        generated_patch_pil = out.images[0]
+                    prompt_embeds, pooled_prompt_embeds = self._get_prompt_embeddings(
+                        prompt_device, verbose=verbose or self.verbose
+                    )
+                    out = self.pipeline(
+                        **_flux_prompt_kwargs(
+                            prompt_embeds,
+                            pooled_prompt_embeds,
+                            include_pooled=False,
+                        ),
+                        image=inference_image,
+                        height=inference_h,
+                        width=inference_w,
+                        guidance_scale=self.KLEIN_GUIDANCE_SCALE,
+                        num_inference_steps=self.num_inference_steps,
+                        generator=gen,
+                    )
+                    generated_patch_pil = out.images[0]
 
             if (inference_w, inference_h) != (width, height):
                 patch_pil = generated_patch_pil.resize(
@@ -1597,12 +1613,21 @@ class FluxKleinInpainter:
                 patch_pil = generated_patch_pil
 
             if self.luminance_correction:
-                patch_pil = self._match_luminance(
-                    generated_pil=patch_pil,
-                    original_crop_pil=image_cropped_pil,
-                    mask_crop_np=mask_crop_np,
-                    verbose=verbose,
-                )
+                if local_luminance_masks:
+                    patch_pil = self._match_luminance_per_region(
+                        generated_pil=patch_pil,
+                        original_crop_pil=image_cropped_pil,
+                        grouped_mask_crop_np=mask_crop_np,
+                        region_mask_crops=local_luminance_masks,
+                        verbose=verbose,
+                    )
+                else:
+                    patch_pil = self._match_luminance(
+                        generated_pil=patch_pil,
+                        original_crop_pil=image_cropped_pil,
+                        mask_crop_np=mask_crop_np,
+                        verbose=verbose,
+                    )
 
         dest_tensor = torch.from_numpy(
             np.asarray(image_pil, dtype=np.float32) / 255.0
@@ -1656,7 +1681,7 @@ class FluxKleinInpainter:
 
         # Save to cache if generated (not from cache)
         if (
-            self.cache.should_use_inpaint_cache(seed)
+            self.cache.should_use_inpaint_cache(cache_seed)
             and cache_key is not None
             and cached_patch is None
         ):

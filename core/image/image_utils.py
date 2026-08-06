@@ -3,7 +3,7 @@ import io
 import os
 import tempfile
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -15,6 +15,98 @@ from core.caching import get_cache
 from core.ml.model_manager import get_model_manager
 from utils.exceptions import ImageProcessingError
 from utils.logging import log_message
+
+CONSTRICTED_CENTROID_POLE_RATIO = 0.60
+DEEP_LOBE_DISTANCE_RATIO = 0.55
+DEEP_LOBE_MIN_SECONDARY_RATIO = 0.10
+DEEP_LOBE_MIN_AREA = 25
+
+
+def _resolve_padding_pair(
+    padding_pixels: float,
+    padding_horizontal_pixels: Optional[float] = None,
+    padding_vertical_pixels: Optional[float] = None,
+) -> Tuple[float, float]:
+    try:
+        fallback = max(0.0, float(padding_pixels))
+    except (TypeError, ValueError):
+        fallback = 0.0
+    try:
+        padding_x = (
+            fallback
+            if padding_horizontal_pixels is None
+            else max(0.0, float(padding_horizontal_pixels))
+        )
+    except (TypeError, ValueError):
+        padding_x = fallback
+    try:
+        padding_y = (
+            fallback
+            if padding_vertical_pixels is None
+            else max(0.0, float(padding_vertical_pixels))
+        )
+    except (TypeError, ValueError):
+        padding_y = fallback
+    return padding_x, padding_y
+
+
+def _anisotropic_safe_area_mask(
+    cleaned_mask: np.ndarray,
+    padding_x: float,
+    padding_y: float,
+) -> np.ndarray:
+    mask_u8 = np.where(cleaned_mask > 0, 255, 0).astype(np.uint8)
+    if padding_x <= 0.0 and padding_y <= 0.0:
+        return mask_u8
+
+    radius_x = int(np.ceil(max(0.0, padding_x)))
+    radius_y = int(np.ceil(max(0.0, padding_y)))
+    if radius_x <= 0 and radius_y <= 0:
+        return mask_u8
+
+    yy, xx = np.ogrid[-radius_y : radius_y + 1, -radius_x : radius_x + 1]
+    if radius_x <= 0:
+        kernel_mask = np.abs(yy) <= radius_y
+    elif radius_y <= 0:
+        kernel_mask = np.abs(xx) <= radius_x
+    else:
+        kernel_mask = (xx / float(radius_x)) ** 2 + (yy / float(radius_y)) ** 2 <= 1.0
+    kernel = np.where(kernel_mask, 255, 0).astype(np.uint8)
+    return cv2.erode(mask_u8, kernel, iterations=1)
+
+
+def has_multiple_deep_lobes(
+    distance_map: np.ndarray,
+    max_distance: float,
+) -> bool:
+    """Return whether a mask contains two substantial deep interior regions."""
+    if max_distance <= 0:
+        return False
+
+    deep_core = np.where(
+        distance_map >= max_distance * DEEP_LOBE_DISTANCE_RATIO,
+        1,
+        0,
+    ).astype(np.uint8)
+    component_count, _, stats, _ = cv2.connectedComponentsWithStats(
+        deep_core,
+        connectivity=8,
+    )
+    component_areas = sorted(
+        (
+            int(stats[index, cv2.CC_STAT_AREA])
+            for index in range(1, component_count)
+            if int(stats[index, cv2.CC_STAT_AREA]) >= DEEP_LOBE_MIN_AREA
+        ),
+        reverse=True,
+    )
+    if len(component_areas) < 2:
+        return False
+
+    return (
+        component_areas[1]
+        >= component_areas[0] * DEEP_LOBE_MIN_SECONDARY_RATIO
+    )
 
 
 def pil_to_cv2(pil_image):
@@ -171,8 +263,13 @@ def save_image_with_compression(
 
 
 def calculate_centroid_expansion_box(
-    cleaned_mask: np.ndarray, padding_pixels: float = 5.0, verbose: bool = False
-) -> Tuple[Tuple[int, int, int, int], Tuple[float, float]]:
+    cleaned_mask: np.ndarray,
+    padding_pixels: float = 5.0,
+    padding_horizontal_pixels: Optional[float] = None,
+    padding_vertical_pixels: Optional[float] = None,
+    verbose: bool = False,
+    return_constricted: bool = False,
+):
     """
     Calculates a guaranteed safe rendering box within a speech bubble to ensure text
     never touches the boundaries. It uses distance transforms to establish a safe zone
@@ -215,11 +312,26 @@ def calculate_centroid_expansion_box(
             padded_mask, cv2.DIST_L2, cv2.DIST_MASK_PRECISE
         )
         distance_map = distance_map_padded[1:-1, 1:-1]
-        safe_area_mask = (distance_map >= padding_pixels).astype(np.uint8) * 255
+        padding_x, padding_y = _resolve_padding_pair(
+            padding_pixels,
+            padding_horizontal_pixels,
+            padding_vertical_pixels,
+        )
+        if padding_x <= 0.0 and padding_y <= 0.0:
+            safe_area_mask = np.where(cleaned_mask > 0, 255, 0).astype(np.uint8)
+        elif abs(padding_x - padding_y) <= 1e-6:
+            safe_area_mask = (distance_map >= padding_x).astype(np.uint8) * 255
+        else:
+            safe_area_mask = _anisotropic_safe_area_mask(
+                cleaned_mask,
+                padding_x,
+                padding_y,
+            )
 
         if not np.any(safe_area_mask):
             log_message(
-                f"Safe area calculation failed: padding {padding_pixels:.0f}px too large",
+                "Safe area calculation failed: "
+                f"padding {padding_x:.0f}x{padding_y:.0f}px too large",
                 verbose=verbose,
                 always_print=True,
             )
@@ -243,14 +355,19 @@ def calculate_centroid_expansion_box(
         cy_int = max(0, min(cy_int, mask_h - 1))
 
         dist_at_centroid = distance_map[cy_int, cx_int]
+        moved_to_pole = False
 
-        if dist_at_centroid < max_val * 0.70:
+        if (
+            dist_at_centroid < max_val * CONSTRICTED_CENTROID_POLE_RATIO
+            and has_multiple_deep_lobes(distance_map, max_val)
+        ):
             log_message(
                 f"Centroid in constricted region (dist={dist_at_centroid:.1f} vs max={max_val:.1f}). "
                 "Moving anchor to pole of inaccessibility.",
                 verbose=verbose,
             )
             centroid_x, centroid_y = float(max_loc[0]), float(max_loc[1])
+            moved_to_pole = True
 
         centroid = (centroid_x, centroid_y)
 
@@ -327,6 +444,8 @@ def calculate_centroid_expansion_box(
                 f"Safe area: {max_safe_width:.0f}x{max_safe_height:.0f} at ({centroid_x:.0f}, {centroid_y:.0f})",
                 verbose=verbose,
             )
+            if return_constricted:
+                return guaranteed_box, centroid, moved_to_pole
             return guaranteed_box, centroid
         else:
             log_message(

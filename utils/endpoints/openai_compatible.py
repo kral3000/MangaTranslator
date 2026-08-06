@@ -27,8 +27,7 @@ def call_openai_compatible_endpoint(
         base_url (str): The base URL of the compatible endpoint (e.g., "http://localhost:8080/v1").
         api_key (Optional[str]): The API key, if required by the endpoint.
         model_name (str): The model ID to use.
-        parts (List[Dict[str, Any]]): List of content parts (text, images).
-                                      # Assumes the first part is the text prompt, subsequent are images.
+        parts (List[Dict[str, Any]]): Ordered content parts containing text and images.
         generation_config (Dict[str, Any]): Configuration for generation (temp, top_p, top_k, max_tokens).
                                             # Parameter restrictions (temp clamp, no top_k) might apply
                                             # depending on the underlying model.
@@ -48,9 +47,7 @@ def call_openai_compatible_endpoint(
     """
     if not base_url:
         raise ValidationError("Base URL is required for OpenAI-Compatible endpoint")
-    text_part = next((p for p in parts if "text" in p), None)
-    image_parts = [p for p in parts if "inline_data" in p]
-    if not text_part:
+    if not any("text" in part for part in parts):
         raise ValidationError(
             "Invalid 'parts' format for OpenAI-Compatible: No text prompt found."
         )
@@ -66,8 +63,12 @@ def call_openai_compatible_endpoint(
     user_content = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
-    for part in image_parts:
-        if (
+    for part in parts:
+        if "text" in part:
+            text = str(part.get("text") or "")
+            if text:
+                user_content.append({"type": "text", "text": text})
+        elif (
             "inline_data" in part
             and "data" in part["inline_data"]
             and "mime_type" in part["inline_data"]
@@ -81,8 +82,10 @@ def call_openai_compatible_endpoint(
                 }
             )
         else:
-            log_message(f"Invalid image part format: {part}", always_print=True)
-    user_content.append({"type": "text", "text": text_part["text"]})
+            log_message(
+                f"Invalid OpenAI-Compatible content part: {part}",
+                always_print=True,
+            )
     messages.append({"role": "user", "content": user_content})
 
     payload = {

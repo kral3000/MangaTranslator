@@ -1,4 +1,5 @@
 import io
+import hashlib
 import os
 from collections import OrderedDict
 from pathlib import Path
@@ -44,12 +45,86 @@ _font_features_cache = LRUCache(max_size=50)
 _font_cmap_cache = LRUCache(max_size=50)
 _font_variants_cache: Dict[str, Dict[str, Optional[Path]]] = {}
 
+FONT_DISK_CACHE_VERSION = "font-sanitize-v1"
+_FONT_DISK_CACHE_DIR = Path(__file__).resolve().parents[2] / "models" / "font_cache"
+
 # Font style detection keywords
 FONT_KEYWORDS = {
     "bold": {"bold", "heavy", "black"},
     "italic": {"italic", "oblique", "slanted", "inclined"},
     "regular": {"regular", "normal", "roman", "medium"},
 }
+
+
+def _filename_style_flags(font_file: Path) -> tuple[bool, bool, bool]:
+    stem_lower = font_file.stem.lower()
+    is_regular = any(kw in stem_lower for kw in FONT_KEYWORDS["regular"])
+    is_bold = (
+        any(kw in stem_lower for kw in FONT_KEYWORDS["bold"])
+        and not is_regular
+    )
+    is_italic = any(kw in stem_lower for kw in FONT_KEYWORDS["italic"])
+    return is_regular, is_bold, is_italic
+
+
+def _font_disk_cache_path(font_path: str) -> Optional[Path]:
+    """
+    Return a stable cache path for sanitized font bytes.
+
+    The cache key includes the source font path, size, mtime, and sanitizer version
+    so replacing a font file automatically creates a new cache entry.
+    """
+    try:
+        source_path = Path(font_path).resolve()
+        stat = source_path.stat()
+        identity = (
+            f"{FONT_DISK_CACHE_VERSION}|{source_path}|"
+            f"{stat.st_size}|{stat.st_mtime_ns}"
+        )
+        digest = hashlib.sha256(
+            identity.encode("utf-8", "surrogatepass")
+        ).hexdigest()
+        suffix = source_path.suffix.lower()
+        if suffix not in {".ttf", ".otf"}:
+            suffix = ".ttf"
+        return _FONT_DISK_CACHE_DIR / f"{digest}{suffix}"
+    except Exception:
+        return None
+
+
+def _read_font_disk_cache(cache_path: Optional[Path]) -> Optional[bytes]:
+    if cache_path is None or not cache_path.exists():
+        return None
+    try:
+        font_data = cache_path.read_bytes()
+        return font_data if font_data else None
+    except Exception as e:
+        log_message(
+            f"Font disk cache read failed for {cache_path.name}: {e}",
+            verbose=False,
+        )
+        return None
+
+
+def _write_font_disk_cache(cache_path: Optional[Path], font_data: bytes) -> None:
+    if cache_path is None or not font_data:
+        return
+    tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp_path, "wb") as f:
+            f.write(font_data)
+        os.replace(tmp_path, cache_path)
+    except Exception as e:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+        log_message(
+            f"Font disk cache write failed for {cache_path.name}: {e}",
+            verbose=False,
+        )
 
 
 def get_font_features(font_path: str) -> Dict[str, List[str]]:
@@ -259,10 +334,15 @@ def find_font_variants(
 
     try:
         font_dir_path = Path(resolved_dir)
-        if font_dir_path.exists() and font_dir_path.is_dir():
-            font_files = list(font_dir_path.glob("*.ttf")) + list(
-                font_dir_path.glob("*.otf")
-            )
+        if font_dir_path.exists() and font_dir_path.is_file():
+            if font_dir_path.suffix.lower() in {".ttf", ".otf", ".ttc"}:
+                font_files = [font_dir_path]
+        elif font_dir_path.exists() and font_dir_path.is_dir():
+            font_files = [
+                item
+                for item in font_dir_path.rglob("*")
+                if item.is_file() and item.suffix.lower() in {".ttf", ".otf", ".ttc"}
+            ]
         else:
             log_message(f"Font directory not found: {font_dir_path}", always_print=True)
             _font_variants_cache[resolved_dir] = font_variants
@@ -292,9 +372,7 @@ def find_font_variants(
         if not _validate_font_file(font_file, verbose=verbose):
             continue
 
-        stem_lower = font_file.stem.lower()
-        is_bold = any(kw in stem_lower for kw in FONT_KEYWORDS["bold"])
-        is_italic = any(kw in stem_lower for kw in FONT_KEYWORDS["italic"])
+        _is_regular, is_bold, is_italic = _filename_style_flags(font_file)
         assigned = False
         if is_bold and is_italic:
             if not font_variants["bold_italic"]:
@@ -313,9 +391,7 @@ def find_font_variants(
         if not _validate_font_file(font_file, verbose=verbose):
             continue
 
-        stem_lower = font_file.stem.lower()
-        is_bold = any(kw in stem_lower for kw in FONT_KEYWORDS["bold"])
-        is_italic = any(kw in stem_lower for kw in FONT_KEYWORDS["italic"])
+        _is_regular, is_bold, is_italic = _filename_style_flags(font_file)
         assigned = False
         if is_bold and not is_italic:
             if not font_variants["bold"]:
@@ -339,10 +415,7 @@ def find_font_variants(
         if not _validate_font_file(font_file, verbose=verbose):
             continue
 
-        stem_lower = font_file.stem.lower()
-        is_regular = any(kw in stem_lower for kw in FONT_KEYWORDS["regular"])
-        is_bold = any(kw in stem_lower for kw in FONT_KEYWORDS["bold"])
-        is_italic = any(kw in stem_lower for kw in FONT_KEYWORDS["italic"])
+        is_regular, is_bold, is_italic = _filename_style_flags(font_file)
         assigned = False
         if is_regular and not is_bold and not is_italic:
             if not font_variants["regular"]:
@@ -362,13 +435,11 @@ def find_font_variants(
             if not _validate_font_file(font_file, verbose=verbose):
                 continue
 
-            stem_lower = font_file.stem.lower()
-            is_bold = any(kw in stem_lower for kw in FONT_KEYWORDS["bold"])
-            is_italic = any(kw in stem_lower for kw in FONT_KEYWORDS["italic"])
+            is_regular, is_bold, is_italic = _filename_style_flags(font_file)
             if (
                 not is_bold
                 and not is_italic
-                and not any(kw in stem_lower for kw in FONT_KEYWORDS["regular"])
+                and not is_regular
             ):
                 font_name_lower = font_file.name.lower()
                 is_likely_specific = any(
@@ -505,7 +576,8 @@ def sanitize_font_data(font_path: str, font_data: bytes) -> bytes:
 
 def load_font_data(font_path: str) -> bytes:
     """
-    Loads and sanitizes font data from a file. Uses caching to avoid repeated reads.
+    Loads and sanitizes font data from a file. Uses memory and disk caching to
+    avoid repeated fontTools sanitization across runs.
 
     Args:
         font_path: Path to the font file
@@ -519,10 +591,17 @@ def load_font_data(font_path: str) -> bytes:
     font_data = _font_data_cache.get(font_path)
     if font_data is None:
         try:
+            disk_cache_path = _font_disk_cache_path(font_path)
+            font_data = _read_font_disk_cache(disk_cache_path)
+            if font_data is not None:
+                _font_data_cache.put(font_path, font_data)
+                return font_data
+
             with open(font_path, "rb") as f:
                 original_font_data = f.read()
 
             font_data = sanitize_font_data(font_path, original_font_data)
+            _write_font_disk_cache(disk_cache_path, font_data)
             _font_data_cache.put(font_path, font_data)
         except Exception as e:
             log_message(f"Font file read error: {e}", always_print=True)

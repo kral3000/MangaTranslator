@@ -213,6 +213,24 @@
     background-color: var(--neutral-900) !important;
 }
 
+/* --- TAG STYLE FONT PICKER ROW --- */
+/* Bottom-align the tag dropdown, font dropdown and apply button so the three
+   controls line up on one baseline. Gradio adds padding-bottom to each .block,
+   which would leave the dropdowns sitting 10px above the button, so that
+   padding is dropped inside this row only. */
+.tag-style-font-row {
+    align-items: flex-end !important;
+    gap: 12px !important;
+}
+
+.tag-style-font-row .block.padded {
+    padding-bottom: 0 !important;
+}
+
+.tag-style-font-row>* {
+    margin-bottom: 0 !important;
+}
+
 /* --- STATUS MESSAGES --- */
 #config_status p,
 #config_status div.prose {
@@ -242,10 +260,15 @@
     margin: auto;
 }
 
-/* --- Fix textbox overflow scrollbar issue (Gradio 5.44.1+) --- */
-#translator_special_instructions textarea,
-#batch_special_instructions textarea,
+/* --- Textbox overflow handling (Gradio 5.44.1+) --- */
 #translator_status_message textarea,
 #batch_status_message textarea {
     overflow-y: hidden !important;
+}
+
+#translator_special_instructions textarea,
+#batch_special_instructions textarea {
+    overflow-y: auto !important;
+    resize: vertical;
+    min-height: 12em;
 }

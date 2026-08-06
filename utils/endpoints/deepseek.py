@@ -6,6 +6,7 @@ import requests
 
 from utils.exceptions import TranslationError, ValidationError
 from utils.logging import log_message
+from utils.token_usage import format_usage, parse_openai_style_usage
 
 
 def call_deepseek_endpoint(
@@ -18,6 +19,7 @@ def call_deepseek_endpoint(
     timeout: int = 120,
     max_retries: int = 3,
     base_delay: float = 1.0,
+    usage_output: Optional[Dict[str, int]] = None,
 ) -> Optional[str]:
     """
     Calls the DeepSeek Chat Completions API endpoint with the provided data and handles retries.
@@ -111,6 +113,15 @@ def call_deepseek_endpoint(
             log_message("Processing DeepSeek response", verbose=debug)
             try:
                 result = response.json()
+
+                call_usage = parse_openai_style_usage(result)
+                if call_usage:
+                    if usage_output is not None:
+                        usage_output.update(call_usage)
+                    log_message(
+                        f"DeepSeek token usage: {format_usage(call_usage)}",
+                        verbose=debug,
+                    )
 
                 if "choices" in result and len(result["choices"]) > 0:
                     choice = result["choices"][0]

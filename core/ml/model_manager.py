@@ -1,7 +1,6 @@
 import os
 import shutil
 import threading
-import time
 import urllib.request
 from enum import Enum
 from pathlib import Path
@@ -19,10 +18,8 @@ from transformers import (
 from ultralytics import YOLO
 
 from core.device import empty_cache, get_best_device, get_best_dtype, get_device_info
-from core.ml.sdcpp_server import SDCppServerManager
 from utils.exceptions import ModelError
 from utils.logging import log_message
-from utils.model_metadata import FLUX_SDCPP_QUANT_FILES
 
 
 class ModelType(Enum):
@@ -45,10 +42,6 @@ class ModelType(Enum):
     FLUX_KONTEXT_SDNQ_PIPELINE = "flux_kontext_sdnq_pipeline"
     FLUX_KLEIN_9B_PIPELINE = "flux_klein_9b_pipeline"
     FLUX_KLEIN_4B_PIPELINE = "flux_klein_4b_pipeline"
-    SDCPP_SERVER = "sdcpp_server"
-    FLUX_KLEIN_SDCPP_VAE = "flux_klein_sdcpp_vae"
-    FLUX_KONTEXT_SDCPP_CLIP_L = "flux_kontext_sdcpp_clip_l"
-    FLUX_KONTEXT_SDCPP_VAE = "flux_kontext_sdcpp_vae"
 
 
 class ModelManager:
@@ -76,6 +69,7 @@ class ModelManager:
 
             # Model storage
             self.models = {}
+            self._flux_pipeline_memory_modes = {}
             self.model_paths = self._init_model_paths()
             self.model_urls = self._init_model_urls()
             self.model_hf_repos = self._init_hf_repos()
@@ -85,28 +79,24 @@ class ModelManager:
             self.hf_token = None
             self.flux_hf_token = None
             self.flux_residual_diff_threshold = 0.15
-            self.sdcpp_server_manager = SDCppServerManager(
-                self.model_paths[ModelType.SDCPP_SERVER]
-            )
 
             # Serializes Flux pipeline inference across threads (CPU offload is not thread-safe)
             self.flux_inference_lock = threading.Lock()
+            # Ultralytics predictor state is mutable. Keep each shared YOLO model
+            # single-entry while still allowing different model types to overlap.
+            self.yolo_speech_bubble_inference_lock = threading.Lock()
+            self.yolo_conjoined_inference_lock = threading.Lock()
+            self.yolo_osbtext_inference_lock = threading.Lock()
+            self.yolo_panel_inference_lock = threading.Lock()
 
             self._initialized = True
             log_message(
                 f"Model Manager initialized on device: {self.device}", always_print=True
             )
 
-    @staticmethod
-    def _flux_sdcpp_base_dir() -> Path:
-        """Base directory for sd.cpp Flux GGUF assets."""
-        return Path("./models").resolve() / "flux" / "sdcpp"
-
     def _init_model_paths(self):
         """Initialize model file paths."""
         model_dir = Path("./models").resolve()
-        flux_sdcpp_dir = self._flux_sdcpp_base_dir()
-        flux_kontext_sdcpp_dir = flux_sdcpp_dir / "kontext"
         return {
             ModelType.UPSCALE: (
                 model_dir / "upscale" / "2x-AnimeSharpV4_RCAN.safetensors"
@@ -129,16 +119,6 @@ class ModelManager:
             ),
             ModelType.MANGA_OCR: (model_dir / "manga-ocr-base"),
             ModelType.PADDLE_OCR_VL: (model_dir / "paddleocr-vl"),
-            ModelType.SDCPP_SERVER: (
-                model_dir / "sdcpp" / SDCppServerManager.RELEASE_TAG
-            ),
-            ModelType.FLUX_KLEIN_SDCPP_VAE: (flux_sdcpp_dir / "flux2-vae.safetensors"),
-            ModelType.FLUX_KONTEXT_SDCPP_CLIP_L: (
-                flux_kontext_sdcpp_dir / "clip_l.safetensors"
-            ),
-            ModelType.FLUX_KONTEXT_SDCPP_VAE: (
-                flux_kontext_sdcpp_dir / "ae.safetensors"
-            ),
         }
 
     def _init_model_urls(self):
@@ -151,18 +131,6 @@ class ModelManager:
             ModelType.UPSCALE_LITE: (
                 "https://huggingface.co/Kim2091/2x-AnimeSharpV4/resolve/main/"
                 "2x-AnimeSharpV4_Fast_RCAN_PU.safetensors"
-            ),
-            ModelType.FLUX_KLEIN_SDCPP_VAE: (
-                "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/"
-                "split_files/vae/flux2-vae.safetensors"
-            ),
-            ModelType.FLUX_KONTEXT_SDCPP_CLIP_L: (
-                "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/"
-                "clip_l.safetensors"
-            ),
-            ModelType.FLUX_KONTEXT_SDCPP_VAE: (
-                "https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/"
-                "split_files/vae/ae.safetensors"
             ),
         }
 
@@ -236,24 +204,8 @@ class ModelManager:
         repos[ModelType.FLUX_KLEIN_4B_PIPELINE] = {
             "repo_id": "Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic",
         }
-        repos[ModelType.FLUX_KLEIN_SDCPP_VAE] = {
-            "repo_id": "Comfy-Org/flux2-dev",
-            "filename": "split_files/vae/flux2-vae.safetensors",
-        }
-        repos[ModelType.FLUX_KONTEXT_SDCPP_CLIP_L] = {
-            "repo_id": "comfyanonymous/flux_text_encoders",
-            "filename": "clip_l.safetensors",
-        }
-        repos[ModelType.FLUX_KONTEXT_SDCPP_VAE] = {
-            "repo_id": "Comfy-Org/Lumina_Image_2.0_Repackaged",
-            "filename": "split_files/vae/ae.safetensors",
-        }
 
         return repos
-
-    def _enable_hf_xet_high_performance(self) -> None:
-        if "HF_XET_HIGH_PERFORMANCE" not in os.environ:
-            os.environ["HF_XET_HIGH_PERFORMANCE"] = "1"
 
     def _ensure_file(self, path: Path, url: str, verbose: bool = False) -> None:
         """Download file from URL if it doesn't exist.
@@ -266,218 +218,16 @@ class ModelManager:
         if path.exists():
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        log_message(f"Downloading {path.name}...", always_print=True)
+        log_message(f"Downloading {path.name}...", verbose=verbose)
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req) as response, open(path, "wb") as f:
-                total = int(response.headers.get("Content-Length") or 0)
-                downloaded = 0
-                last_log = time.monotonic()
-                while True:
-                    chunk = response.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    now = time.monotonic()
-                    if now - last_log >= 5:
-                        if total:
-                            percent = min(100.0, downloaded * 100.0 / total)
-                            log_message(
-                                f"  - {path.name}: {downloaded / (1024**2):.1f}/"
-                                f"{total / (1024**2):.1f} MiB ({percent:.1f}%)",
-                                always_print=True,
-                            )
-                        else:
-                            log_message(
-                                f"  - {path.name}: {downloaded / (1024**2):.1f} MiB",
-                                always_print=True,
-                            )
-                        last_log = now
-            log_message(f"Downloaded {path.name} successfully.", always_print=True)
+                shutil.copyfileobj(response, f)
+            log_message(f"Downloaded {path.name} successfully.", verbose=verbose)
         except Exception as e:
             if path.exists():
                 path.unlink()
             raise ModelError(f"Failed to download {path.name}: {e}")
-
-    def _remove_empty_child_dirs(self, root: Path, verbose: bool = False) -> None:
-        if not root.exists():
-            return
-        for path in sorted(
-            (child for child in root.rglob("*") if child.is_dir()),
-            key=lambda child: len(child.parts),
-            reverse=True,
-        ):
-            try:
-                path.rmdir()
-                log_message(
-                    f"Removed empty download directory {path}.", verbose=verbose
-                )
-            except OSError:
-                pass
-
-    def _flux_sdcpp_quant_asset(
-        self, model_key: str, asset_key: str, quant: str
-    ) -> dict:
-        quant_spec = FLUX_SDCPP_QUANT_FILES[model_key][asset_key]
-        selected_quant = quant or quant_spec["default"]
-        filenames = quant_spec["filenames"]
-        if selected_quant not in filenames:
-            options = ", ".join(filenames)
-            raise ModelError(
-                f"Invalid sd.cpp quant '{selected_quant}' for {model_key} "
-                f"{asset_key}. Choose one of: {options}."
-            )
-
-        base_dir = self._flux_sdcpp_base_dir()
-        if quant_spec.get("subdir"):
-            base_dir = base_dir / quant_spec["subdir"]
-        filename = filenames[selected_quant]
-        return {
-            "repo_id": quant_spec["repo_id"],
-            "filename": filename,
-            "path": base_dir / filename,
-            "quant": selected_quant,
-        }
-
-    def _flux_sdcpp_asset_spec(
-        self,
-        model_key: str,
-        diffusion_quant: str = "",
-        text_encoder_quant: str = "",
-    ) -> dict:
-        specs = {
-            "flux_klein_4b": {
-                "label": "Flux.2 Klein 4B",
-                "quant_models": {
-                    "diffusion_model": diffusion_quant,
-                    "llm": text_encoder_quant,
-                },
-                "fixed_model_types": {
-                    "vae": ModelType.FLUX_KLEIN_SDCPP_VAE,
-                },
-                "server_args": ("--llm", "llm"),
-            },
-            "flux_klein_9b": {
-                "label": "Flux.2 Klein 9B",
-                "quant_models": {
-                    "diffusion_model": diffusion_quant,
-                    "llm": text_encoder_quant,
-                },
-                "fixed_model_types": {
-                    "vae": ModelType.FLUX_KLEIN_SDCPP_VAE,
-                },
-                "server_args": ("--llm", "llm"),
-            },
-            "flux_kontext": {
-                "label": "Flux.1 Kontext",
-                "quant_models": {
-                    "diffusion_model": diffusion_quant,
-                    "t5xxl": text_encoder_quant,
-                },
-                "fixed_model_types": {
-                    "clip_l": ModelType.FLUX_KONTEXT_SDCPP_CLIP_L,
-                    "vae": ModelType.FLUX_KONTEXT_SDCPP_VAE,
-                },
-                "server_args": ("--clip_l", "clip_l", "--t5xxl", "t5xxl"),
-            },
-        }
-        if model_key not in specs:
-            raise ModelError(f"Unknown sd.cpp Flux model key: {model_key}")
-        spec = specs[model_key]
-        spec["quant_assets"] = {
-            key: self._flux_sdcpp_quant_asset(model_key, key, quant)
-            for key, quant in spec["quant_models"].items()
-        }
-        return spec
-
-    def ensure_flux_sdcpp_assets(
-        self,
-        model_key: str = "flux_klein_4b",
-        diffusion_quant: str = "",
-        text_encoder_quant: str = "",
-        verbose: bool = False,
-    ) -> dict:
-        """Ensure sd.cpp server and Flux GGUF assets are available."""
-        with self._lock:
-            spec = self._flux_sdcpp_asset_spec(
-                model_key,
-                diffusion_quant=diffusion_quant,
-                text_encoder_quant=text_encoder_quant,
-            )
-            quant_label = "/".join(
-                asset["quant"] for asset in spec["quant_assets"].values()
-            )
-            server_quant_key = "-".join(
-                asset["quant"] for asset in spec["quant_assets"].values()
-            )
-            log_message(
-                f"Preparing {spec['label']} sd.cpp assets ({quant_label})...",
-                verbose=verbose,
-            )
-            assets = {
-                "executable": self.sdcpp_server_manager.ensure_server_executable(
-                    verbose=verbose
-                ),
-                "model_key": model_key,
-                "label": spec["label"],
-                "server_args": spec["server_args"],
-                "server_model_key": f"{model_key}-{server_quant_key}",
-            }
-            for key, asset in spec["quant_assets"].items():
-                assets[key] = asset["path"]
-                self._ensure_hf_file(
-                    asset["repo_id"],
-                    asset["filename"],
-                    assets[key],
-                    token=self.flux_hf_token,
-                    verbose=verbose,
-                )
-
-            for key, model_type in spec["fixed_model_types"].items():
-                assets[key] = self.model_paths[model_type]
-                hf_info = self.model_hf_repos[model_type]
-                self._ensure_hf_file(
-                    hf_info["repo_id"],
-                    hf_info["filename"],
-                    assets[key],
-                    token=self.flux_hf_token,
-                    verbose=verbose,
-                )
-
-            return assets
-
-    def ensure_flux_sdcpp_server(
-        self,
-        model_key: str = "flux_klein_4b",
-        cache_mode: str = "none",
-        diffusion_quant: str = "",
-        text_encoder_quant: str = "",
-        num_inference_steps: int = 4,
-        verbose: bool = False,
-    ) -> dict:
-        """Start or reuse a persistent sd.cpp server for a Flux model."""
-        assets = self.ensure_flux_sdcpp_assets(
-            model_key,
-            diffusion_quant=diffusion_quant,
-            text_encoder_quant=text_encoder_quant,
-            verbose=verbose,
-        )
-        return self.sdcpp_server_manager.ensure_flux_server(
-            model_key,
-            assets,
-            cache_mode=cache_mode,
-            num_inference_steps=num_inference_steps,
-            verbose=verbose,
-        )
-
-    def shutdown_sdcpp_server(self, model_key: str, verbose: bool = False) -> None:
-        with self.flux_inference_lock:
-            self.sdcpp_server_manager.shutdown_server(model_key, verbose=verbose)
-
-    def shutdown_sdcpp_servers(self, verbose: bool = False) -> None:
-        with self.flux_inference_lock:
-            self.sdcpp_server_manager.shutdown_servers(verbose=verbose)
 
     def _ensure_hf_file(
         self,
@@ -497,17 +247,13 @@ class ModelManager:
             verbose: Whether to print verbose logging
         """
         if target.exists():
-            self._remove_empty_child_dirs(target.parent, verbose=verbose)
             return target
         target.parent.mkdir(parents=True, exist_ok=True)
         log_message(
             f"Downloading {target.name} from Hugging Face ({repo_id})...",
             verbose=verbose,
         )
-        self._enable_hf_xet_high_performance()
-        effective_token = token or self.hf_token or os.environ.get("HF_TOKEN")
-        if effective_token:
-            os.environ["HF_TOKEN"] = effective_token
+        effective_token = token if token is not None else self.hf_token
         downloaded = hf_hub_download(
             repo_id=repo_id,
             filename=filename,
@@ -516,6 +262,7 @@ class ModelManager:
         )
         downloaded_path = Path(downloaded)
         if downloaded_path != target:
+            downloaded_parent = downloaded_path.parent
             try:
                 downloaded_path.replace(target)
             except Exception:
@@ -525,7 +272,13 @@ class ModelManager:
                 except Exception:
                     pass
 
-            self._remove_empty_child_dirs(target.parent, verbose=verbose)
+            # Clean up empty directory if it was created by hf_hub_download
+            if downloaded_parent != target.parent and downloaded_parent.exists():
+                try:
+                    if not any(downloaded_parent.iterdir()):
+                        downloaded_parent.rmdir()
+                except (OSError, PermissionError):
+                    pass
         log_message(f"Downloaded {target.name} successfully.", verbose=verbose)
         return target
 
@@ -573,10 +326,7 @@ class ModelManager:
             ),
             verbose=verbose,
         )
-        self._enable_hf_xet_high_performance()
-        effective_token = token or self.hf_token or os.environ.get("HF_TOKEN")
-        if effective_token:
-            os.environ["HF_TOKEN"] = effective_token
+        effective_token = token if token is not None else self.hf_token
         try:
             snapshot_download(
                 repo_id=repo_id,
@@ -611,6 +361,67 @@ class ModelManager:
         """Check if a model is currently loaded."""
         with self._lock:
             return model_type in self.models and self.models[model_type] is not None
+
+    @staticmethod
+    def _flux_memory_mode(cpu_offload: bool, low_vram: bool) -> str:
+        if not cpu_offload:
+            return "device"
+        return "sequential_cpu_offload" if low_vram else "model_cpu_offload"
+
+    @staticmethod
+    def _flux_nunchaku_memory_mode(cpu_offload: bool, low_vram: bool) -> str:
+        if not cpu_offload:
+            return "device"
+        return "sequential_cpu_offload" if low_vram else "model_cpu_offload"
+
+    def _reuse_flux_pipeline(
+        self,
+        model_type: ModelType,
+        requested_mode: str,
+        verbose: bool,
+    ):
+        if not self.is_loaded(model_type):
+            return None
+
+        current_mode = self._flux_pipeline_memory_modes.get(model_type)
+        if current_mode == requested_mode:
+            return self.models[model_type]
+
+        log_message(
+            "Flux memory mode changed "
+            f"({current_mode or 'unknown'} -> {requested_mode}); reloading model...",
+            verbose=verbose,
+        )
+        self.unload_model(model_type, force_gc=True, verbose=verbose)
+        return None
+
+    def _configure_flux_pipeline_memory(
+        self,
+        pipeline,
+        cpu_offload: bool,
+        low_vram: bool,
+        verbose: bool,
+    ) -> str:
+        mode = self._flux_memory_mode(cpu_offload, low_vram)
+        if mode == "sequential_cpu_offload":
+            log_message(
+                "Using sequential CPU offload (low VRAM mode)...",
+                verbose=verbose,
+            )
+            pipeline.enable_sequential_cpu_offload()
+        elif mode == "model_cpu_offload":
+            log_message(
+                "Using model CPU offload (balanced VRAM/RAM mode)...",
+                verbose=verbose,
+            )
+            pipeline.enable_model_cpu_offload()
+        else:
+            log_message(
+                f"CPU offload disabled; keeping the full Flux pipeline on {self.device}...",
+                verbose=verbose,
+            )
+            pipeline.to(self.device)
+        return mode
 
     def load_upscale(self, verbose: bool = False):
         """Load upscale model (AnimeSharpV4 RCAN)."""
@@ -1041,8 +852,8 @@ class ModelManager:
             self.hf_token = token if token else None
             if self.hf_token:
                 os.environ["HF_TOKEN"] = self.hf_token
-                if enable_fast_download:
-                    self._enable_hf_xet_high_performance()
+                if enable_fast_download and "HF_XET_HIGH_PERFORMANCE" not in os.environ:
+                    os.environ["HF_XET_HIGH_PERFORMANCE"] = "1"
             elif "HF_TOKEN" in os.environ:
                 del os.environ["HF_TOKEN"]
 
@@ -1052,11 +863,7 @@ class ModelManager:
         Args:
             token: HuggingFace API token
         """
-        with self._lock:
-            self.flux_hf_token = token if token else None
-            if self.flux_hf_token:
-                os.environ["HF_TOKEN"] = self.flux_hf_token
-            self._enable_hf_xet_high_performance()
+        self.flux_hf_token = token if token else None
 
     def set_flux_residual_diff_threshold(self, threshold: float):
         """Set the residual diff threshold for Flux caching.
@@ -1066,13 +873,41 @@ class ModelManager:
         """
         self.flux_residual_diff_threshold = max(0.0, min(1.0, threshold))
 
-    def load_flux_models(self, verbose: bool = False):
+    def load_flux_models(
+        self,
+        cpu_offload: bool = True,
+        low_vram: bool = False,
+        verbose: bool = False,
+    ):
         """Load all Flux Kontext inpainting models (transformer, text encoder, pipeline).
+
+        Args:
+            cpu_offload: Enable Nunchaku CPU offload for the quantized transformer.
+            low_vram: Treat as Nunchaku CPU offload; Nunchaku has no separate
+                sequential offload implementation.
+            verbose: Whether to print verbose logging
 
         Returns:
             tuple: (transformer, text_encoder, pipeline)
         """
         with self._lock:
+            requested_mode = self._flux_nunchaku_memory_mode(cpu_offload, low_vram)
+            if self.is_loaded(ModelType.FLUX_PIPELINE):
+                current_mode = self._flux_pipeline_memory_modes.get(ModelType.FLUX_PIPELINE)
+                if current_mode != requested_mode:
+                    log_message(
+                        "Flux/Nunchaku memory mode changed "
+                        f"({current_mode or 'unknown'} -> {requested_mode}); reloading model...",
+                        verbose=verbose,
+                    )
+                    self.unload_flux_kontext_models(verbose=verbose)
+                else:
+                    return (
+                        self.models[ModelType.FLUX_TRANSFORMER],
+                        self.models[ModelType.FLUX_TEXT_ENCODER],
+                        self.models[ModelType.FLUX_PIPELINE],
+                    )
+
             if self.is_loaded(ModelType.FLUX_PIPELINE):
                 return (
                     self.models[ModelType.FLUX_TRANSFORMER],
@@ -1107,11 +942,27 @@ class ModelManager:
                 transformer = NunchakuFluxTransformer2dModel.from_pretrained(
                     str(transformer_path),
                     torch_dtype=self.dtype,
-                    offload=True,
+                    device=self.device,
+                    offload=cpu_offload,
                     precision="int4",
                     set_attention_impl="nunchaku-fp16",
                 )
                 self.models[ModelType.FLUX_TRANSFORMER] = transformer
+                if cpu_offload:
+                    log_message(
+                        (
+                            "Using Nunchaku CPU offload for selected low-VRAM mode "
+                            "(Nunchaku has no separate sequential offload)."
+                            if low_vram
+                            else "Using Nunchaku CPU offload."
+                        ),
+                        verbose=verbose,
+                    )
+                else:
+                    log_message(
+                        f"Nunchaku CPU offload disabled; keeping Flux Kontext on {self.device}.",
+                        verbose=verbose,
+                    )
 
                 # Load text encoder
                 hf_info = self.model_hf_repos[ModelType.FLUX_TEXT_ENCODER]
@@ -1124,6 +975,7 @@ class ModelManager:
                 text_encoder = NunchakuT5EncoderModel.from_pretrained(
                     str(text_encoder_path),
                     torch_dtype=self.dtype,
+                    device=self.device,
                 )
                 self.models[ModelType.FLUX_TEXT_ENCODER] = text_encoder
 
@@ -1146,6 +998,9 @@ class ModelManager:
                     pipeline, residual_diff_threshold=self.flux_residual_diff_threshold
                 )
                 self.models[ModelType.FLUX_PIPELINE] = pipeline
+                self._flux_pipeline_memory_modes[ModelType.FLUX_PIPELINE] = (
+                    requested_mode
+                )
 
                 log_message("Flux Kontext models loaded successfully.", verbose=verbose)
                 return transformer, text_encoder, pipeline
@@ -1158,13 +1013,19 @@ class ModelManager:
                     f"Failed to load Flux/Nunchaku inpainting models: {e}"
                 ) from e
 
-    def load_flux_kontext_sdnq(self, low_vram: bool = False, verbose: bool = False):
+    def load_flux_kontext_sdnq(
+        self,
+        cpu_offload: bool = True,
+        low_vram: bool = False,
+        verbose: bool = False,
+    ):
         """Load Flux.1 Kontext pipeline using SDNQ quantization (cross-platform).
 
         Unlike the Nunchaku method, this does not require a HuggingFace token
         and works on CUDA, ROCm, MPS, and CPU.
 
         Args:
+            cpu_offload: Keep most model weights in system RAM when True.
             low_vram: If True, use sequential CPU offload (slower but lower VRAM)
             verbose: Whether to print verbose logging
 
@@ -1172,8 +1033,14 @@ class ModelManager:
             FluxKontextPipeline instance
         """
         with self._lock:
-            if self.is_loaded(ModelType.FLUX_KONTEXT_SDNQ_PIPELINE):
-                return self.models[ModelType.FLUX_KONTEXT_SDNQ_PIPELINE]
+            requested_mode = self._flux_memory_mode(cpu_offload, low_vram)
+            cached_pipeline = self._reuse_flux_pipeline(
+                ModelType.FLUX_KONTEXT_SDNQ_PIPELINE,
+                requested_mode,
+                verbose,
+            )
+            if cached_pipeline is not None:
+                return cached_pipeline
 
             log_message(
                 "Loading Flux.1 Kontext SDNQ model (cross-platform)...", verbose=verbose
@@ -1210,16 +1077,17 @@ class ModelManager:
                         pipeline.text_encoder_2, use_quantized_matmul=True
                     )
 
-                if low_vram:
-                    log_message(
-                        "Using sequential CPU offload (low VRAM mode)...",
-                        verbose=verbose,
-                    )
-                    pipeline.enable_sequential_cpu_offload()
-                else:
-                    pipeline.enable_model_cpu_offload()
+                memory_mode = self._configure_flux_pipeline_memory(
+                    pipeline,
+                    cpu_offload=cpu_offload,
+                    low_vram=low_vram,
+                    verbose=verbose,
+                )
 
                 self.models[ModelType.FLUX_KONTEXT_SDNQ_PIPELINE] = pipeline
+                self._flux_pipeline_memory_modes[
+                    ModelType.FLUX_KONTEXT_SDNQ_PIPELINE
+                ] = memory_mode
                 log_message(
                     "Flux.1 Kontext SDNQ model loaded successfully.",
                     verbose=verbose,
@@ -1240,6 +1108,7 @@ class ModelManager:
         self,
         model_type: ModelType,
         variant: str,
+        cpu_offload: bool = True,
         low_vram: bool = False,
         verbose: bool = False,
     ):
@@ -1251,6 +1120,7 @@ class ModelManager:
         Args:
             model_type: ModelType.FLUX_KLEIN_9B_PIPELINE or FLUX_KLEIN_4B_PIPELINE
             variant: "9b" or "4b" for logging
+            cpu_offload: Keep most model weights in system RAM when True.
             low_vram: If True, use sequential CPU offload (slower but lower VRAM)
             verbose: Whether to print verbose logging
 
@@ -1258,8 +1128,14 @@ class ModelManager:
             The loaded Flux2KleinPipeline
         """
         with self._lock:
-            if self.is_loaded(model_type):
-                return self.models[model_type]
+            requested_mode = self._flux_memory_mode(cpu_offload, low_vram)
+            cached_pipeline = self._reuse_flux_pipeline(
+                model_type,
+                requested_mode,
+                verbose,
+            )
+            if cached_pipeline is not None:
+                return cached_pipeline
 
             log_message(
                 f"Loading Flux.2 Klein {variant.upper()} model...", verbose=verbose
@@ -1296,16 +1172,15 @@ class ModelManager:
                         pipeline.text_encoder, use_quantized_matmul=True
                     )
 
-                if low_vram:
-                    log_message(
-                        "Using sequential CPU offload (low VRAM mode)...",
-                        verbose=verbose,
-                    )
-                    pipeline.enable_sequential_cpu_offload()
-                else:
-                    pipeline.enable_model_cpu_offload()
+                memory_mode = self._configure_flux_pipeline_memory(
+                    pipeline,
+                    cpu_offload=cpu_offload,
+                    low_vram=low_vram,
+                    verbose=verbose,
+                )
 
                 self.models[model_type] = pipeline
+                self._flux_pipeline_memory_modes[model_type] = memory_mode
                 log_message(
                     f"Flux.2 Klein {variant.upper()} model loaded successfully.",
                     verbose=verbose,
@@ -1321,12 +1196,18 @@ class ModelManager:
                     f"Failed to load Flux.2 Klein {variant.upper()} model: {e}"
                 ) from e
 
-    def load_flux_klein_9b(self, low_vram: bool = False, verbose: bool = False):
+    def load_flux_klein_9b(
+        self,
+        cpu_offload: bool = True,
+        low_vram: bool = False,
+        verbose: bool = False,
+    ):
         """Load Flux.2 Klein 9B pipeline with FP8 transformer.
 
         Note: Requires HuggingFace token with access to gated repo.
 
         Args:
+            cpu_offload: Keep most model weights in system RAM when True.
             low_vram: If True, use sequential CPU offload (slower but lower VRAM)
             verbose: Whether to print verbose logging
 
@@ -1334,13 +1215,23 @@ class ModelManager:
             Flux2KleinPipeline instance
         """
         return self._load_flux_klein(
-            ModelType.FLUX_KLEIN_9B_PIPELINE, "9b", low_vram=low_vram, verbose=verbose
+            ModelType.FLUX_KLEIN_9B_PIPELINE,
+            "9b",
+            cpu_offload=cpu_offload,
+            low_vram=low_vram,
+            verbose=verbose,
         )
 
-    def load_flux_klein_4b(self, low_vram: bool = False, verbose: bool = False):
+    def load_flux_klein_4b(
+        self,
+        cpu_offload: bool = True,
+        low_vram: bool = False,
+        verbose: bool = False,
+    ):
         """Load Flux.2 Klein 4B pipeline with FP8 transformer.
 
         Args:
+            cpu_offload: Keep most model weights in system RAM when True.
             low_vram: If True, use sequential CPU offload (slower but lower VRAM)
             verbose: Whether to print verbose logging
 
@@ -1348,7 +1239,11 @@ class ModelManager:
             Flux2KleinPipeline instance
         """
         return self._load_flux_klein(
-            ModelType.FLUX_KLEIN_4B_PIPELINE, "4b", low_vram=low_vram, verbose=verbose
+            ModelType.FLUX_KLEIN_4B_PIPELINE,
+            "4b",
+            cpu_offload=cpu_offload,
+            low_vram=low_vram,
+            verbose=verbose,
         )
 
     def unload_model(
@@ -1368,6 +1263,7 @@ class ModelManager:
             log_message(f"Unloading {model_type.value}...", verbose=verbose)
             del self.models[model_type]
             self.models[model_type] = None
+            self._flux_pipeline_memory_modes.pop(model_type, None)
 
             if force_gc:
                 empty_cache(self.device)
@@ -1431,7 +1327,6 @@ class ModelManager:
         self.unload_model(ModelType.FLUX_TRANSFORMER, force_gc=False, verbose=verbose)
         self.unload_model(ModelType.FLUX_TEXT_ENCODER, force_gc=False, verbose=verbose)
         self.unload_model(ModelType.FLUX_PIPELINE, force_gc=True, verbose=verbose)
-        self.shutdown_sdcpp_server("flux_kontext", verbose=verbose)
 
         if models_unloaded:
             log_message("Flux.1 Kontext models unloaded.", verbose=verbose)
@@ -1458,21 +1353,19 @@ class ModelManager:
         self.unload_model(
             ModelType.FLUX_KLEIN_4B_PIPELINE, force_gc=True, verbose=verbose
         )
-        self.shutdown_sdcpp_server("flux_klein_9b", verbose=verbose)
-        self.shutdown_sdcpp_server("flux_klein_4b", verbose=verbose)
 
         if models_unloaded:
             log_message("Flux.2 Klein models unloaded.", verbose=verbose)
 
     def unload_all(self, verbose: bool = False):
         """Unload all models and free all GPU memory."""
-        log_message("Unloading all models...", verbose=verbose)
-        self.shutdown_sdcpp_servers(verbose=verbose)
         with self._lock:
+            log_message("Unloading all models...", verbose=verbose)
             for model_type in list(self.models.keys()):
                 if self.is_loaded(model_type):
                     del self.models[model_type]
                     self.models[model_type] = None
+            self._flux_pipeline_memory_modes.clear()
 
             empty_cache(self.device)
             log_message("All models unloaded.", verbose=verbose)

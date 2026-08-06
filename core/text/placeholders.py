@@ -8,6 +8,27 @@ from utils.exceptions import FontError, RenderingError
 from utils.logging import log_message
 
 
+def _inset_bbox_for_padding(bbox, padding_pixels: float):
+    x1, y1, x2, y2 = [int(round(float(v))) for v in bbox]
+    try:
+        pad = max(0.0, float(padding_pixels))
+    except (TypeError, ValueError):
+        pad = 0.0
+    if pad <= 0.0:
+        return x1, y1, x2, y2
+
+    width = max(1, x2 - x1)
+    height = max(1, y2 - y1)
+    max_pad = max(0.0, min((width - 1) / 2.0, (height - 1) / 2.0))
+    pad = min(pad, max_pad)
+    return (
+        int(round(x1 + pad)),
+        int(round(y1 + pad)),
+        int(round(x2 - pad)),
+        int(round(y2 - pad)),
+    )
+
+
 def generate_test_placeholders(
     sorted_bubble_data: List[Dict[str, Any]],
     processed_bubbles_info: List[Dict[str, Any]],
@@ -17,6 +38,9 @@ def generate_test_placeholders(
     osb_min_font: int,
     osb_max_font: int,
     padding_pixels: float,
+    padding_horizontal_pixels: float,
+    padding_vertical_pixels: float,
+    osb_padding_pixels: float,
     osb_outline_width: float,
     verbose: bool = False,
 ) -> List[str]:
@@ -51,6 +75,11 @@ def generate_test_placeholders(
     for i, bubble in enumerate(sorted_bubble_data):
         bbox = bubble["bbox"]
         is_outside_text = bubble.get("is_outside_text", False)
+        render_bbox = (
+            _inset_bbox_for_padding(bbox, osb_padding_pixels)
+            if is_outside_text
+            else bbox
+        )
 
         probe_info = bubble_render_info_map_probe.get(tuple(bbox), {})
 
@@ -78,7 +107,35 @@ def generate_test_placeholders(
         probe_config = RenderingConfig(
             min_font_size=min_font,
             max_font_size=max_font,
+            emphasis_font_dir=(
+                config.outside_text.osb_emphasis_font_dir
+                if is_outside_text
+                else config.rendering.emphasis_font_dir
+            ),
+            emphasis_max_font_size=(
+                config.outside_text.osb_emphasis_max_font_size
+                if is_outside_text
+                else config.rendering.emphasis_max_font_size
+            ),
             line_spacing_mult=line_spacing,
+            emphasis_line_spacing_mult=(
+                config.outside_text.osb_line_spacing
+                if is_outside_text
+                else config.rendering.emphasis_line_spacing_mult
+            ),
+            vertical_line_spacing_mult=(
+                config.outside_text.osb_line_spacing
+                if is_outside_text
+                else config.rendering.vertical_line_spacing_mult
+            ),
+            vertical_emphasis_line_spacing_mult=(
+                config.outside_text.osb_line_spacing
+                if is_outside_text
+                else config.rendering.vertical_emphasis_line_spacing_mult
+            ),
+            vertical_font_size_mult=(
+                1.0 if is_outside_text else config.rendering.vertical_font_size_mult
+            ),
             use_subpixel_rendering=(
                 config.outside_text.osb_use_subpixel_rendering
                 if is_outside_text
@@ -94,7 +151,15 @@ def generate_test_placeholders(
             hyphen_penalty=config.rendering.hyphen_penalty,
             hyphenation_min_word_length=config.rendering.hyphenation_min_word_length,
             badness_exponent=config.rendering.badness_exponent,
-            padding_pixels=padding_pixels,
+            padding_pixels=(
+                osb_padding_pixels if is_outside_text else padding_pixels
+            ),
+            padding_horizontal_pixels=(
+                osb_padding_pixels if is_outside_text else padding_horizontal_pixels
+            ),
+            padding_vertical_pixels=(
+                osb_padding_pixels if is_outside_text else padding_vertical_pixels
+            ),
             outline_width=(osb_outline_width if is_outside_text else 0.0),
             supersampling_factor=1,  # No supersampling for probe
             auto_vertical_text=(
@@ -127,7 +192,7 @@ def generate_test_placeholders(
                 rendered = render_text_skia(
                     pil_image=_probe_canvas,
                     text=test_text,
-                    bbox=bbox,
+                    bbox=render_bbox,
                     font_dir=font_dir,
                     cleaned_mask=cleaned_mask,
                     bubble_color_bgr=bubble_color_bgr,

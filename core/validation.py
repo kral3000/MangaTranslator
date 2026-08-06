@@ -10,6 +10,9 @@ SETTING_CONSTRAINTS: Dict[str, Tuple[float, float]] = {
     "panel_confidence": (0.05, 1.0),
     "thresholding_value": (0, 255),
     "roi_shrink_px": (0, 10),
+    "colored_bubble_inpainting_size": (256, 4096),
+    "colored_bubble_mask_kernel_size": (1, 31),
+    "colored_bubble_mask_dilation_offset": (0, 256),
     "temperature": (0.0, 2.0),
     "top_p": (0.0, 1.0),
     "top_k": (0, 64),
@@ -24,11 +27,23 @@ SETTING_CONSTRAINTS: Dict[str, Tuple[float, float]] = {
     "max_font_size": (5, 50),
     "min_font_size": (5, 50),
     "line_spacing_mult": (0.5, 2.0),
+    "emphasis_line_spacing_mult": (0.5, 2.0),
+    "vertical_line_spacing_mult": (0.5, 2.0),
+    "vertical_emphasis_line_spacing_mult": (0.5, 2.0),
+    "vertical_font_size_mult": (0.5, 2.0),
+    "vertical_max_chars": (0, 20),
+    "vertical_emphasis_max_chars": (0, 20),
     "hyphen_penalty": (100, 2000),
     "hyphenation_min_word_length": (4, 10),
     "badness_exponent": (2.0, 4.0),
     "padding_pixels": (2, 12),
+    "padding_horizontal_pixels": (0.0, 24.0),
+    "padding_vertical_pixels": (0.0, 24.0),
     "supersampling_factor": (1, 16),
+    "inside_light_outline_width": (0.0, 10.0),
+    "inside_dark_outline_width": (0.0, 10.0),
+    "outside_light_outline_width": (0.0, 10.0),
+    "outside_dark_outline_width": (0.0, 10.0),
     "outside_text_osb_confidence": (0.0, 1.0),
     "outside_text_bbox_expansion_percent": (0.0, 1.0),
     "outside_text_osb_render_expansion_narrow_multiplier": (1.0, 3.0),
@@ -38,17 +53,19 @@ SETTING_CONSTRAINTS: Dict[str, Tuple[float, float]] = {
     "outside_text_text_box_proximity_ratio": (0.01, 0.1),
     "outside_text_page_filter_margin_threshold": (0.0, 0.3),
     "outside_text_page_filter_min_area_ratio": (0.0, 0.2),
-    "outside_text_min_area_ignore_ratio": (0.0, 0.05),
     "outside_text_flux_num_inference_steps": (1, 30),
     "outside_text_flux_residual_diff_threshold": (0.0, 1.0),
-    "outside_text_osb_max_font_size": (5, 96),
-    "outside_text_osb_min_font_size": (5, 96),
+    "outside_text_osb_max_font_size": (5, 256),
+    "outside_text_osb_emphasis_max_font_size": (5, 256),
+    "outside_text_osb_min_font_size": (5, 256),
     "outside_text_osb_line_spacing": (0.5, 2.0),
+    "outside_text_osb_rotation_max_degrees": (0.0, 45.0),
     "outside_text_osb_outline_width": (0.0, 10.0),
+    "outside_text_osb_padding_pixels": (0.0, 128.0),
     "jpeg_quality": (1, 100),
     "png_compression": (0, 6),
     "image_upscale_factor": (1.0, 8.0),
-    "parallel_requests": (1, 20),
+    "parallel_requests": (1, 10),
 }
 
 # Attribute paths for clamping config objects (MangaTranslatorConfig and children)
@@ -58,6 +75,15 @@ _CONFIG_ATTR_PATHS: Dict[str, Tuple[Tuple[str, ...], ...]] = {
     "panel_confidence": (("detection", "panel_confidence"),),
     "thresholding_value": (("cleaning", "thresholding_value"),),
     "roi_shrink_px": (("cleaning", "roi_shrink_px"),),
+    "colored_bubble_inpainting_size": (
+        ("cleaning", "colored_bubble_inpainting_size"),
+    ),
+    "colored_bubble_mask_kernel_size": (
+        ("cleaning", "colored_bubble_mask_kernel_size"),
+    ),
+    "colored_bubble_mask_dilation_offset": (
+        ("cleaning", "colored_bubble_mask_dilation_offset"),
+    ),
     "temperature": (("translation", "temperature"),),
     "top_p": (("translation", "top_p"),),
     "top_k": (("translation", "top_k"),),
@@ -72,11 +98,23 @@ _CONFIG_ATTR_PATHS: Dict[str, Tuple[Tuple[str, ...], ...]] = {
     "max_font_size": (("rendering", "max_font_size"),),
     "min_font_size": (("rendering", "min_font_size"),),
     "line_spacing_mult": (("rendering", "line_spacing_mult"),),
+    "emphasis_line_spacing_mult": (("rendering", "emphasis_line_spacing_mult"),),
+    "vertical_line_spacing_mult": (("rendering", "vertical_line_spacing_mult"),),
+    "vertical_emphasis_line_spacing_mult": (("rendering", "vertical_emphasis_line_spacing_mult"),),
+    "vertical_font_size_mult": (("rendering", "vertical_font_size_mult"),),
+    "vertical_max_chars": (("rendering", "vertical_max_chars"),),
+    "vertical_emphasis_max_chars": (("rendering", "vertical_emphasis_max_chars"),),
     "hyphen_penalty": (("rendering", "hyphen_penalty"),),
     "hyphenation_min_word_length": (("rendering", "hyphenation_min_word_length"),),
     "badness_exponent": (("rendering", "badness_exponent"),),
     "padding_pixels": (("rendering", "padding_pixels"),),
+    "padding_horizontal_pixels": (("rendering", "padding_horizontal_pixels"),),
+    "padding_vertical_pixels": (("rendering", "padding_vertical_pixels"),),
     "supersampling_factor": (("rendering", "supersampling_factor"),),
+    "inside_light_outline_width": (("rendering", "inside_light_outline_width"),),
+    "inside_dark_outline_width": (("rendering", "inside_dark_outline_width"),),
+    "outside_light_outline_width": (("rendering", "outside_light_outline_width"),),
+    "outside_dark_outline_width": (("rendering", "outside_dark_outline_width"),),
     "outside_text_osb_confidence": (("outside_text", "osb_confidence"),),
     "outside_text_bbox_expansion_percent": (
         ("outside_text", "bbox_expansion_percent"),
@@ -102,7 +140,6 @@ _CONFIG_ATTR_PATHS: Dict[str, Tuple[Tuple[str, ...], ...]] = {
     "outside_text_page_filter_min_area_ratio": (
         ("outside_text", "page_filter_min_area_ratio"),
     ),
-    "outside_text_min_area_ignore_ratio": (("outside_text", "min_area_ignore_ratio"),),
     "outside_text_flux_num_inference_steps": (
         ("outside_text", "flux_num_inference_steps"),
     ),
@@ -110,9 +147,16 @@ _CONFIG_ATTR_PATHS: Dict[str, Tuple[Tuple[str, ...], ...]] = {
         ("outside_text", "flux_residual_diff_threshold"),
     ),
     "outside_text_osb_max_font_size": (("outside_text", "osb_max_font_size"),),
+    "outside_text_osb_emphasis_max_font_size": (
+        ("outside_text", "osb_emphasis_max_font_size"),
+    ),
     "outside_text_osb_min_font_size": (("outside_text", "osb_min_font_size"),),
     "outside_text_osb_line_spacing": (("outside_text", "osb_line_spacing"),),
+    "outside_text_osb_rotation_max_degrees": (
+        ("outside_text", "osb_rotation_max_degrees"),
+    ),
     "outside_text_osb_outline_width": (("outside_text", "osb_outline_width"),),
+    "outside_text_osb_padding_pixels": (("outside_text", "osb_padding_pixels"),),
     "jpeg_quality": (("output", "jpeg_quality"),),
     "png_compression": (("output", "png_compression"),),
     "image_upscale_factor": (
@@ -155,6 +199,8 @@ def clamp_settings(settings: Any) -> Any:
     for key, paths in _CONFIG_ATTR_PATHS.items():
         if not hasattr(settings, "__dict__"):
             break
+        if key not in SETTING_CONSTRAINTS:
+            continue
         min_val, max_val = SETTING_CONSTRAINTS[key]
         for path in paths:
             target = settings
@@ -252,6 +298,13 @@ def validate_core_inputs(
         and float(rendering_cfg.line_spacing_mult) > 0
     ):
         raise ValidationError("Line Spacing Multiplier must be a positive number.")
+    if rendering_cfg.emphasis_line_spacing_mult is not None and not (
+        isinstance(rendering_cfg.emphasis_line_spacing_mult, (int, float))
+        and float(rendering_cfg.emphasis_line_spacing_mult) > 0
+    ):
+        raise ValidationError(
+            "Emphasis Line Spacing Multiplier must be a positive number."
+        )
     if rendering_cfg.min_font_size > rendering_cfg.max_font_size:
         raise ValidationError("Min Font Size cannot be larger than Max Font Size.")
     if rendering_cfg.font_hinting not in ["none", "slight", "normal", "full"]:
@@ -309,11 +362,28 @@ def validate_config(config: MangaTranslatorConfig) -> None:
     validate_mutually_exclusive_modes(
         config.cleaning_only, config.upscaling_only, config.test_mode
     )
-    if (
-        config.outside_text.inpainting_method in ("flux_klein_9b", "flux_klein_4b")
-        and config.outside_text.flux_backend == "nunchaku"
-    ):
-        raise ValidationError("Nunchaku backend is only supported with Flux.1 Kontext.")
+
+
+def normalize_zip_file_input(zip_input: Any) -> str:
+    """
+    Normalizes ZIP file input from Gradio (handles both string and file-like objects).
+
+    Args:
+        zip_input: ZIP file input from Gradio (can be str or file-like object).
+
+    Returns:
+        str: Normalized file path as string.
+
+    Raises:
+        ValidationError: If the input format is invalid.
+    """
+    if isinstance(zip_input, str):
+        return zip_input
+    elif hasattr(zip_input, "name"):
+        zip_path = zip_input.name
+        return zip_path if isinstance(zip_path, str) else str(zip_path)
+    else:
+        raise ValidationError("Invalid ZIP file format.")
 
 
 def validate_zip_file(zip_path: Union[str, Path]) -> Path:

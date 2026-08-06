@@ -237,6 +237,7 @@ class UnifiedCache:
         previous_context_texts = previous_context_texts or []
 
         cache_params = {
+            "request_format_version": "embedded-item-label-v1",
             "provider": config.provider,
             "model_name": config.model_name,
             "input_language": config.input_language,

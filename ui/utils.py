@@ -12,14 +12,9 @@ from utils.endpoints import openrouter_is_reasoning_model
 from utils.exceptions import ValidationError
 from utils.logging import log_message
 from utils.model_metadata import (
-    anthropic_effort_config,
-    anthropic_omits_thinking_config,
-    anthropic_reasoning_effort_config,
-    anthropic_uses_adaptive_thinking_info,
     get_gpt5_generation,
     get_max_tokens_cap,
-    is_anthropic_model_family,
-    is_anthropic_no_sampling_model,
+    is_46_model,
     is_anthropic_reasoning_model,
     is_deepseek_reasoning_model,
     is_gemini_3_flash_model,
@@ -27,15 +22,15 @@ from utils.model_metadata import (
     is_gemini_25_flash_model,
     is_gemini_25_pro_model,
     is_gemma_model,
-    is_google_model_family,
     is_google_reasoning_model,
     is_gpt5_chat_variant,
     is_gpt5_series,
-    is_mimo_reasoning_model,
     is_moonshot_reasoning_model,
     is_openai_compatible_reasoning_model,
     is_openai_model_family,
     is_openai_reasoning_model,
+    is_opus_45_model,
+    is_opus_47_model,
     is_xai_reasoning_model,
     is_zai_reasoning_model,
     supports_openai_original_image_detail,
@@ -79,15 +74,6 @@ def get_available_font_packs(fonts_base_dir: Path) -> Tuple[List[str], Optional[
     return font_dirs, default_font
 
 
-def is_valid_google_api_key(api_key: str) -> bool:
-    """Return True for legacy traffic keys (AI...) or auth keys (AQ...)."""
-    if api_key.startswith("AI") and len(api_key) == 39:
-        return True
-    if api_key.startswith("AQ") and len(api_key) == 53:
-        return True
-    return False
-
-
 def validate_api_key(api_key: str, provider: str) -> tuple[bool, str]:
     """Validate API key format based on provider."""
     env_var_map = {
@@ -98,7 +84,6 @@ def validate_api_key(api_key: str, provider: str) -> tuple[bool, str]:
         "OpenRouter": "OPENROUTER_API_KEY",
         "DeepSeek": "DEEPSEEK_API_KEY",
         "Moonshot AI": "MOONSHOT_API_KEY",
-        "Xiaomi MiMo": "MIMO_API_KEY",
         "Z.ai": "ZAI_API_KEY",
         "OpenAI-Compatible": "OPENAI_COMPATIBLE_API_KEY",
     }
@@ -118,11 +103,8 @@ def validate_api_key(api_key: str, provider: str) -> tuple[bool, str]:
     elif not api_key and provider == "OpenAI-Compatible":
         return True, f"{provider} API key is optional and not provided."  # Valid state
 
-    if provider == "Google" and not is_valid_google_api_key(api_key):
-        return (
-            False,
-            "Invalid Google API key format (should start with 'AI' and be 39 chars, or start with 'AQ' and be 53 chars)",
-        )
+    if provider == "Google" and not api_key:
+        return False, "Google API key is required"
     if provider == "OpenAI" and not (api_key.startswith("sk-") and len(api_key) >= 48):
         return False, "Invalid OpenAI API key format (should start with 'sk-')"
     if provider == "Anthropic" and not (
@@ -139,13 +121,6 @@ def validate_api_key(api_key: str, provider: str) -> tuple[bool, str]:
         return False, "Invalid DeepSeek API key format (should start with 'sk-')"
     if provider == "Moonshot AI" and not api_key.startswith("sk-"):
         return False, "Invalid Moonshot AI API key format (should start with 'sk-')"
-    if provider == "Xiaomi MiMo" and not (
-        (api_key.startswith("sk-") or api_key.startswith("tp-")) and len(api_key) >= 8
-    ):
-        return (
-            False,
-            "Invalid Xiaomi MiMo API key format (should start with 'sk-' or 'tp-')",
-        )
     # No specific format check for Z.ai or OpenAI-Compatible keys
 
     return True, f"{provider} API key format looks valid"
@@ -174,7 +149,7 @@ def validate_image(image: Any) -> tuple[bool, str]:
         if isinstance(image, (str, Path)):
             img = Image.open(image)
             filepath = Path(image)
-            if filepath.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+            if not filepath.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
                 return False, "Unsupported image format. Please use JPEG, PNG or WEBP."
         elif isinstance(image, Image.Image):
             img = image
@@ -269,27 +244,55 @@ def refresh_models_and_fonts(fonts_base_dir: Path):
         )
         batch_font_result = gr.update(choices=font_packs, value=selected_batch_font_val)
 
+        current_emphasis_font = saved_settings.get("emphasis_font_pack", "")
+        selected_emphasis_font_val = (
+            current_emphasis_font if current_emphasis_font in font_packs else ""
+        )
+        emphasis_font_result = gr.update(
+            choices=[""] + font_packs, value=selected_emphasis_font_val
+        )
+
         current_osb_font = saved_settings.get("outside_text_osb_font_pack")
         selected_osb_font_val = (
             current_osb_font
             if current_osb_font in font_packs
-            else (font_packs[0] if font_packs else None)
+            else ""
         )
         osb_font_result = gr.update(
             choices=[""] + font_packs, value=selected_osb_font_val
+        )
+
+        current_osb_emphasis_font = saved_settings.get(
+            "outside_text_osb_emphasis_font_pack", ""
+        )
+        selected_osb_emphasis_font_val = (
+            current_osb_emphasis_font
+            if current_osb_emphasis_font in font_packs
+            else ""
+        )
+        osb_emphasis_font_result = gr.update(
+            choices=[""] + font_packs, value=selected_osb_emphasis_font_val
         )
 
         font_count = len(font_packs)
         font_text = "1 font pack" if font_count == 1 else f"{font_count} font packs"
         gr.Info(f"YOLO model auto-detected. Found {font_text}")
 
-        return single_font_result, batch_font_result, osb_font_result
+        return (
+            single_font_result,
+            batch_font_result,
+            emphasis_font_result,
+            osb_font_result,
+            osb_emphasis_font_result,
+        )
     except Exception as e:
         gr.Error(f"Error refreshing resources: {str(e)}")
         font_packs, _ = get_available_font_packs(fonts_base_dir)
         return (
             gr.update(choices=font_packs),
             gr.update(choices=font_packs),
+            gr.update(choices=[""] + font_packs),
+            gr.update(choices=[""] + font_packs),
             gr.update(choices=[""] + font_packs),
         )
 
@@ -318,8 +321,6 @@ def is_reasoning_model(provider: str, model_name: Optional[str]) -> bool:
         return is_zai_reasoning_model(model_name)
     elif provider == "Moonshot AI":
         return _is_moonshot_reasoning_model(model_name)
-    elif provider == "Xiaomi MiMo":
-        return is_mimo_reasoning_model(model_name)
     elif provider == "OpenRouter":
         try:
             return openrouter_is_reasoning_model(model_name, debug=False)
@@ -375,10 +376,6 @@ def get_enable_web_search_label_and_info(provider: str) -> Tuple[str, str]:
             "Use Moonshot AI's web search tool for up-to-date information. "
             "Might improve translation quality. Can be used with 'special instructions' to discover more information."
         ),
-        "Xiaomi MiMo": (
-            "Use Xiaomi MiMo's web search tool for up-to-date information. "
-            "Might improve translation quality. Can be used with 'special instructions' to discover more information."
-        ),
     }
 
     info = info_map.get(
@@ -422,15 +419,11 @@ def get_reasoning_effort_label(provider: str, model_name: Optional[str] = None) 
     ):
         return "Thinking Budget"
     elif provider == "OpenRouter":
-        if (
-            is_google_model_family(model_name)
-            and is_reasoning_model(provider, model_name)
-            and not gemini3
-        ):
+        lm = model_name.lower()
+        is_google_model = "google/" in lm or "gemini" in lm
+        if is_google_model and is_reasoning_model(provider, model_name) and not gemini3:
             return "Thinking Budget"
-        elif is_anthropic_model_family(model_name) and _is_anthropic_reasoning_model(
-            model_name
-        ):
+        elif _is_anthropic_reasoning_model(model_name):
             return "Extended Thinking"
     elif provider == "Anthropic" and _is_anthropic_reasoning_model(model_name):
         return "Extended Thinking"
@@ -450,10 +443,6 @@ def get_reasoning_effort_info_text(
         if is_gemini_3_model(model_name) or is_gemma_model(model_name):
             return "Controls model's internal reasoning effort."
         base_text = "Controls reasoning token allocation relative to 'max_tokens'"
-    elif provider == "Anthropic":
-        if anthropic_uses_adaptive_thinking_info(model_name):
-            return "Enables or disables adaptive thinking (auto=model decides, none=disabled)."
-        base_text = "Controls reasoning token allocation relative to 'max_tokens'"
     elif provider == "OpenAI":
         return "Controls model's internal reasoning effort."
     elif provider == "xAI":
@@ -466,9 +455,7 @@ def get_reasoning_effort_info_text(
             return "Controls model's internal reasoning effort."
         return "Grok reasons automatically; no configurable reasoning effort is sent."
     elif provider == "Moonshot AI":
-        return "Enables or disables model thinking (auto=enabled, none=disabled)."
-    elif provider == "Xiaomi MiMo":
-        return "Enables or disables model thinking (auto=enabled, none=disabled)."
+        return "Enables or disables model thinking (high=enabled, none=disabled)."
     elif provider == "DeepSeek":
         return (
             "Controls thinking mode (high=default, max=deep reasoning, none=disabled)."
@@ -476,24 +463,17 @@ def get_reasoning_effort_info_text(
     elif provider == "Z.ai":
         return "Enables or disables model thinking (auto=enabled, none=disabled)."
     elif provider == "OpenRouter" and model_name:
-        if is_anthropic_model_family(
+        lm = model_name.lower()
+        is_openai_reasoning = (
+            "gpt-5" in lm or "o1" in lm or "o3" in lm or "o4-mini" in lm
+        )
+        uses_thinking_level = is_gemini_3_model(model_name) or is_gemma_model(
             model_name
-        ) and anthropic_uses_adaptive_thinking_info(model_name):
-            return "Enables or disables adaptive thinking (auto=model decides, none=disabled)."
-        elif (
-            is_anthropic_model_family(model_name)
-            and is_anthropic_reasoning_model(model_name)
-            and not anthropic_omits_thinking_config(model_name)
-        ):
-            base_text = "Controls reasoning token allocation relative to 'max_tokens'"
-        elif (
-            (
-                is_openai_model_family(model_name)
-                and is_openai_reasoning_model(model_name)
-            )
+        )
+        if (
+            is_openai_reasoning
             or is_xai_reasoning_model(model_name)
-            or is_gemini_3_model(model_name)
-            or is_gemma_model(model_name)
+            or uses_thinking_level
         ):
             return "Controls model's internal reasoning effort."
         else:
@@ -565,10 +545,10 @@ def get_reasoning_effort_config(
 
         if is_gemini_3_model(model_name):
             if "flash" in lm:
-                return True, ["high", "medium", "low", "minimal"], "medium"
+                return True, ["high", "medium", "low", "minimal"], "high"
             if "gemini-3.1" in lm:
-                return True, ["high", "medium", "low"], "medium"
-            return True, ["high", "medium", "low"], "medium"
+                return True, ["high", "medium", "low"], "high"
+            return True, ["high", "low"], "high"
 
         if is_gemini_25_flash_model(model_name) or is_gemini_25_pro_model(model_name):
             return True, ["auto", "high", "medium", "low", "minimal", "none"], "auto"
@@ -598,18 +578,25 @@ def get_reasoning_effort_config(
         if gen == "5":
             return True, ["high", "medium", "low", "minimal"], "medium"
 
-        # o3
+        # o1, o3, o4-mini
         return True, ["high", "medium", "low"], "medium"
 
     elif provider == "Anthropic":
-        return anthropic_reasoning_effort_config(model_name)
+        is_reasoning = _is_anthropic_reasoning_model(model_name)
+        if not is_reasoning:
+            return False, [], None
+        # Claude 4.6/4.7 models use adaptive thinking
+        if is_46_model(model_name) or is_opus_47_model(model_name):
+            return True, ["auto", "none"], "auto"
+        # Older models use budget-based thinking
+        return True, ["high", "medium", "low", "none"], "low"
 
     elif provider == "xAI":
         if not supports_xai_reasoning_parameter(model_name):
             return False, [], None
         if "multi-agent" in lm:
-            return True, ["xhigh", "high", "medium", "low"], "medium"
-        return True, ["high", "medium", "low", "none"], "medium"
+            return True, ["xhigh", "high", "medium", "low"], "high"
+        return True, ["high", "medium", "low", "none"], "low"
 
     elif provider == "DeepSeek":
         is_reasoning = is_deepseek_reasoning_model(model_name)
@@ -626,17 +613,13 @@ def get_reasoning_effort_config(
 
     elif provider == "Moonshot AI":
         if "kimi-k2." in lm:
-            return True, ["auto", "none"], "auto"
-        return False, [], None
-
-    elif provider == "Xiaomi MiMo":
-        if is_mimo_reasoning_model(model_name):
-            return True, ["auto", "none"], "auto"
+            return True, ["high", "none"], "high"
         return False, [], None
 
     elif provider == "OpenRouter":
-        lm = model_name.lower()
-        if is_google_model_family(model_name):
+        is_google_model = "google/" in lm or "gemini" in lm or "gemma" in lm
+
+        if is_google_model:
             is_reasoning = is_reasoning_model(provider, model_name)
             if not is_reasoning:
                 return False, [], None
@@ -644,10 +627,7 @@ def get_reasoning_effort_config(
             if is_gemma_model(model_name):
                 return True, ["high", "minimal"], "high"
 
-            return True, ["xhigh", "high", "medium", "low", "minimal", "none"], "medium"
-
-        if is_anthropic_model_family(model_name):
-            return anthropic_reasoning_effort_config(model_name)
+            return True, ["xhigh", "high", "medium", "low", "minimal", "none"], "low"
 
         try:
             is_reasoning = openrouter_is_reasoning_model(model_name, debug=False)
@@ -655,9 +635,13 @@ def get_reasoning_effort_config(
             is_reasoning = False
 
         if is_reasoning:
-            return True, ["xhigh", "high", "medium", "low", "minimal", "none"], "medium"
+            return True, ["xhigh", "high", "medium", "low", "minimal", "none"], "low"
 
-        return False, [], None
+        is_anthropic_model = "anthropic/" in lm or lm.startswith("claude-")
+        if is_anthropic_model:
+            return False, [], "none"
+        else:
+            return False, [], None
 
     elif provider == "OpenAI-Compatible":
         return False, [], None
@@ -669,17 +653,23 @@ def get_effort_config(
     provider: str, model_name: Optional[str]
 ) -> Tuple[bool, List[str], Optional[str]]:
     """
-    Get effort configuration for Claude Opus 4.5+ and Sonnet 4.6 models (Anthropic/OpenRouter).
+    Get effort configuration for Claude Opus/Sonnet 4.6 and Opus 4.5 models (Anthropic/OpenRouter).
 
     Returns:
         Tuple of (visible, choices, default_value)
     """
     if provider not in ("Anthropic", "OpenRouter"):
         return False, [], None
-    if provider == "OpenRouter" and not is_anthropic_model_family(model_name):
-        return False, [], None
 
-    return anthropic_effort_config(model_name)
+    if is_opus_47_model(model_name):
+        return True, ["max", "xhigh", "high", "medium", "low"], "medium"
+    elif is_46_model(model_name):
+        # Claude 4.6 models (Opus/Sonnet) support "max" effort level
+        return True, ["max", "high", "medium", "low"], "medium"
+    elif is_opus_45_model(model_name):
+        return True, ["high", "medium", "low"], "medium"
+    else:
+        return False, [], None
 
 
 def get_verbosity_config(
@@ -706,7 +696,7 @@ def get_sampling_interactivity_for_effort(
     """Whether temp/top_p sliders should be interactive given the current reasoning effort.
 
     For GPT-5 series (non-chat): only allowed when effort is 'none' or 'minimal'.
-    For other OpenAI reasoning models (o3): never allowed.
+    For other OpenAI reasoning models (o1, o3, o4-mini): never allowed.
     For DeepSeek reasoning models: only allowed when effort is 'none'.
     Returns (temp_interactive, top_p_interactive).
     """
@@ -725,77 +715,6 @@ def get_sampling_interactivity_for_effort(
         return allow, allow
 
     return False, False
-
-
-def _model_disallows_all_sampling_params(
-    provider: str, model_name: Optional[str]
-) -> bool:
-    """Models that reject temperature/top-k at the API (e.g. Claude Opus 4.7+)."""
-    if provider == "Anthropic":
-        return is_anthropic_no_sampling_model(model_name)
-    if provider == "OpenRouter" and is_anthropic_model_family(model_name):
-        return is_anthropic_no_sampling_model(model_name)
-    return False
-
-
-def get_sampling_slider_interactivity(
-    provider: str,
-    model_name: Optional[str],
-    reasoning_effort: Optional[str] = None,
-    use_custom_sampling: bool = True,
-) -> Tuple[bool, bool, bool]:
-    """Return (temp, top_p, top_k) slider interactivity for the current provider/model."""
-    if not use_custom_sampling:
-        return False, False, False
-
-    temp_interactive, top_p_interactive = get_sampling_interactivity_for_effort(
-        provider, model_name, reasoning_effort
-    )
-    top_k_interactive = True
-
-    if provider == "Anthropic":
-        top_k_interactive = False
-        top_p_interactive = False
-    elif provider in (
-        "OpenAI",
-        "xAI",
-        "DeepSeek",
-        "Z.ai",
-        "Moonshot AI",
-        "Xiaomi MiMo",
-    ):
-        top_k_interactive = False
-    elif provider == "OpenRouter":
-        is_anthropic_model = is_anthropic_model_family(model_name)
-        is_openai_model = is_openai_model_family(model_name)
-        if is_anthropic_model:
-            top_p_interactive = False
-        if is_openai_model or is_anthropic_model:
-            top_k_interactive = False
-
-    if _model_disallows_all_sampling_params(provider, model_name):
-        temp_interactive = False
-        top_k_interactive = False
-
-    return temp_interactive, top_p_interactive, top_k_interactive
-
-
-def is_use_custom_sampling_visible(
-    provider: str,
-    model_name: Optional[str],
-    reasoning_effort: Optional[str] = None,
-) -> bool:
-    """Show the toggle only when at least one sampling slider can be adjusted."""
-    temp, top_p, top_k = get_sampling_slider_interactivity(
-        provider, model_name, reasoning_effort, use_custom_sampling=True
-    )
-    return temp or top_p or top_k
-
-
-def get_temperature_max(provider: str, model_name: Optional[str]) -> float:
-    if provider == "Anthropic" or is_anthropic_model_family(model_name):
-        return 1.0
-    return 2.0
 
 
 def get_media_resolution_config(
@@ -847,15 +766,12 @@ def is_code_execution_visible(provider: str, model_name: Optional[str]) -> bool:
     return provider == "Google" and is_gemini_3_flash_model(model_name)
 
 
-def update_translation_ui(
-    provider: str,
-    ocr_method: str = "LLM",
-    use_custom_sampling: bool = True,
-):
+def update_translation_ui(provider: str, _current_temp: float, ocr_method: str = "LLM"):
     """Updates API key/URL visibility, model dropdown, temp slider max, and top_k interactivity.
 
     Args:
         provider: The selected translation provider
+        _current_temp: Current temperature value (unused but kept for compatibility)
         ocr_method: OCR method ("LLM", "manga-ocr", or "paddleocr-vl"). Used to filter vision-only models.
     """
     saved_settings = get_saved_settings()
@@ -870,8 +786,6 @@ def update_translation_ui(
         models = [m for m in models if "v" in m]
     elif provider == "Moonshot AI" and ocr_method == "LLM":
         models = [m for m in models if "kimi-k2." in m.lower()]
-    elif provider == "Xiaomi MiMo" and ocr_method == "LLM":
-        models = [m for m in models if m.lower() == "mimo-v2.5"]
 
     selected_model = (
         remembered_model
@@ -887,7 +801,6 @@ def update_translation_ui(
     deepseek_visible_update = gr.update(visible=(provider == "DeepSeek"))
     zai_visible_update = gr.update(visible=(provider == "Z.ai"))
     moonshot_visible_update = gr.update(visible=(provider == "Moonshot AI"))
-    mimo_visible_update = gr.update(visible=(provider == "Xiaomi MiMo"))
     openrouter_visible_update = gr.update(visible=(provider == "OpenRouter"))
     openai_compatible_url_visible_update = gr.update(
         visible=(provider == "OpenAI-Compatible")
@@ -908,24 +821,29 @@ def update_translation_ui(
     default_top_p = float(sampling_defaults["top_p"])
     default_top_k = int(sampling_defaults["top_k"])
 
-    temp_max = get_temperature_max(provider, remembered_model)
+    temp_max = 1.0 if provider == "Anthropic" else 2.0
     new_temp_value = min(default_temp, temp_max)
 
-    temp_interactive, top_p_interactive, top_k_interactive = (
-        get_sampling_slider_interactivity(
-            provider, remembered_model, use_custom_sampling=use_custom_sampling
-        )
+    top_k_interactive = provider not in (
+        "OpenAI",
+        "Anthropic",
+        "xAI",
+        "DeepSeek",
+        "Z.ai",
+        "Moonshot AI",
     )
-    use_custom_sampling_visible = is_use_custom_sampling_visible(
+    top_p_interactive = provider != "Anthropic"
+    temp_interactive, sampling_ok = get_sampling_interactivity_for_effort(
         provider, remembered_model
     )
+    if not sampling_ok:
+        top_p_interactive = False
 
     temp_update = gr.update(
         maximum=temp_max, value=new_temp_value, interactive=temp_interactive
     )
     top_k_update = gr.update(interactive=top_k_interactive, value=default_top_k)
     top_p_update = gr.update(value=default_top_p, interactive=top_p_interactive)
-    use_custom_sampling_update = gr.update(visible=use_custom_sampling_visible)
 
     if remembered_model:
         is_reasoning = is_reasoning_model(provider, remembered_model)
@@ -1006,7 +924,7 @@ def update_translation_ui(
         info=reasoning_info_text,
     )
 
-    # Effort dropdown (Claude Opus 4.5+ and Sonnet 4.6)
+    # Effort dropdown (Claude Opus 4.5/4.6/4.7 and Sonnet 4.6)
     effort_visible, effort_choices, effort_default_value = get_effort_config(
         provider, remembered_model
     )
@@ -1051,7 +969,6 @@ def update_translation_ui(
         deepseek_visible_update,
         zai_visible_update,
         moonshot_visible_update,
-        mimo_visible_update,
         openrouter_visible_update,
         openai_compatible_url_visible_update,
         openai_compatible_key_visible_update,
@@ -1060,7 +977,6 @@ def update_translation_ui(
         top_p_update,
         top_k_update,
         max_tokens_update,
-        use_custom_sampling_update,
         enable_web_search_update,
         enable_code_execution_update,
         image_detail_update,
@@ -1074,22 +990,42 @@ def update_translation_ui(
 
 
 def update_params_for_model(
-    provider: str,
-    model_name: Optional[str],
-    current_temp: float,
-    use_custom_sampling: bool = True,
+    provider: str, model_name: Optional[str], current_temp: float
 ):
     """Adjusts temp/top_k sliders and visibility toggles based on selected provider/model."""
     if not provider:
         return gr.update(), gr.update()
 
-    temp_max = get_temperature_max(provider, model_name)
-    temp_interactive, top_p_interactive, top_k_interactive = (
-        get_sampling_slider_interactivity(
-            provider, model_name, use_custom_sampling=use_custom_sampling
+    temp_max = 2.0
+    top_k_interactive = True
+    top_p_interactive = True
+
+    if provider == "Anthropic":
+        temp_max = 1.0
+        top_k_interactive = False
+        top_p_interactive = False
+    elif provider in ("OpenAI", "xAI", "DeepSeek", "Moonshot AI"):
+        top_k_interactive = False
+    elif provider == "OpenRouter":
+        is_openai_model = model_name and (
+            "openai/" in model_name or model_name.startswith("gpt-")
         )
+        is_anthropic_model = model_name and (
+            "anthropic/" in model_name or model_name.startswith("claude-")
+        )
+        if is_anthropic_model:
+            temp_max = 1.0
+            top_p_interactive = False
+        if is_openai_model or is_anthropic_model:
+            top_k_interactive = False
+    elif provider == "OpenAI-Compatible":
+        pass
+
+    temp_interactive, sampling_ok = get_sampling_interactivity_for_effort(
+        provider, model_name
     )
-    use_custom_sampling_visible = is_use_custom_sampling_visible(provider, model_name)
+    if not sampling_ok:
+        top_p_interactive = False
 
     new_temp_value = min(current_temp, temp_max)
     temp_update = gr.update(
@@ -1098,7 +1034,6 @@ def update_params_for_model(
 
     top_k_update = gr.update(interactive=top_k_interactive)
     top_p_update = gr.update(interactive=top_p_interactive)
-    use_custom_sampling_update = gr.update(visible=use_custom_sampling_visible)
 
     is_gemini_3_google = provider == "Google" and is_gemini_3_model(model_name)
     is_gemini_3_openrouter = provider == "OpenRouter" and is_gemini_3_model(model_name)
@@ -1183,7 +1118,7 @@ def update_params_for_model(
     max_tokens_maximum = max_tokens_cap if max_tokens_cap is not None else 63488
     max_tokens_update = gr.update(value=max_tokens_value, maximum=max_tokens_maximum)
 
-    # Effort dropdown (Claude Opus 4.5+ and Sonnet 4.6)
+    # Effort dropdown (Claude Opus 4.5/4.6/4.7 and Sonnet 4.6)
     effort_visible, effort_choices, effort_default_value = get_effort_config(
         provider, model_name
     )
@@ -1212,7 +1147,6 @@ def update_params_for_model(
         top_p_update,
         top_k_update,
         max_tokens_update,
-        use_custom_sampling_update,
         enable_web_search_update,
         enable_code_execution_update,
         image_detail_update,
@@ -1252,6 +1186,7 @@ def fetch_and_update_openrouter_models(
     Args:
         ocr_method: "LLM" for vision-capable models, "manga-ocr"/"paddleocr-vl" for text-only models
     """
+    global OPENROUTER_MODEL_CACHE
     verbose = get_saved_settings().get("verbose", False)
 
     # Check if we have cached raw response
@@ -1339,6 +1274,7 @@ def fetch_and_update_compatible_models(
         current_model: Currently selected model in the dropdown to preserve when available.
         force_refresh: If True, bypass cache and re-fetch models from the endpoint.
     """
+    global COMPATIBLE_MODEL_CACHE
     verbose = get_saved_settings().get("verbose", False)
     if not url or not url.startswith(("http://", "https://")):
         gr.Warning(
@@ -1472,7 +1408,7 @@ def format_thinking_status(
     thinking_status_str = ""
     if provider == "Google" and model_name:
         if is_gemini_3_model(model_name):
-            effort = reasoning_effort or "medium"
+            effort = reasoning_effort or "high"
             thinking_status_str = f" (thinking: {effort})"
         elif is_gemini_25_flash_model(model_name):
             effort = reasoning_effort or "auto"
@@ -1481,13 +1417,15 @@ def format_thinking_status(
             else:
                 thinking_status_str = f" (thinking: {effort})"
     elif provider == "OpenRouter" and is_gemini_3_model(model_name):
-        effort = reasoning_effort or "medium"
+        effort = reasoning_effort or "high"
         thinking_status_str = f" (thinking: {effort})"
-    elif (
-        provider == "Anthropic"
-        or (provider == "OpenRouter" and is_anthropic_model_family(model_name))
-    ) and is_anthropic_reasoning_model(model_name):
-        if not anthropic_omits_thinking_config(model_name):
+    elif provider == "Anthropic" and model_name:
+        lm = model_name.lower()
+        if (
+            lm.startswith("claude-opus-4")
+            or lm.startswith("claude-sonnet-4")
+            or lm.startswith("claude-haiku-4-5")
+        ):
             effort = reasoning_effort or "none"
             if effort == "none":
                 thinking_status_str = " (no thinking)"
@@ -1495,3 +1433,57 @@ def format_thinking_status(
                 thinking_status_str = f" (thinking: {effort})"
 
     return thinking_status_str
+
+# VERTEX_JSON_FINAL_VALIDATE_PATCH_BEGIN
+# Allows the Google API Key field to accept full Google service-account JSON.
+# Important: original signature is validate_api_key(api_key, provider).
+if "_MANGATL_ORIGINAL_VALIDATE_API_KEY" not in globals():
+    _MANGATL_ORIGINAL_VALIDATE_API_KEY = validate_api_key
+
+
+def _mangatl_vertex_json_final_is_service_account(value: str) -> bool:
+    import json
+    from pathlib import Path
+
+    text = (value or "").strip()
+
+    if text.startswith("{") and text.endswith("}"):
+        try:
+            info = json.loads(text)
+        except Exception:
+            return False
+        return (
+            info.get("type") == "service_account"
+            and bool(info.get("project_id"))
+            and bool(info.get("client_email"))
+            and bool(info.get("private_key"))
+            and bool(info.get("token_uri"))
+        )
+
+    path_text = text.strip('"')
+    if path_text.lower().endswith(".json"):
+        try:
+            p = Path(path_text)
+            if not p.exists() or not p.is_file():
+                return False
+            info = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        return (
+            info.get("type") == "service_account"
+            and bool(info.get("project_id"))
+            and bool(info.get("client_email"))
+            and bool(info.get("private_key"))
+            and bool(info.get("token_uri"))
+        )
+
+    return False
+
+
+def validate_api_key(api_key: str, provider: str):
+    if provider == "Google" and _mangatl_vertex_json_final_is_service_account(api_key):
+        return True, "Google service-account JSON format looks valid"
+    return _MANGATL_ORIGINAL_VALIDATE_API_KEY(api_key, provider)
+
+
+# VERTEX_JSON_FINAL_VALIDATE_PATCH_END
