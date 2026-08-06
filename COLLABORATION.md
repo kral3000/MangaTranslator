@@ -56,3 +56,7 @@
 작업을 마칠 때마다 아래에 새 항목을 맨 위에 추가한다 (날짜, 작업자, 요약, 변경 파일).
 
 - 2026-08-06 (Claude): `core/pipeline.py`의 `detect_panels()` 중복 호출 제거. 패널 정렬 사용 시 이미지 1장당 `detect_panels()`가 두 번(사전 정렬용 + 최종 정렬용) 호출되던 것을, 첫 호출 결과(`_panels_detected_early`)를 재사용하도록 수정. `ENABLE_COMPONENT_ORDER_DEBUG` 디버그 경로는 건드리지 않음(그쪽은 여전히 별도로 재탐지). 변경 파일: `core/pipeline.py`.
+
+## 커밋 규칙
+
+커밋 메시지에 작업 에이전트를 명시하는 규칙은 [`CLAUDE.md`](./CLAUDE.md)/[`AGENTS.md`](./AGENTS.md)에 있다.
