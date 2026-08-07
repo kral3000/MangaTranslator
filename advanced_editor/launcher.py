@@ -19,6 +19,7 @@ import numpy as np
 from fontTools.ttLib import TTFont
 from PIL import Image
 from PyQt6.QtCore import (
+    QByteArray,
     QObject,
     QPointF,
     QRect,
@@ -36,6 +37,7 @@ from PyQt6.QtGui import (
     QFontDatabase,
     QFontMetrics,
     QImage,
+    QIcon,
     QKeySequence,
     QMouseEvent,
     QPainter,
@@ -56,19 +58,23 @@ from PyQt6.QtWidgets import (
     QLabel,
     QListWidget,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
     QScrollBar,
     QSlider,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTabWidget,
     QTextEdit,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
+from PyQt6.QtSvg import QSvgRenderer
 
 from advanced_editor.backend import (
     detect_and_recognize,
@@ -108,14 +114,57 @@ TOOLS = {
 
 TOOL_RAIL_LABELS = {
     "select": "선택",
-    "textbox": "텍스트",
-    "inpaint_brush": "지우기",
-    "inpaint_eraser": "지우기 취소",
-    "paint_brush": "그리기",
+    "textbox": "텍스트 박스",
+    "inpaint_brush": "인페인팅 브러시",
+    "inpaint_eraser": "인페인팅 마스크 지우개",
+    "paint_brush": "그리기 브러시",
     "paint_eraser": "그리기 지우개",
-    "restore_brush": "원본 복구",
-    "restore_eraser": "복구 취소",
+    "restore_brush": "원본 복구 브러시",
+    "restore_eraser": "원본 복구 지우개",
 }
+
+EDITOR_ICON_PATHS = {
+    "select": '<path d="M5 3l11 10-6 1 3 6-3 1-3-6-4 4z"/>',
+    "textbox": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 8h8M12 8v8M9 16h6"/>',
+    "brush": '<path d="M14 4l6 6-9 9H5v-6z"/><path d="M4 20c2 0 3-1 3-3"/>',
+    "eraser": '<path d="M13 4l7 7-8 8H7l-4-4z"/><path d="M9 19h11"/>',
+    "restore": '<path d="M4 8V3m0 0h5M4 3l4 4"/><path d="M5 13a8 8 0 1 0 2-7"/>',
+    "undo": '<path d="M9 7H4V2"/><path d="M4 7l4-4"/><path d="M5 7h8a6 6 0 0 1 0 12H9"/>',
+    "redo": '<path d="M15 7h5V2"/><path d="M20 7l-4-4"/><path d="M19 7h-8a6 6 0 0 0 0 12h4"/>',
+    "history": '<circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/>',
+    "save": '<path d="M4 3h13l3 3v15H4z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/>',
+    "export": '<path d="M14 3h7v7M21 3l-10 10"/><path d="M18 14v7H3V6h7"/>',
+    "add": '<path d="M12 5v14M5 12h14"/>',
+    "trash": '<path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/>',
+    "refresh": '<path d="M20 7V3l-3 3a8 8 0 1 0 2 9"/>',
+    "folder": '<path d="M3 6h7l2 2h9v12H3z"/>',
+    "play": '<path d="M8 5l11 7-11 7z"/>',
+    "palette": '<path d="M12 3a9 9 0 0 0 0 18h2a2 2 0 0 0 0-4h-1a2 2 0 0 1 0-4h4a4 4 0 0 0 4-4c0-4-4-6-9-6z"/><path d="M7 10h.01M9 6h.01M14 6h.01M18 9h.01"/>',
+    "bold": '<path d="M7 4h6a4 4 0 0 1 0 8H7zM7 12h7a4 4 0 0 1 0 8H7z"/>',
+    "italic": '<path d="M10 4h8M6 20h8M14 4L10 20"/>',
+    "hand": '<path d="M7 12V7a2 2 0 0 1 4 0v3-5a2 2 0 0 1 4 0v5-3a2 2 0 0 1 4 0v7c0 5-3 7-7 7-3 0-5-2-7-5l-2-3a2 2 0 0 1 4-2z"/>',
+    "fit": '<path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/>',
+    "reset": '<path d="M4 8V3m0 0h5M4 3l4 4"/><path d="M5 13a8 8 0 1 0 2-7"/>',
+    "minus": '<path d="M5 12h14"/>',
+    "action": '<path d="M5 12h14M14 6l6 6-6 6"/>',
+}
+
+
+def _editor_icon(name: str, color: str = "#e5e7eb") -> QIcon:
+    paths = EDITOR_ICON_PATHS.get(name, EDITOR_ICON_PATHS["select"])
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" '
+        f'stroke="{color}" stroke-width="1.8" stroke-linecap="round" '
+        f'stroke-linejoin="round">{paths}</svg>'
+    )
+    renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+    pixmap = QPixmap(24, 24)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    renderer.render(painter)
+    painter.end()
+    return QIcon(pixmap)
 
 
 class ResizableTextEdit(QTextEdit):
@@ -976,7 +1025,12 @@ class EditorCanvas(QWidget):
             if not self.drag_has_moved:
                 self.drag_has_moved = True
                 if self.drag_mode in {"move", "nw", "ne", "sw", "se"}:
-                    self.window._push_history()
+                    label = (
+                        "텍스트 박스 이동"
+                        if self.drag_mode == "move"
+                        else "텍스트 박스 크기 조절"
+                    )
+                    self.window._push_history(label)
                     self.drag_history_pushed = True
             self.window.update_selected_bbox_from_drag(self.drag_mode, self.drag_start_bbox, self.drag_start_image, image_pos)
             self.update()
@@ -1093,13 +1147,19 @@ class AdvancedEditorWindow(QMainWindow):
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(250)
         self._preview_timer.timeout.connect(self.refresh_exact_preview)
+        self._translation_history_active = False
+        self._translation_history_timer = QTimer(self)
+        self._translation_history_timer.setSingleShot(True)
+        self._translation_history_timer.setInterval(800)
+        self._translation_history_timer.timeout.connect(
+            lambda: setattr(self, "_translation_history_active", False)
+        )
 
         self.setWindowTitle(f"MangaTranslator 고급 편집기 - {self.session_path.name}")
         self.setMinimumSize(1200 if len(self.related_session_paths) > 1 else 1120, 680)
         self._build_ui()
         self.apply_editor_preset(1, persist=False, show_status=False)
         self._fit_initial_window()
-        self._push_history()
         self.reload_display_image()
         self.refresh_region_list()
         self.load_selected_region_to_form()
@@ -1187,15 +1247,28 @@ class AdvancedEditorWindow(QMainWindow):
         tool_toolbar.setMovable(False)
         tool_toolbar.setFloatable(False)
         tool_toolbar.setAllowedAreas(Qt.ToolBarArea.LeftToolBarArea)
-        tool_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        tool_toolbar.setMinimumWidth(88)
-        tool_toolbar.setMaximumWidth(108)
+        tool_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        tool_toolbar.setIconSize(QSize(20, 20))
+        tool_toolbar.setMinimumWidth(160)
+        tool_toolbar.setMaximumWidth(180)
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, tool_toolbar)
         self.tool_toolbar = tool_toolbar
 
         self.tool_actions: dict[str, QAction] = {}
+        tool_icons = {
+            "select": "select",
+            "textbox": "textbox",
+            "inpaint_brush": "brush",
+            "inpaint_eraser": "eraser",
+            "paint_brush": "brush",
+            "paint_eraser": "eraser",
+            "restore_brush": "restore",
+            "restore_eraser": "eraser",
+        }
         for key, label in TOOLS.items():
-            action = QAction(TOOL_RAIL_LABELS[key], self)
+            action = QAction(
+                _editor_icon(tool_icons[key]), TOOL_RAIL_LABELS[key], self
+            )
             action.setToolTip(label)
             action.setCheckable(True)
             action.triggered.connect(lambda checked=False, tool=key: self.set_tool(tool))
@@ -1208,31 +1281,70 @@ class AdvancedEditorWindow(QMainWindow):
         action_toolbar.setMovable(False)
         action_toolbar.setFloatable(False)
         action_toolbar.setAllowedAreas(Qt.ToolBarArea.TopToolBarArea)
-        action_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        action_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        action_toolbar.setIconSize(QSize(18, 18))
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, action_toolbar)
         self.action_toolbar = action_toolbar
 
-        undo_action = QAction("실행 취소", self)
-        undo_action.setShortcut(QKeySequence.StandardKey.Undo)
-        undo_action.triggered.connect(self.undo)
-        action_toolbar.addAction(undo_action)
-        redo_action = QAction("다시 실행", self)
-        redo_action.setShortcut(QKeySequence.StandardKey.Redo)
-        redo_action.triggered.connect(self.redo)
-        action_toolbar.addAction(redo_action)
+        self.undo_action = QAction(_editor_icon("undo"), "실행 취소", self)
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.undo_action.triggered.connect(self.undo)
+        action_toolbar.addAction(self.undo_action)
+        self.redo_action = QAction(_editor_icon("redo"), "다시 실행", self)
+        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self.redo_action.triggered.connect(self.redo)
+        action_toolbar.addAction(self.redo_action)
+
+        self.history_menu = QMenu(self)
+        self.history_button = QToolButton(self)
+        self.history_button.setText("기록")
+        self.history_button.setIcon(_editor_icon("history"))
+        self.history_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.history_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.history_button.setMenu(self.history_menu)
+        action_toolbar.addWidget(self.history_button)
         action_toolbar.addSeparator()
 
-        render_action = QAction("저장", self)
-        render_action.setShortcut(QKeySequence("Ctrl+S"))
-        render_action.setToolTip("저장 (Ctrl+S)")
-        render_action.triggered.connect(self.render_and_save)
-        action_toolbar.addAction(render_action)
+        brush_label = QLabel("브러시 크기")
+        brush_label.setObjectName("TopBarLabel")
+        action_toolbar.addWidget(brush_label)
+        self.brush_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brush_slider.setObjectName("TopBarBrushSlider")
+        self.brush_slider.setRange(5, 200)
+        self.brush_slider.setValue(self.brush_size)
+        self.brush_slider.setFixedWidth(120)
+        self.brush_slider.valueChanged.connect(self._on_brush_size_changed)
+        action_toolbar.addWidget(self.brush_slider)
+        self.brush_size_spin = QSpinBox()
+        self.brush_size_spin.setRange(5, 200)
+        self.brush_size_spin.setSuffix(" px")
+        self.brush_size_spin.setValue(self.brush_size)
+        self.brush_size_spin.setFixedWidth(76)
+        self.brush_size_spin.valueChanged.connect(self.brush_slider.setValue)
+        self.brush_slider.valueChanged.connect(self.brush_size_spin.setValue)
+        action_toolbar.addWidget(self.brush_size_spin)
 
-        plain_render_action = QAction("내보내기", self)
-        plain_render_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
-        plain_render_action.setToolTip("편집 정보 제거 저장 (Ctrl+Shift+S)")
-        plain_render_action.triggered.connect(self.save_plain_rendered_image)
-        action_toolbar.addAction(plain_render_action)
+        toolbar_spacer = QWidget(self)
+        toolbar_spacer.setObjectName("TopBarSpacer")
+        toolbar_spacer.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        action_toolbar.addWidget(toolbar_spacer)
+
+        self.render_action = QAction(_editor_icon("save"), "저장", self)
+        self.render_action.setShortcut(QKeySequence("Ctrl+S"))
+        self.render_action.setToolTip("편집 세션과 결과 저장 (Ctrl+S)")
+        self.render_action.triggered.connect(self.render_and_save)
+        action_toolbar.addAction(self.render_action)
+
+        self.plain_render_action = QAction(_editor_icon("export"), "내보내기", self)
+        self.plain_render_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self.plain_render_action.setToolTip("편집 정보가 없는 이미지로 내보내기 (Ctrl+Shift+S)")
+        self.plain_render_action.triggered.connect(self.save_plain_rendered_image)
+        action_toolbar.addAction(self.plain_render_action)
+        save_button = action_toolbar.widgetForAction(self.render_action)
+        if save_button is not None:
+            save_button.setProperty("toolbarRole", "primary")
 
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -1341,6 +1453,8 @@ class AdvancedEditorWindow(QMainWindow):
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setStretchFactor(2, 0)
+        self._apply_button_icons(central)
+        self._refresh_history_menu()
 
     def _apply_theme(self) -> None:
         self.setStyleSheet(
@@ -1369,6 +1483,29 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #273449;
                 border-color: #3b4a60;
             }
+            QToolBar#TopBar QToolButton[toolbarRole="primary"] {
+                background: #2563eb;
+                border-color: #60a5fa;
+                color: #ffffff;
+                font-weight: 700;
+            }
+            QToolBar#TopBar QToolButton[toolbarRole="primary"]:hover {
+                background: #1d4ed8;
+                border-color: #93c5fd;
+            }
+            QToolBar#TopBar QLabel#TopBarLabel {
+                color: #e5e7eb;
+                background: transparent;
+                padding-left: 4px;
+            }
+            QToolBar#TopBar QWidget#TopBarSpacer {
+                background: transparent;
+                border: 0;
+            }
+            QToolBar#TopBar QSpinBox {
+                min-height: 20px;
+                padding: 4px 6px;
+            }
             QToolBar#ToolRail {
                 background: #111827;
                 border: 0;
@@ -1382,7 +1519,7 @@ class AdvancedEditorWindow(QMainWindow):
                 border: 1px solid transparent;
                 border-radius: 6px;
                 padding: 9px 7px;
-                min-width: 68px;
+                min-width: 140px;
                 text-align: left;
             }
             QToolBar#ToolRail QToolButton:hover {
@@ -1555,6 +1692,42 @@ class AdvancedEditorWindow(QMainWindow):
         label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.help_widgets.append(label)
         return label
+
+    @staticmethod
+    def _button_icon_name(text: str) -> str:
+        label = str(text or "").strip()
+        rules = (
+            (("편집 정보 제거", "내보내기"), "export"),
+            (("새로고침",), "refresh"),
+            (("초기화", "되돌리기"), "reset"),
+            (("지우개",), "eraser"),
+            (("삭제", "지우기", "비우기"), "trash"),
+            (("추가", "+"), "add"),
+            (("찾기", "폴더", "경로"), "folder"),
+            (("저장",), "save"),
+            (("OCR", "번역", "검출", "실행", "적용"), "play"),
+            (("색",), "palette"),
+            (("굵",), "bold"),
+            (("기울",), "italic"),
+            (("화면 이동",), "hand"),
+            (("맞춤", "100%"), "fit"),
+            (("-",), "minus"),
+        )
+        for keywords, icon_name in rules:
+            if any(keyword == label or keyword in label for keyword in keywords):
+                return icon_name
+        return "action"
+
+    def _apply_button_icons(self, root: QWidget) -> None:
+        for button in root.findChildren(QPushButton):
+            color = (
+                "#f8fafc"
+                if button.parentWidget()
+                and button.parentWidget().objectName() == "ZoomBar"
+                else "#172033"
+            )
+            button.setIcon(_editor_icon(self._button_icon_name(button.text()), color))
+            button.setIconSize(QSize(17, 17))
 
     def _apply_help_visibility(self) -> None:
         visible = bool(
@@ -1784,7 +1957,7 @@ class AdvancedEditorWindow(QMainWindow):
             self.reload_display_image()
             self.refresh_region_list()
             self.load_selected_region_to_form()
-            self._push_history()
+            self._refresh_history_menu()
             self.setWindowTitle(
                 f"MangaTranslator 고급 편집기 - {self.session_path.name}"
             )
@@ -1941,27 +2114,12 @@ class AdvancedEditorWindow(QMainWindow):
         color_row.addWidget(self.paint_color_button)
         layout.addLayout(color_row)
 
-        layout.addWidget(QLabel("브러시 크기"))
-        self.brush_slider = QSlider(Qt.Orientation.Horizontal)
-        self.brush_slider.setRange(5, 200)
-        self.brush_slider.setValue(self.brush_size)
-        self.brush_slider.valueChanged.connect(self._on_brush_size_changed)
-        layout.addWidget(self.brush_slider)
-
         settings_tabs = QTabWidget()
         settings_tabs.addTab(self._build_ocr_tab(), "OCR")
         settings_tabs.addTab(self._build_inpaint_tab(), "인페인팅")
         settings_tabs.addTab(self._build_translation_tab(), "번역")
         settings_tabs.addTab(self._build_editor_settings_tab(), "편집기 설정")
         layout.addWidget(settings_tabs)
-
-        save_button = QPushButton("저장 (Ctrl+S)")
-        save_button.clicked.connect(self.render_and_save)
-        layout.addWidget(save_button)
-
-        plain_save_button = QPushButton("편집 정보 제거 저장 (Ctrl+Shift+S)")
-        plain_save_button.clicked.connect(self.save_plain_rendered_image)
-        layout.addWidget(plain_save_button)
 
         output_row = QHBoxLayout()
         output_row.addWidget(QLabel("저장 위치"))
@@ -3318,7 +3476,7 @@ class AdvancedEditorWindow(QMainWindow):
         region = self.selected_region()
         if region is None:
             return
-        self._push_history()
+        self._push_history("텍스트 박스 이동")
         x1, y1, x2, y2 = _bbox(region)
         box_width = x2 - x1
         box_height = y2 - y1
@@ -3340,6 +3498,11 @@ class AdvancedEditorWindow(QMainWindow):
         )
 
     def _on_translation_text_changed(self) -> None:
+        if not self._syncing:
+            if not self._translation_history_active:
+                self._push_history("텍스트 수정")
+                self._translation_history_active = True
+            self._translation_history_timer.start()
         self.commit_region_form()
 
     def refresh_region_list(self) -> None:
@@ -3503,7 +3666,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.load_selected_region_to_form()
 
     def add_text_region(self) -> None:
-        self._push_history()
+        self._push_history("텍스트 영역 추가")
         self.commit_region_form(mark_dirty=False)
         save_session(self.session_path, self.session)
         session, region_id, _preview = add_region(self.session_path)
@@ -3582,7 +3745,7 @@ class AdvancedEditorWindow(QMainWindow):
                     "선택한 범위에서 텍스트를 찾지 못했습니다. 민감도나 OCR 임계값을 낮춰 보세요."
                 )
                 return
-            self._push_history()
+            self._push_history("OCR 결과 적용")
             regions = self.session.setdefault("regions", [])
             target_index = (
                 selected_index
@@ -3671,7 +3834,7 @@ class AdvancedEditorWindow(QMainWindow):
         *,
         settings: dict[str, Any],
     ) -> None:
-        self._push_history()
+        self._push_history("번역 결과 적용")
         regions = self.session.get("regions", [])
         for index, translated in zip(indexes, translations):
             if not (0 <= index < len(regions)):
@@ -3751,7 +3914,7 @@ class AdvancedEditorWindow(QMainWindow):
         region = self.selected_region()
         if region is None:
             return
-        self._push_history()
+        self._push_history("텍스트 영역 삭제")
         try:
             erase_box = self._fast_erase_bbox(region, self.image_size)
             self.session.setdefault("deleted_region_bboxes", []).append(list(erase_box))
@@ -3782,7 +3945,7 @@ class AdvancedEditorWindow(QMainWindow):
         color = QColorDialog.getColor(current, self, "글자 색 선택")
         if not color.isValid():
             return
-        self._push_history()
+        self._push_history("글자 색 변경")
         value = _hex_from_qcolor(color)
         region["font_color"] = value
         region["text_color_rgb"] = list(_rgb_from_hex(value))
@@ -3807,7 +3970,7 @@ class AdvancedEditorWindow(QMainWindow):
         color = QColorDialog.getColor(current, self, "외곽선 색 선택")
         if not color.isValid():
             return
-        self._push_history()
+        self._push_history("외곽선 색 변경")
         value = _hex_from_qcolor(color)
         render["outline_color_rgb"] = list(_rgb_from_hex(value, (255, 255, 255)))
         if float(render.get("outline_width") or 0.0) <= 0.0:
@@ -3824,7 +3987,7 @@ class AdvancedEditorWindow(QMainWindow):
         marker = str(marker)
         if marker not in {"*", "**", "***"}:
             return
-        self._push_history()
+        self._push_history("텍스트 강조 변경")
         cursor = self.translation_edit.textCursor()
         if cursor.hasSelection():
             selected = cursor.selectedText().replace("\u2029", "\n")
@@ -3870,7 +4033,15 @@ class AdvancedEditorWindow(QMainWindow):
     def apply_stroke(self, tool: str, points: list[tuple[int, int]]) -> None:
         if not points:
             return
-        self._push_history()
+        stroke_labels = {
+            "inpaint_brush": "인페인팅 브러시",
+            "inpaint_eraser": "인페인팅 마스크 지우개",
+            "paint_brush": "그리기 브러시",
+            "paint_eraser": "그리기 지우개",
+            "restore_brush": "원본 복구 브러시",
+            "restore_eraser": "원본 복구 지우개",
+        }
+        self._push_history(stroke_labels.get(tool, "브러시 편집"))
         try:
             if tool in {"inpaint_brush", "inpaint_eraser"}:
                 self._apply_inpaint_mask_stroke(tool, points)
@@ -4035,7 +4206,7 @@ class AdvancedEditorWindow(QMainWindow):
 
         def _success(result: Image.Image) -> None:
             try:
-                self._push_history()
+                self._push_history("인페인팅 결과 적용")
                 assets_dir = Path(
                     self.session.get("assets_dir")
                     or self.session_path.with_name(f"{self.session_path.stem}_assets")
@@ -4070,7 +4241,7 @@ class AdvancedEditorWindow(QMainWindow):
         if not mask_path:
             self.status_label.setText("지울 인페인팅 마스크가 없습니다.")
             return
-        self._push_history()
+        self._push_history("인페인팅 마스크 비우기")
         path = Path(mask_path)
         if path.exists():
             _save_mask(path, np.zeros((self.image_size[1], self.image_size[0]), dtype=np.uint8))
@@ -4080,7 +4251,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.status_label.setText("인페인팅 브러시 마스크를 비웠습니다.")
 
     def reset_inpainting_result(self) -> None:
-        self._push_history()
+        self._push_history("인페인팅 결과 초기화")
         self.session["inpainted_image_path"] = ""
         self.session["inpainted_background_text_free"] = False
         save_session(self.session_path, self.session)
@@ -4534,7 +4705,7 @@ class AdvancedEditorWindow(QMainWindow):
 
     def save_current_session(self, *, push_history: bool = True) -> None:
         if push_history:
-            self._push_history()
+            self._push_history("편집 설정 변경")
         self.commit_region_form(mark_dirty=False)
         self._persist_editor_control_settings()
         self._persist_output_settings()
@@ -4965,27 +5136,89 @@ class AdvancedEditorWindow(QMainWindow):
         self.load_selected_region_to_form()
         self.schedule_exact_preview()
 
-    def _push_history(self) -> None:
-        self.history.append(self._capture_state())
+    def _push_history(self, label: str = "편집") -> None:
+        state = self._capture_state()
+        state["history_label"] = str(label or "편집")
+        self.history.append(state)
         if len(self.history) > 80:
             self.history.pop(0)
         self.redo_stack.clear()
+        self._refresh_history_menu()
+
+    def _refresh_history_menu(self) -> None:
+        if not hasattr(self, "history_menu"):
+            return
+        self.history_menu.clear()
+        if self.history:
+            for steps, state in enumerate(reversed(self.history), start=1):
+                label = str(state.get("history_label") or "편집")
+                action = self.history_menu.addAction(f"{steps}. {label}")
+                action.triggered.connect(
+                    lambda _checked=False, count=steps: self.undo_steps(count)
+                )
+        else:
+            empty_action = self.history_menu.addAction("실행 취소할 작업이 없습니다")
+            empty_action.setEnabled(False)
+
+        undo_label = (
+            str(self.history[-1].get("history_label") or "편집")
+            if self.history
+            else ""
+        )
+        redo_label = (
+            str(self.redo_stack[-1].get("history_label") or "편집")
+            if self.redo_stack
+            else ""
+        )
+        self.undo_action.setEnabled(bool(self.history))
+        self.redo_action.setEnabled(bool(self.redo_stack))
+        self.undo_action.setToolTip(
+            f"실행 취소: {undo_label} (Ctrl+Z)"
+            if undo_label
+            else "실행 취소할 작업이 없습니다"
+        )
+        self.redo_action.setToolTip(
+            f"다시 실행: {redo_label} (Ctrl+Y)"
+            if redo_label
+            else "다시 실행할 작업이 없습니다"
+        )
 
     def undo(self) -> None:
-        if len(self.history) <= 1:
+        self.undo_steps(1)
+
+    def undo_steps(self, count: int) -> None:
+        steps = min(max(0, int(count)), len(self.history))
+        if steps <= 0:
             return
-        current = self.history.pop()
-        self.redo_stack.append(current)
-        self._restore_state(self.history[-1])
-        self.status_label.setText("실행을 취소했습니다.")
+        current = self._capture_state()
+        undone_labels: list[str] = []
+        for _ in range(steps):
+            previous = self.history.pop()
+            label = str(previous.get("history_label") or "편집")
+            current["history_label"] = label
+            self.redo_stack.append(current)
+            current = previous
+            undone_labels.append(label)
+        self._restore_state(current)
+        self._refresh_history_menu()
+        if steps == 1:
+            self.status_label.setText(f"실행 취소: {undone_labels[0]}")
+        else:
+            self.status_label.setText(
+                f"{steps}개 작업을 실행 취소했습니다: {undone_labels[-1]}까지"
+            )
 
     def redo(self) -> None:
         if not self.redo_stack:
             return
         state = self.redo_stack.pop()
-        self.history.append(state)
+        label = str(state.get("history_label") or "편집")
+        current = self._capture_state()
+        current["history_label"] = label
+        self.history.append(current)
         self._restore_state(state)
-        self.status_label.setText("다시 실행했습니다.")
+        self._refresh_history_menu()
+        self.status_label.setText(f"다시 실행: {label}")
 
     def closeEvent(self, event) -> None:
         try:

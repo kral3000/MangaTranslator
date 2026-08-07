@@ -193,17 +193,17 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 
 ### Top Action Bar
 
-- **Character:** Minimal global operations in a fixed ink strip.
+- **Character:** Minimal global operations in a fixed ink strip. Undo, redo, named history, and brush size stay on the left; save and export stay anchored at the far right.
 - **Shape:** Transparent 6px actions with 7px × 10px padding.
 - **States:** Hover adds a darker slate fill and visible border; shortcuts and tooltips preserve the full operation meaning.
-- **Content:** The visible Korean actions stay short—`실행 취소`, `다시 실행`, `저장`, and `내보내기`—while save and export tooltips retain their full shortcut descriptions.
+- **Content:** Every action pairs a consistent 1.8px line icon with an explicit Korean label. The history menu names each undoable action and can undo back to a selected point. Save uses the only filled blue toolbar treatment; export remains neutral.
 
 ### Tool Rail
 
 - **Character:** Narrow, text-only, and left aligned.
 - **Shape:** 68px minimum action width inside an 88–108px fixed toolbar; each action uses 9px × 7px padding and a 6px radius.
 - **States:** Default is quiet slate on transparent ink; hover brightens the label and darkens the row; checked state fills with Operational Blue and adds a lighter blue border.
-- **Behavior:** Actions remain mutually legible through checked state, visible labels, and tooltips; color is not the sole signal.
+- **Behavior:** Actions remain mutually legible through checked state, icons, full visible labels, and tooltips; color is not the sole signal. Never shorten `인페인팅 브러시`, `인페인팅 마스크 지우개`, or the restore/paint tools to an ambiguous `지우기`.
 
 ### Buttons
 
@@ -243,6 +243,8 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **Do** keep the multi-image page list at the far right of the canvas.
 - **Do** reserve blue for active, focused, selected, or directly manipulated state.
 - **Do** preserve native Qt keyboard shortcuts, tooltips, dialogs, scrollbars, focus behavior, and existing editing behavior.
+- **Do** use the shared line-icon vocabulary on toolbar actions and inspector buttons while keeping explicit Korean action labels.
+- **Do** show the name of the next undo/redo action and keep the named history list collapsible in the top bar.
 - **Do** keep user-facing editor labels in clear Korean and verify that they render correctly on Windows.
 - **Do** pair state color with checked controls, focus edges, selection handles, labels, or status text.
 - **Do** keep inspector controls compact enough for repeated OCR, text, font, mask, inpainting, and translation work.
@@ -254,4 +256,5 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **Don't** add gradients, decorative shadows, floating cards, oversized headings, or ornamental chrome.
 - **Don't** use Operational Blue as a broad background or decorative accent unrelated to state.
 - **Don't** replace the system font stack or imitate browser UI patterns that weaken standard Qt affordances.
+- **Don't** shorten a destructive, mask, brush, restore, save, or export action until its target becomes ambiguous.
 - **Don't** document or introduce components that are not present in the native editor.
