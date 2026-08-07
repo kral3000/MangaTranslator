@@ -262,6 +262,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 ### Status and Help
 
 - **Status:** A pale-blue, blue-ink callout fixed below the inspector scroll area so current tool and operation feedback remains visible.
+- **Save Toast:** A compact ink surface appears 18px from the lower-right window edge after a successful save. It pairs the save icon with `<파일명> 저장 완료`, reuses the same surface for repeated saves, and disappears after 2.4 seconds. Failures continue to use the blocking native error dialog.
 - **Help:** A light neutral bordered surface inside the inspector; its text is selectable and can be hidden through the existing editor setting.
 
 ## Do's and Don'ts

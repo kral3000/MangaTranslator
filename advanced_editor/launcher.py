@@ -52,6 +52,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QGridLayout,
     QLineEdit,
     QHBoxLayout,
@@ -1160,6 +1161,10 @@ class AdvancedEditorWindow(QMainWindow):
         self._translation_history_timer.timeout.connect(
             lambda: setattr(self, "_translation_history_active", False)
         )
+        self._save_toast_timer = QTimer(self)
+        self._save_toast_timer.setSingleShot(True)
+        self._save_toast_timer.setInterval(2400)
+        self._save_toast_timer.timeout.connect(self._hide_save_toast)
 
         self.setWindowTitle(f"MangaTranslator 고급 편집기 - {self.session_path.name}")
         self.setMinimumSize(1200 if len(self.related_session_paths) > 1 else 1120, 680)
@@ -1821,6 +1826,20 @@ class AdvancedEditorWindow(QMainWindow):
                 border: 1px solid #334155;
                 padding: 6px 8px;
             }
+            QFrame#SaveToast {
+                background: #172033;
+                border: 1px solid #334155;
+                border-radius: 8px;
+            }
+            QFrame#SaveToast QLabel {
+                background: transparent;
+                border: 0;
+            }
+            QLabel#SaveToastText {
+                color: #ffffff;
+                font-size: 12px;
+                font-weight: 600;
+            }
             QScrollBar:vertical {
                 width: 10px;
                 background: transparent;
@@ -1871,6 +1890,39 @@ class AdvancedEditorWindow(QMainWindow):
         label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.help_widgets.append(label)
         return label
+
+    def _position_save_toast(self) -> None:
+        if not hasattr(self, "save_toast"):
+            return
+        margin = 18
+        self.save_toast.move(
+            max(margin, self.width() - self.save_toast.width() - margin),
+            max(margin, self.height() - self.save_toast.height() - margin),
+        )
+
+    def _show_save_toast(self, text: str) -> None:
+        if not hasattr(self, "save_toast"):
+            self.save_toast = QFrame(self)
+            self.save_toast.setObjectName("SaveToast")
+            toast_layout = QHBoxLayout(self.save_toast)
+            toast_layout.setContentsMargins(12, 9, 14, 9)
+            toast_layout.setSpacing(8)
+            icon_label = QLabel(self.save_toast)
+            icon_label.setPixmap(_editor_icon("save", "#ffffff").pixmap(18, 18))
+            toast_layout.addWidget(icon_label)
+            self.save_toast_text = QLabel(self.save_toast)
+            self.save_toast_text.setObjectName("SaveToastText")
+            toast_layout.addWidget(self.save_toast_text)
+        self.save_toast_text.setText(text)
+        self.save_toast.adjustSize()
+        self._position_save_toast()
+        self.save_toast.raise_()
+        self.save_toast.show()
+        self._save_toast_timer.start()
+
+    def _hide_save_toast(self) -> None:
+        if hasattr(self, "save_toast"):
+            self.save_toast.hide()
 
     @staticmethod
     def _button_icon_name(text: str) -> str:
@@ -5290,6 +5342,12 @@ class AdvancedEditorWindow(QMainWindow):
                     + "\n".join(package_warnings[:3])
                 )
             self.status_label.setText(message)
+            saved_name = (
+                Path(archive_target[1]).name
+                if archive_target is not None
+                else Path(export_target or output_path).name
+            )
+            self._show_save_toast(f"{saved_name} 저장 완료")
         except Exception as exc:
             QMessageBox.critical(self, "렌더링 실패", str(exc))
 
@@ -5435,6 +5493,11 @@ class AdvancedEditorWindow(QMainWindow):
         except Exception:
             pass
         super().closeEvent(event)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "save_toast") and self.save_toast.isVisible():
+            self._position_save_toast()
 
 
 def _write_lifecycle_log(message: str) -> None:
