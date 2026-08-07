@@ -106,6 +106,17 @@ TOOLS = {
     "restore_eraser": "원본 복구 지우개",
 }
 
+TOOL_RAIL_LABELS = {
+    "select": "선택",
+    "textbox": "텍스트",
+    "inpaint_brush": "지우기",
+    "inpaint_eraser": "지우기 취소",
+    "paint_brush": "그리기",
+    "paint_eraser": "그리기 지우개",
+    "restore_brush": "원본 복구",
+    "restore_eraser": "복구 취소",
+}
+
 
 class TaskSignals(QObject):
     finished = pyqtSignal(object)
@@ -966,6 +977,12 @@ class EditorCanvas(QWidget):
             self.update()
 
 
+# THESIS: 캔버스를 중심에 두고 편집 도구와 설정을 왼쪽 한 방향으로 모은다.
+# OWN-WORLD: 잉크색 작업 막대, 밝은 설정지, 파란색 선택 상태, 장식 없는 Qt 기본 조작어.
+# STORY: 사용자는 도구를 고르고 같은 쪽에서 값을 조정한 뒤 중앙 결과를 즉시 확인한다.
+# FIRST VIEWPORT: 얇은 왼쪽 도구 레일, 설정 패널, 넓은 중앙 캔버스, 최소 상단 작업 표시줄.
+# FORM: Tubik/Ribbet식 데스크톱 편집기 표준 구조, canon:tubik-left-editor.
+# FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
 class AdvancedEditorWindow(QMainWindow):
     def __init__(self, session_path: str):
         super().__init__()
@@ -1035,9 +1052,9 @@ class AdvancedEditorWindow(QMainWindow):
             self.resize(1480, 920)
             if hasattr(self, "splitter"):
                 if len(self.related_session_paths) > 1:
-                    self.splitter.setSizes([210, 720, 550])
+                    self.splitter.setSizes([210, 410, 860])
                 else:
-                    self.splitter.setSizes([0, 900, 580])
+                    self.splitter.setSizes([0, 410, 1070])
             return
         available = screen.availableGeometry()
         minimum_width = 1200 if len(self.related_session_paths) > 1 else 1120
@@ -1047,10 +1064,14 @@ class AdvancedEditorWindow(QMainWindow):
         height = min(height, available.height())
         self.resize(width, height)
         if hasattr(self, "splitter"):
-            side_width = min(620, max(540, int(width * 0.36)))
+            inspector_width = min(450, max(360, int(width * 0.25)))
             list_width = 210 if len(self.related_session_paths) > 1 else 0
             self.splitter.setSizes(
-                [list_width, max(480, width - side_width - list_width), side_width]
+                [
+                    list_width,
+                    inspector_width,
+                    max(480, width - inspector_width - list_width),
+                ]
             )
         self.move(
             available.x() + max(0, (available.width() - width) // 2),
@@ -1097,39 +1118,58 @@ class AdvancedEditorWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self._apply_theme()
-        toolbar = QToolBar("도구", self)
-        toolbar.setMovable(False)
-        self.addToolBar(toolbar)
+
+        tool_toolbar = QToolBar("편집 도구", self)
+        tool_toolbar.setObjectName("ToolRail")
+        tool_toolbar.setMovable(False)
+        tool_toolbar.setFloatable(False)
+        tool_toolbar.setAllowedAreas(Qt.ToolBarArea.LeftToolBarArea)
+        tool_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        tool_toolbar.setMinimumWidth(88)
+        tool_toolbar.setMaximumWidth(108)
+        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, tool_toolbar)
+        self.tool_toolbar = tool_toolbar
 
         self.tool_actions: dict[str, QAction] = {}
         for key, label in TOOLS.items():
-            action = QAction(label, self)
+            action = QAction(TOOL_RAIL_LABELS[key], self)
+            action.setToolTip(label)
             action.setCheckable(True)
             action.triggered.connect(lambda checked=False, tool=key: self.set_tool(tool))
             self.tool_actions[key] = action
-            toolbar.addAction(action)
+            tool_toolbar.addAction(action)
         self.tool_actions["select"].setChecked(True)
-        toolbar.addSeparator()
+
+        action_toolbar = QToolBar("작업", self)
+        action_toolbar.setObjectName("TopBar")
+        action_toolbar.setMovable(False)
+        action_toolbar.setFloatable(False)
+        action_toolbar.setAllowedAreas(Qt.ToolBarArea.TopToolBarArea)
+        action_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, action_toolbar)
+        self.action_toolbar = action_toolbar
 
         undo_action = QAction("실행 취소", self)
         undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         undo_action.triggered.connect(self.undo)
-        toolbar.addAction(undo_action)
+        action_toolbar.addAction(undo_action)
         redo_action = QAction("다시 실행", self)
         redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         redo_action.triggered.connect(self.redo)
-        toolbar.addAction(redo_action)
-        toolbar.addSeparator()
+        action_toolbar.addAction(redo_action)
+        action_toolbar.addSeparator()
 
-        render_action = QAction("저장 (Ctrl+S)", self)
+        render_action = QAction("저장", self)
         render_action.setShortcut(QKeySequence("Ctrl+S"))
+        render_action.setToolTip("저장 (Ctrl+S)")
         render_action.triggered.connect(self.render_and_save)
-        toolbar.addAction(render_action)
+        action_toolbar.addAction(render_action)
 
-        plain_render_action = QAction("편집 정보 제거 저장 (Ctrl+Shift+S)", self)
+        plain_render_action = QAction("내보내기", self)
         plain_render_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        plain_render_action.setToolTip("편집 정보 제거 저장 (Ctrl+Shift+S)")
         plain_render_action.triggered.connect(self.save_plain_rendered_image)
-        toolbar.addAction(plain_render_action)
+        action_toolbar.addAction(plain_render_action)
 
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -1142,8 +1182,10 @@ class AdvancedEditorWindow(QMainWindow):
 
         self.session_panel = self._build_session_panel()
         self.splitter.addWidget(self.session_panel)
+        self.splitter.addWidget(self._build_side_panel())
 
         canvas_panel = QWidget(self)
+        canvas_panel.setObjectName("CanvasPanel")
         canvas_layout = QVBoxLayout(canvas_panel)
         canvas_layout.setContentsMargins(0, 0, 0, 0)
         canvas_layout.setSpacing(0)
@@ -1233,10 +1275,9 @@ class AdvancedEditorWindow(QMainWindow):
         canvas_grid.setColumnStretch(0, 1)
         canvas_layout.addWidget(canvas_view, 1)
         self.splitter.addWidget(canvas_panel)
-        self.splitter.addWidget(self._build_side_panel())
         self.splitter.setStretchFactor(0, 0)
-        self.splitter.setStretchFactor(1, 1)
-        self.splitter.setStretchFactor(2, 0)
+        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setStretchFactor(2, 1)
 
     def _apply_theme(self) -> None:
         self.setStyleSheet(
@@ -1247,27 +1288,52 @@ class AdvancedEditorWindow(QMainWindow):
                 font-family: "Segoe UI", "Malgun Gothic";
                 font-size: 12px;
             }
-            QToolBar {
+            QToolBar#TopBar {
                 background: #111827;
                 border: 0;
+                border-bottom: 1px solid #263244;
                 spacing: 6px;
-                padding: 8px;
+                padding: 7px 10px;
             }
-            QToolButton {
+            QToolBar#TopBar QToolButton {
                 color: #e5e7eb;
-                background: #1f2937;
-                border: 1px solid #334155;
+                background: transparent;
+                border: 1px solid transparent;
                 border-radius: 6px;
                 padding: 7px 10px;
             }
-            QToolButton:hover {
+            QToolBar#TopBar QToolButton:hover {
                 background: #273449;
-                border-color: #60a5fa;
+                border-color: #3b4a60;
             }
-            QToolButton:checked {
+            QToolBar#ToolRail {
+                background: #111827;
+                border: 0;
+                border-right: 1px solid #263244;
+                spacing: 5px;
+                padding: 10px 7px;
+            }
+            QToolBar#ToolRail QToolButton {
+                color: #cbd5e1;
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 6px;
+                padding: 9px 7px;
+                min-width: 68px;
+                text-align: left;
+            }
+            QToolBar#ToolRail QToolButton:hover {
+                color: #ffffff;
+                background: #1f2937;
+                border-color: #334155;
+            }
+            QToolBar#ToolRail QToolButton:checked {
                 background: #2563eb;
-                border-color: #93c5fd;
+                border-color: #60a5fa;
                 color: white;
+            }
+            QWidget#CanvasPanel {
+                background: #20242b;
             }
             QWidget#ZoomBar {
                 background: #202733;
@@ -1694,8 +1760,9 @@ class AdvancedEditorWindow(QMainWindow):
 
     def _build_side_panel(self) -> QWidget:
         panel = QWidget(self)
-        panel.setMinimumWidth(520)
-        panel.setMaximumWidth(640)
+        panel.setObjectName("InspectorPanel")
+        panel.setMinimumWidth(340)
+        panel.setMaximumWidth(450)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(8)
@@ -1860,17 +1927,27 @@ class AdvancedEditorWindow(QMainWindow):
         self.status_label = QLabel("")
         self.status_label.setObjectName("StatusLabel")
         self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
         layout.addStretch(1)
 
         scroll = QScrollArea()
-        scroll.setMinimumWidth(540)
-        scroll.setMaximumWidth(660)
+        scroll.setObjectName("InspectorScroll")
+        scroll.setMinimumWidth(360)
+        scroll.setMaximumWidth(470)
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(panel)
+
+        shell = QWidget(self)
+        shell.setObjectName("InspectorShell")
+        shell.setMinimumWidth(360)
+        shell.setMaximumWidth(470)
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+        shell_layout.addWidget(scroll, 1)
+        shell_layout.addWidget(self.status_label)
         self._apply_help_visibility()
-        return scroll
+        return shell
 
     def _build_ocr_tab(self) -> QWidget:
         tab = QWidget()
@@ -4825,6 +4902,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.reload_display_image()
         self.refresh_region_list()
         self.load_selected_region_to_form()
+        self.schedule_exact_preview()
 
     def _push_history(self) -> None:
         self.history.append(self._capture_state())

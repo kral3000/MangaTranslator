@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-08T04:06:51.0845129+09:00",
+  "title": "Design System: MangaTranslatorKo Advanced Editor",
+  "extensions": {
+    "colorMeta": {
+      "active-blue": { "role": "primary", "displayName": "Operational Blue", "canonical": "#2563eb", "tonalRamp": ["#172554", "#1e3a8a", "#1e40af", "#1d4ed8", "#2563eb", "#60a5fa", "#bfdbfe", "#eff6ff"] },
+      "active-blue-border": { "role": "primary", "displayName": "Operational Blue Border", "canonical": "#60a5fa", "tonalRamp": ["#172554", "#1e3a8a", "#1e40af", "#1d4ed8", "#2563eb", "#60a5fa", "#bfdbfe", "#eff6ff"] },
+      "active-blue-soft": { "role": "primary", "displayName": "Selection Wash", "canonical": "#bfdbfe", "tonalRamp": ["#172554", "#1e3a8a", "#1e40af", "#1d4ed8", "#2563eb", "#60a5fa", "#bfdbfe", "#eff6ff"] },
+      "ink-rail": { "role": "neutral", "displayName": "Ink Rail", "canonical": "#111827", "tonalRamp": ["#030712", "#111827", "#1f2937", "#374151", "#4b5563", "#9ca3af", "#e5e7eb", "#f9fafb"] },
+      "ink-hover": { "role": "neutral", "displayName": "Ink Hover", "canonical": "#1f2937", "tonalRamp": ["#030712", "#111827", "#1f2937", "#374151", "#4b5563", "#9ca3af", "#e5e7eb", "#f9fafb"] },
+      "workspace-paper": { "role": "neutral", "displayName": "Workspace Paper", "canonical": "#f6f8fb", "tonalRamp": ["#172033", "#334155", "#64748b", "#94a3b8", "#cbd5e1", "#e2e8f0", "#f1f5f9", "#f8fafc"] },
+      "field-paper": { "role": "neutral", "displayName": "Field Paper", "canonical": "#ffffff", "tonalRamp": ["#171717", "#404040", "#737373", "#a3a3a3", "#d4d4d4", "#e5e5e5", "#f5f5f5", "#ffffff"] },
+      "canvas-charcoal": { "role": "neutral", "displayName": "Canvas Charcoal", "canonical": "#20242b", "tonalRamp": ["#101215", "#20242b", "#343a44", "#505865", "#737d8b", "#a5adb8", "#d5dae0", "#f3f5f7"] },
+      "canvas-bar": { "role": "neutral", "displayName": "Canvas Bar", "canonical": "#202733", "tonalRamp": ["#10141b", "#202733", "#354154", "#53627a", "#78879e", "#a9b4c3", "#d7dce4", "#f4f6f8"] },
+      "canvas-control": { "role": "neutral", "displayName": "Canvas Control", "canonical": "#374151", "tonalRamp": ["#111827", "#1f2937", "#374151", "#4b5563", "#6b7280", "#9ca3af", "#d1d5db", "#f3f4f6"] },
+      "body-ink": { "role": "neutral", "displayName": "Body Ink", "canonical": "#172033", "tonalRamp": ["#0b101a", "#172033", "#2c3c59", "#4e607d", "#7687a0", "#a7b2c2", "#d8dde5", "#f4f6f8"] },
+      "label-slate": { "role": "neutral", "displayName": "Label Slate", "canonical": "#334155", "tonalRamp": ["#0f172a", "#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#cbd5e1", "#f1f5f9"] },
+      "quiet-slate": { "role": "neutral", "displayName": "Quiet Slate", "canonical": "#475569", "tonalRamp": ["#0f172a", "#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#cbd5e1", "#f1f5f9"] },
+      "control-border": { "role": "neutral", "displayName": "Control Border", "canonical": "#cbd5e1", "tonalRamp": ["#0f172a", "#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#cbd5e1", "#f1f5f9"] },
+      "control-fill": { "role": "neutral", "displayName": "Control Fill", "canonical": "#e8edf5", "tonalRamp": ["#172033", "#334155", "#64748b", "#94a3b8", "#cbd5e1", "#e2e8f0", "#e8edf5", "#f8fafc"] },
+      "toolbar-text": { "role": "neutral", "displayName": "Toolbar Text", "canonical": "#e5e7eb", "tonalRamp": ["#111827", "#1f2937", "#374151", "#4b5563", "#9ca3af", "#d1d5db", "#e5e7eb", "#f9fafb"] },
+      "status-paper": { "role": "primary", "displayName": "Status Paper", "canonical": "#eef6ff", "tonalRamp": ["#172554", "#1e3a8a", "#1e40af", "#2563eb", "#60a5fa", "#93c5fd", "#dbeafe", "#eff6ff"] },
+      "status-ink": { "role": "primary", "displayName": "Status Ink", "canonical": "#1e3a8a", "tonalRamp": ["#172554", "#1e3a8a", "#1e40af", "#1d4ed8", "#2563eb", "#60a5fa", "#bfdbfe", "#eff6ff"] },
+      "canvas-selection": { "role": "tertiary", "displayName": "Canvas Selection", "canonical": "#2196f3", "tonalRamp": ["#0d47a1", "#1565c0", "#1976d2", "#1e88e5", "#2196f3", "#64b5f6", "#bbdefb", "#e3f2fd"] },
+      "canvas-region": { "role": "tertiary", "displayName": "Canvas Region", "canonical": "#ffc107", "tonalRamp": ["#451a03", "#78350f", "#92400e", "#b45309", "#d97706", "#f59e0b", "#fcd34d", "#fffbeb"] },
+      "canvas-disabled": { "role": "neutral", "displayName": "Canvas Disabled", "canonical": "#969696", "tonalRamp": ["#171717", "#404040", "#525252", "#737373", "#969696", "#b8b8b8", "#dedede", "#f5f5f5"] }
+    },
+    "typographyMeta": {
+      "body": { "displayName": "Body", "purpose": "Compact fields, tabs, toolbar actions, and supporting copy." },
+      "label": { "displayName": "Label", "purpose": "Inspector labels and compact section identifiers." },
+      "action": { "displayName": "Action", "purpose": "Push buttons and the zoom readout." },
+      "canvas-index": { "displayName": "Canvas Index", "purpose": "Small numbered badges drawn over text regions." }
+    },
+    "breakpoints": [
+      { "name": "compact-window-width", "value": "1280px" },
+      { "name": "compact-window-height", "value": "760px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Top Bar Action",
+      "kind": "button",
+      "refersTo": "topbar-action",
+      "description": "Global undo, redo, save, and export actions in the fixed ink top bar.",
+      "html": "<button class=\"ds-topbar-action\">실행 취소</button>",
+      "css": ".ds-topbar-action { color: #e5e7eb; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; font: 400 12px 'Segoe UI', 'Malgun Gothic', sans-serif; } .ds-topbar-action:hover, .ds-topbar-action:focus-visible { background: #273449; border-color: #3b4a60; } .ds-topbar-action:active { background: #1f2937; }"
+    },
+    {
+      "name": "Tool Rail Action",
+      "kind": "nav",
+      "refersTo": "toolrail-action",
+      "description": "Text-only editing tool inside the narrow left rail.",
+      "html": "<button class=\"ds-toolrail-action\">텍스트</button>",
+      "css": ".ds-toolrail-action { width: 68px; color: #cbd5e1; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 9px 7px; text-align: left; font: 400 12px 'Segoe UI', 'Malgun Gothic', sans-serif; } .ds-toolrail-action:hover, .ds-toolrail-action:focus-visible { color: #ffffff; background: #1f2937; border-color: #334155; } .ds-toolrail-action:active { background: #273449; }"
+    },
+    {
+      "name": "Selected Tool Rail Action",
+      "kind": "nav",
+      "refersTo": "toolrail-action-selected",
+      "description": "Checked editing tool with explicit blue selection treatment.",
+      "html": "<button class=\"ds-toolrail-action-selected\" aria-pressed=\"true\">선택</button>",
+      "css": ".ds-toolrail-action-selected { width: 68px; color: #ffffff; background: #2563eb; border: 1px solid #60a5fa; border-radius: 6px; padding: 9px 7px; text-align: left; font: 400 12px 'Segoe UI', 'Malgun Gothic', sans-serif; } .ds-toolrail-action-selected:hover, .ds-toolrail-action-selected:focus-visible { border-color: #93c5fd; } .ds-toolrail-action-selected:active { background: #1d4ed8; }"
+    },
+    {
+      "name": "Inspector Button",
+      "kind": "button",
+      "refersTo": "inspector-button",
+      "description": "Compact bold action used throughout inspector rows and save controls.",
+      "html": "<button class=\"ds-inspector-button\">추가</button>",
+      "css": ".ds-inspector-button { color: #111827; background: #e8edf5; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 10px; font: 700 12px 'Segoe UI', 'Malgun Gothic', sans-serif; } .ds-inspector-button:hover, .ds-inspector-button:focus-visible { background: #dbeafe; border-color: #60a5fa; } .ds-inspector-button:active { background: #bfdbfe; }"
+    },
+    {
+      "name": "Inspector Field",
+      "kind": "input",
+      "refersTo": "inspector-field",
+      "description": "White editable field on the light inspector surface.",
+      "html": "<label class=\"ds-field-label\">편집할 텍스트<input class=\"ds-inspector-field\" value=\"번역문\"></label>",
+      "css": ".ds-field-label { display: grid; gap: 6px; color: #334155; font: 600 12px 'Segoe UI', 'Malgun Gothic', sans-serif; } .ds-inspector-field { color: #111827; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px; font: 400 12px 'Segoe UI', 'Malgun Gothic', sans-serif; } .ds-inspector-field:hover { border-color: #94a3b8; } .ds-inspector-field:focus-visible { border-color: #2563eb; outline: none; } .ds-inspector-field:active { border-color: #2563eb; } .ds-inspector-field::selection { background: #bfdbfe; }"
+    },
+    {
+      "name": "Inspector Tabs",
+      "kind": "nav",
+      "description": "Implemented OCR, inpainting, translation, and editor-settings tab pattern.",
+      "html": "<div class=\"ds-tabs\" role=\"tablist\"><button class=\"ds-tab ds-tab-selected\" role=\"tab\" aria-selected=\"true\">OCR</button><button class=\"ds-tab\" role=\"tab\">인페인팅</button><button class=\"ds-tab\" role=\"tab\">번역</button></div>",
+      "css": ".ds-tabs { display: flex; align-items: end; border-bottom: 1px solid #d8dee9; } .ds-tab { color: #475569; background: #e8edf5; border: 1px solid #d8dee9; border-bottom: 0; border-radius: 6px 6px 0 0; padding: 7px 12px; margin-right: 2px; font: 400 12px 'Segoe UI', 'Malgun Gothic', sans-serif; } .ds-tab:hover, .ds-tab:focus-visible { border-color: #60a5fa; } .ds-tab:active { background: #dbeafe; } .ds-tab-selected { color: #1d4ed8; background: #ffffff; }"
+    },
+    {
+      "name": "Zoom Button",
+      "kind": "button",
+      "refersTo": "zoom-button",
+      "description": "Compact dark control for pan, zoom, fit, and actual-size actions.",
+      "html": "<button class=\"ds-zoom-button\">맞춤</button>",
+      "css": ".ds-zoom-button { min-height: 20px; color: #f8fafc; background: #374151; border: 1px solid #4b5563; border-radius: 4px; padding: 4px 10px; font: 400 12px 'Segoe UI', 'Malgun Gothic', sans-serif; } .ds-zoom-button:hover, .ds-zoom-button:focus-visible { background: #475569; border-color: #93c5fd; } .ds-zoom-button:active { background: #2563eb; }"
+    },
+    {
+      "name": "Status Callout",
+      "kind": "custom",
+      "refersTo": "status-callout",
+      "description": "Persistent textual feedback below the inspector scroll area.",
+      "html": "<div class=\"ds-status\" role=\"status\">선택한 도구: 선택/이동</div>",
+      "css": ".ds-status { color: #1e3a8a; background: #eef6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 8px; font: 500 12px 'Segoe UI', 'Malgun Gothic', sans-serif; } .ds-status:hover { border-color: #60a5fa; } .ds-status:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; } .ds-status:active { background: #dbeafe; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Ink Rail Workbench",
+    "overview": "The advanced editor is a native Windows Operate surface: a focused workbench where the manga page remains visually dominant and every editing decision stays close to its consequence. Its Tubik/Ribbet pattern is structural rather than decorative—an ink-colored tool rail and minimal top action bar frame a light inspector, while the central canvas holds the user's attention.\n\nThe world is practical, dense, and immediate. Dark chrome separates global tools from editable content; pale controls support long inspection sessions; blue appears only for active selection, focus, and direct manipulation. Standard Qt behavior, keyboard shortcuts, tooltips, dialogs, scrollbars, and established editing behavior remain intact.",
+    "keyCharacteristics": [
+      "Canvas-first native desktop workspace",
+      "One-direction tool discovery from the left rail into the adjacent inspector",
+      "Dark ink chrome against a light, compact inspector",
+      "Blue state feedback paired with checked, focused, selected, or textual cues",
+      "Restrained six-pixel controls and standard Qt affordances"
+    ],
+    "rules": [
+      { "name": "The Blue Means State Rule", "body": "Blue marks selection, focus, checked tools, or direct manipulation; it is not ambient decoration.", "section": "colors" },
+      { "name": "The Ink Frames Work Rule", "body": "Dark ink belongs to the tool rail, top action bar, and canvas controls; editable inspector content stays on light paper.", "section": "colors" },
+      { "name": "The System UI Rule", "body": "Keep Segoe UI and Malgun Gothic for editor chrome; do not introduce web fonts or editorial display faces into the native workspace.", "section": "typography" },
+      { "name": "The Left-to-Canvas Rule", "body": "A user chooses a tool on the far left, changes its values immediately beside it, and verifies the result in the center without crossing the canvas.", "section": "layout" },
+      { "name": "The Flat Workbench Rule", "body": "Resting editor surfaces stay flat; hierarchy comes from adjacency, tone, and borders rather than floating cards.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep the advanced editor canvas-first and preserve the left rail → inspector → canvas reading order.",
+      "Do reserve blue for active, focused, selected, or directly manipulated state.",
+      "Do preserve native Qt keyboard shortcuts, tooltips, dialogs, scrollbars, focus behavior, and existing editing behavior.",
+      "Do keep user-facing editor labels in clear Korean and verify that they render correctly on Windows.",
+      "Do pair state color with checked controls, focus edges, selection handles, labels, or status text.",
+      "Do keep inspector controls compact enough for repeated OCR, text, font, mask, inpainting, and translation work."
+    ],
+    "donts": [
+      "Don't move the inspector across the canvas or split related tool choice and settings between opposite sides.",
+      "Don't add gradients, decorative shadows, floating cards, oversized headings, or ornamental chrome.",
+      "Don't use Operational Blue as a broad background or decorative accent unrelated to state.",
+      "Don't replace the system font stack or imitate browser UI patterns that weaken standard Qt affordances.",
+      "Don't document or introduce components that are not present in the native editor."
+    ]
+  }
+}
