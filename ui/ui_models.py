@@ -1254,6 +1254,9 @@ def map_ui_to_backend_config(
             line_spacing_mult=float(tag_data.get("line_spacing_mult", ui_state.rendering.line_spacing_mult)),
             vertical_line_spacing_mult=float(tag_data.get("vertical_line_spacing_mult", ui_state.rendering.vertical_line_spacing_mult)),
             vertical_max_chars=int(tag_data.get("vertical_max_chars", ui_state.rendering.vertical_max_chars)),
+            vertical_min_aspect_ratio=float(tag_data["vertical_min_aspect_ratio"])
+            if tag_data.get("vertical_min_aspect_ratio") is not None
+            else None,
         )
 
     rendering_cfg = RenderingConfig(

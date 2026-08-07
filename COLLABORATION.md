@@ -55,6 +55,16 @@
 
 작업을 마칠 때마다 아래에 새 항목을 맨 위에 추가한다 (날짜, 작업자, 요약, 변경 파일).
 
+- 2026-08-08 (Claude): 세로쓰기 판정을 태그별 설정으로 전환 + 회귀 검사 도입.
+  - **문제**: 기둥형 대사 말풍선(180×767, 비율 4.26)이 가로로 나와 위쪽에 몰리고 아래가 텅 빔. 반대로 짧은 대사는 세로로 가서 어색함.
+  - **원인 1**: `AUTO_VERTICAL_MIN_ASPECT_RATIO`(1.7)가 전역 상수라 대사와 효과음을 못 가름. 중간 비율(1.7~3.0)에서 대사는 가로를, 효과음은 세로를 원하는데 상수 하나로는 불가능.
+  - **원인 2**: `AUTO_VERTICAL_MAX_WORDS = 1`. 띄어쓰기 없는 일본어 기준 값인데 출력은 한국어라, 띄어쓰기가 있는 거의 모든 번역문이 세로쓰기에서 배제되고 있었음 → 3으로 수정.
+  - **해결**: 태그 스타일에 `세로쓰기 최소 비율` 컬럼 추가(대사 3.0 / 나머지 1.7). 설정 안 한 태그는 기존 1.7이 기본값이라 동작 불변.
+  - **회귀 검사**: `regression/` 신설. 실제 세션 파일에서 뽑은 14개 케이스(`resolved_orientation` 기준)를 고정하고 실제 판정 함수를 호출해 검사. `runtime\python.exe regression\check_vertical_orientation.py`. 변경 전 실패 1건 → 변경 후 0건, 효과음 회귀 없음 확인.
+  - **주의**: 스크립트 초안이 JSON을 직접 읽는 지름길을 쓰는 바람에 `ui_models.py`의 매핑 누락 버그를 못 잡았음. 실제 매핑 경로(`map_ui_to_backend_config` → `_apply_tag_style_overrides`)를 타도록 고쳤고, 매핑을 일부러 되돌려 실패가 잡히는지까지 확인함. **앞으로 이 검사에 지름길을 넣지 말 것.**
+  - 미확인 1건: `진짜냐!!!` (BE, 비율 2.77)이 세로→가로로 바뀜. 사용자 판단 필요.
+  - 변경 파일: `core/config.py`, `core/tag_styles.py`, `core/pipeline.py`, `core/text/text_renderer.py`, `ui/ui_models.py`, `ui/layout.py`(테이블 컬럼 9칸), 설정 2개, `regression/` 신설. (`.bak_before_vertical_policy` 백업 있음)
+
 - 2026-08-07 (Claude): 글꼴 선택창에 개별 글꼴 **파일**도 노출. 기존에는 `fonts/` 하위 **폴더**만 선택 가능해서, 특정 굵기(예: Bold)로 렌더링하려면 파일 하나만 든 폴더를 따로 만들어야 했음(`OE` 태그의 `Hahmlet`이 그 사례). 백엔드 `find_font_variants()`는 원래 파일 경로도 받게 돼 있어서(`font_manager.py:337`) 선택지 노출과 폴더 전제 검증만 손보면 됐음. 선택값은 `<팩>/<파일>` 상대 경로라 기존 폴더 값과 저장 형식이 호환됨(마이그레이션 불필요). 선택지 26 → 75개. 변경 파일: `ui/utils.py`(선택지 열거 + `validate_font_directory`), `core/validation.py`, `core/editor_session.py` (`.bak_before_fontfile_choices` 백업 있음).
   - 검증: 폴더/TTF/OTF 선택 각각 `validate_core_inputs` 통과 + `render_text_skia` 실제 렌더 성공, 없는 경로는 여전히 `FileNotFoundError`로 차단됨. 폴더 선택은 굵기 자동 감지(강조 `**...**`용)라 파일 선택과 용도가 달라 둘 다 남겨둠.
 

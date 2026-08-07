@@ -49,7 +49,11 @@ CONSTRICTED_TALL_SHORT_BBOX_FALLBACK_MAX_CHARS = 15
 CONSTRICTED_TALL_SHORT_BBOX_FALLBACK_SCALE = 0.90
 AUTO_VERTICAL_MIN_ASPECT_RATIO = 1.7
 AUTO_VERTICAL_MAX_CHARS = 4
-AUTO_VERTICAL_MAX_WORDS = 1
+# Japanese source text has no word spacing, so a vertical line there is always
+# "one word".  Korean output does have spacing, which made this gate reject
+# vertical layout for almost every translated line -- even in column-shaped
+# bubbles where vertical is clearly right.  Allow a few words.
+AUTO_VERTICAL_MAX_WORDS = 3
 AUTO_VERTICAL_MAX_INTERNAL_SPACES = 1
 AUTO_VERTICAL_MAX_HORIZONTAL_FILL = 0.45
 AUTO_VERTICAL_MIN_FILL_GAIN = 0.20
@@ -460,6 +464,26 @@ def _apply_emphasis_font_variants(
     font_variants["bold_italic"] = emphasis_bold_italic
 
 
+def _effective_auto_vertical_min_aspect_ratio(config: Optional[RenderingConfig]) -> float:
+    """Per-tag box aspect ratio required before vertical layout is considered.
+
+    Set from Config > Tag Styles so dialogue and sound effects can differ: Korean
+    dialogue should stay horizontal unless the bubble is a genuine column, while
+    sound effects follow the original artwork and read fine vertically at milder
+    ratios.  Falls back to the module default when unset.
+    """
+    if config is None:
+        return AUTO_VERTICAL_MIN_ASPECT_RATIO
+    try:
+        value = getattr(config, "vertical_min_aspect_ratio", None)
+        if value is None:
+            return AUTO_VERTICAL_MIN_ASPECT_RATIO
+        ratio = float(value)
+    except (TypeError, ValueError):
+        return AUTO_VERTICAL_MIN_ASPECT_RATIO
+    return ratio if ratio > 0 else AUTO_VERTICAL_MIN_ASPECT_RATIO
+
+
 def _should_try_auto_vertical_text(
     text: str,
     max_render_width: float,
@@ -469,7 +493,7 @@ def _should_try_auto_vertical_text(
 ) -> bool:
     if max_render_width <= 0 or max_render_height <= 0:
         return False
-    if max_render_height / max_render_width < AUTO_VERTICAL_MIN_ASPECT_RATIO:
+    if max_render_height / max_render_width < _effective_auto_vertical_min_aspect_ratio(config):
         return False
 
     plain_text = _plain_text_for_layout_policy(text).strip()

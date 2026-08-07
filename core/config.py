@@ -120,6 +120,7 @@ class TagStyleConfig:
     line_spacing_mult: Optional[float] = None
     vertical_line_spacing_mult: Optional[float] = None
     vertical_max_chars: Optional[int] = None
+    vertical_min_aspect_ratio: Optional[float] = None
 
 
 @dataclass
@@ -138,6 +139,12 @@ class RenderingConfig:
     vertical_font_size_mult: float = 1.0  # Applies only to vertical speech-bubble layout
     vertical_max_chars: int = 4  # Maximum alphanumeric chars before auto vertical is blocked for regular text
     vertical_emphasis_max_chars: Optional[int] = None  # None = use vertical_max_chars
+    # How much taller than wide a box must be before vertical layout is even tried.
+    # Per-tag because the right answer differs by kind of text: Korean dialogue reads
+    # horizontally unless the bubble is a genuine column, while sound effects follow
+    # the original artwork and go vertical at much milder ratios.
+    # None = fall back to AUTO_VERTICAL_MIN_ASPECT_RATIO.
+    vertical_min_aspect_ratio: Optional[float] = None
     use_subpixel_rendering: bool = False
     font_hinting: str = "none"
     use_ligatures: bool = False

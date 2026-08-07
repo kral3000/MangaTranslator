@@ -1536,6 +1536,14 @@ def _apply_tag_style_overrides(
     except (TypeError, ValueError):
         tag_vertical_max_chars = None
 
+    tag_vertical_min_aspect = None
+    raw_vertical_min_aspect = _get_tag_style_value(style, "vertical_min_aspect_ratio")
+    try:
+        if raw_vertical_min_aspect is not None:
+            tag_vertical_min_aspect = max(1.0, float(raw_vertical_min_aspect))
+    except (TypeError, ValueError):
+        tag_vertical_min_aspect = None
+
     return (
         font_dir,
         min_font,
@@ -1543,6 +1551,7 @@ def _apply_tag_style_overrides(
         line_spacing,
         vertical_line_spacing,
         tag_vertical_max_chars,
+        tag_vertical_min_aspect,
     )
 def _natural_text_sort_key(text: str) -> Tuple[Tuple[int, Union[int, str], str], ...]:
     return tuple(
@@ -12268,6 +12277,7 @@ def translate_and_render(
                             entry_line_spacing,
                             entry_vertical_line_spacing,
                             entry_tag_vertical_max_chars,
+                            entry_tag_vertical_min_aspect,
                         ) = _apply_tag_style_overrides(
                             entry_render_tag,
                             config,
@@ -12367,6 +12377,11 @@ def translate_and_render(
                                 entry_tag_vertical_max_chars
                                 if entry_tag_vertical_max_chars is not None
                                 else config.rendering.vertical_emphasis_max_chars
+                            ),
+                            vertical_min_aspect_ratio=(
+                                entry_tag_vertical_min_aspect
+                                if entry_tag_vertical_min_aspect is not None
+                                else config.rendering.vertical_min_aspect_ratio
                             ),
                             use_subpixel_rendering=config.rendering.use_subpixel_rendering,
                             font_hinting=config.rendering.font_hinting,
@@ -12953,6 +12968,7 @@ def translate_and_render(
                                 line_spacing,
                                 vertical_line_spacing,
                                 tag_vertical_max_chars,
+                                tag_vertical_min_aspect,
                             ) = _apply_tag_style_overrides(
                                 render_tag,
                                 config,
@@ -13467,6 +13483,7 @@ def translate_and_render(
                                 line_spacing,
                                 vertical_line_spacing,
                                 tag_vertical_max_chars,
+                                tag_vertical_min_aspect,
                             ) = _apply_tag_style_overrides(
                                 render_tag,
                                 config,
@@ -13685,6 +13702,11 @@ def translate_and_render(
                                 tag_vertical_max_chars
                                 if tag_vertical_max_chars is not None
                                 else (0 if is_outside_text else config.rendering.vertical_emphasis_max_chars)
+                            ),
+                            vertical_min_aspect_ratio=(
+                                tag_vertical_min_aspect
+                                if tag_vertical_min_aspect is not None
+                                else config.rendering.vertical_min_aspect_ratio
                             ),
                             use_subpixel_rendering=(
                                 config.outside_text.osb_use_subpixel_rendering

@@ -28,6 +28,7 @@ TAG_STYLE_COLUMNS = [
     "줄 간격 배율",
     "세로쓰기 줄 간격 배율",
     "세로쓰기 최대 글자 수",
+    "세로쓰기 최소 비율",
 ]
 
 _NUMERIC_DEFAULTS = {
@@ -36,6 +37,11 @@ _NUMERIC_DEFAULTS = {
     "line_spacing_mult": 1.0,
     "vertical_line_spacing_mult": 1.0,
     "vertical_max_chars": 4,
+    # 세로쓰기를 시도하려면 글상자가 폭 대비 몇 배 높아야 하는지.
+    # 한국어 대사는 기둥형 말풍선이 아니면 가로가 자연스럽고, 효과음은 원작을 따라
+    # 훨씬 완만한 비율에서도 세로가 어울려서 태그마다 값이 달라야 한다.
+    # 1.7 은 기존 전역 상수와 같은 값이라 설정하지 않은 태그는 동작이 바뀌지 않는다.
+    "vertical_min_aspect_ratio": 1.7,
 }
 
 
@@ -50,6 +56,7 @@ def default_tag_style_rows() -> List[List[Any]]:
             _NUMERIC_DEFAULTS["line_spacing_mult"],
             _NUMERIC_DEFAULTS["vertical_line_spacing_mult"],
             _NUMERIC_DEFAULTS["vertical_max_chars"],
+            _NUMERIC_DEFAULTS["vertical_min_aspect_ratio"],
         ]
         for tag, description in TAG_DEFINITIONS.items()
     ]
@@ -85,6 +92,7 @@ def _rows_from_any(value: Any) -> List[List[Any]]:
                 cfg.get("line_spacing_mult", cfg.get("줄 간격 배율", _NUMERIC_DEFAULTS["line_spacing_mult"])),
                 cfg.get("vertical_line_spacing_mult", cfg.get("세로쓰기 줄 간격 배율", _NUMERIC_DEFAULTS["vertical_line_spacing_mult"])),
                 cfg.get("vertical_max_chars", cfg.get("세로쓰기 최대 글자 수", _NUMERIC_DEFAULTS["vertical_max_chars"])),
+                cfg.get("vertical_min_aspect_ratio", cfg.get("세로쓰기 최소 비율", _NUMERIC_DEFAULTS["vertical_min_aspect_ratio"])),
             ])
         return rows
 
@@ -104,6 +112,7 @@ def _rows_from_any(value: Any) -> List[List[Any]]:
                     item.get("line_spacing_mult", item.get("Line Spacing", item.get("줄 간격 배율", _NUMERIC_DEFAULTS["line_spacing_mult"]))),
                     item.get("vertical_line_spacing_mult", item.get("Vertical Line Spacing", item.get("세로쓰기 줄 간격 배율", _NUMERIC_DEFAULTS["vertical_line_spacing_mult"]))),
                     item.get("vertical_max_chars", item.get("Vertical Max Chars", item.get("세로쓰기 최대 글자 수", _NUMERIC_DEFAULTS["vertical_max_chars"]))),
+                    item.get("vertical_min_aspect_ratio", item.get("Vertical Min Aspect Ratio", item.get("세로쓰기 최소 비율", _NUMERIC_DEFAULTS["vertical_min_aspect_ratio"]))),
                 ])
             return rows
         return value
@@ -146,6 +155,7 @@ def normalize_tag_style_table(value: Any) -> Dict[str, Dict[str, Any]]:
             "line_spacing_mult": _safe_float(row[5] if len(row) > 5 else None, _NUMERIC_DEFAULTS["line_spacing_mult"], 0.1, 5.0),
             "vertical_line_spacing_mult": _safe_float(row[6] if len(row) > 6 else None, _NUMERIC_DEFAULTS["vertical_line_spacing_mult"], 0.1, 5.0),
             "vertical_max_chars": _safe_int(row[7] if len(row) > 7 else None, _NUMERIC_DEFAULTS["vertical_max_chars"], 0, 200),
+            "vertical_min_aspect_ratio": _safe_float(row[8] if len(row) > 8 else None, _NUMERIC_DEFAULTS["vertical_min_aspect_ratio"], 1.0, 20.0),
         }
         if result[tag_name]["max_font_size"] < result[tag_name]["min_font_size"]:
             result[tag_name]["max_font_size"] = result[tag_name]["min_font_size"]
@@ -158,6 +168,7 @@ def normalize_tag_style_table(value: Any) -> Dict[str, Dict[str, Any]]:
             "line_spacing_mult": _NUMERIC_DEFAULTS["line_spacing_mult"],
             "vertical_line_spacing_mult": _NUMERIC_DEFAULTS["vertical_line_spacing_mult"],
             "vertical_max_chars": _NUMERIC_DEFAULTS["vertical_max_chars"],
+            "vertical_min_aspect_ratio": _NUMERIC_DEFAULTS["vertical_min_aspect_ratio"],
         })
 
     return result
@@ -177,5 +188,6 @@ def tag_styles_to_table(value: Any) -> List[List[Any]]:
             cfg.get("line_spacing_mult", _NUMERIC_DEFAULTS["line_spacing_mult"]),
             cfg.get("vertical_line_spacing_mult", _NUMERIC_DEFAULTS["vertical_line_spacing_mult"]),
             cfg.get("vertical_max_chars", _NUMERIC_DEFAULTS["vertical_max_chars"]),
+            cfg.get("vertical_min_aspect_ratio", _NUMERIC_DEFAULTS["vertical_min_aspect_ratio"]),
         ])
     return rows
