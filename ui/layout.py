@@ -5,6 +5,7 @@ from typing import Any
 import gradio as gr
 
 from core.tag_styles import TAG_DEFINITIONS, TAG_STYLE_COLUMNS, tag_styles_to_table
+
 from . import callbacks, korean, settings_manager, utils
 
 korean.install_gradio_korean(gr)
@@ -557,52 +558,82 @@ def create_layout(
                             )
 
             with gr.TabItem("고급 이미지 편집기"):
+                gr.Markdown(
+                    "## 편집 작업 열기\n"
+                    "이전에 번역한 작업을 이어서 열거나, 일반 이미지 폴더로 새 작업을 시작할 수 있습니다."
+                )
                 with gr.Row(equal_height=False):
                     with gr.Column(scale=1):
-                        image_editor_folder_path = gr.Textbox(
-                            label="편집할 폴더 경로",
-                            value=saved_settings.get(
-                                "image_editor_source_path", ""
-                            ),
-                            placeholder=r"C:\편집할 이미지 폴더",
-                            info=(
-                                "Windows 폴더 선택창에서 실제 이미지 폴더를 선택합니다. "
-                                "하위 폴더의 이미지도 함께 불러오며, 편집기에서 원본 덮어쓰기를 사용할 수 있습니다."
-                            ),
-                            interactive=False,
-                        )
-                        image_editor_folder_button = gr.Button(
-                            "편집할 폴더 선택", variant="secondary"
-                        )
-                        image_editor_font_dropdown = gr.Dropdown(
-                            choices=font_choices,
-                            label="추가 텍스트 글꼴",
-                            value=default_font,
-                            filterable=False,
-                            visible=False,
-                        )
-                        with gr.Row():
-                            image_editor_create_button = gr.Button(
-                                "편집 세션 만들기", variant="primary"
+                        with gr.Group():
+                            gr.Markdown(
+                                "### 기존 작업 계속하기\n"
+                                "번역기를 다시 켠 뒤에도 디스크에 남아 있는 편집 세션을 최근 작업부터 찾습니다."
                             )
-                            image_editor_clear_button = gr.Button("초기화")
+                            existing_editor_refresh_button = gr.Button(
+                                "저장된 세션 새로고침", variant="secondary"
+                            )
+                            existing_editor_session_select = gr.Dropdown(
+                                choices=[],
+                                label="저장된 편집 세션",
+                                info="목록을 클릭한 뒤 이미지 이름을 입력하면 검색할 수 있습니다.",
+                                visible=True,
+                                interactive=False,
+                                filterable=True,
+                            )
+                            existing_editor_open_button = gr.Button(
+                                "선택한 작업 계속하기",
+                                variant="primary",
+                                visible=False,
+                            )
                     with gr.Column(scale=1):
-                        image_editor_session_select = gr.Dropdown(
-                            choices=[],
-                            label="편집할 이미지",
-                            visible=False,
-                            interactive=True,
-                            filterable=False,
-                        )
-                        image_editor_open_button = gr.Button(
-                            "고급 편집기 열기",
-                            visible=False,
-                        )
-                        image_editor_status = gr.Textbox(
-                            label="상태",
-                            interactive=False,
-                            elem_id="image_editor_status_message",
-                        )
+                        with gr.Group():
+                            gr.Markdown(
+                                "### 새 이미지 가져오기\n"
+                                "기존 세션이 없는 이미지 폴더를 새 편집 작업으로 가져옵니다."
+                            )
+                            image_editor_folder_path = gr.Textbox(
+                                label="이미지 폴더",
+                                value=saved_settings.get(
+                                    "image_editor_source_path", ""
+                                ),
+                                placeholder=r"C:\새로 편집할 이미지 폴더",
+                                info=(
+                                    "하위 폴더의 이미지도 함께 불러옵니다. "
+                                    "원본 덮어쓰기를 켜면 이 폴더의 실제 파일이 변경될 수 있습니다."
+                                ),
+                                interactive=False,
+                            )
+                            image_editor_folder_button = gr.Button(
+                                "Explorer에서 폴더 선택", variant="secondary"
+                            )
+                            image_editor_font_dropdown = gr.Dropdown(
+                                choices=font_choices,
+                                label="추가 텍스트 기본 글꼴",
+                                value=default_font,
+                                filterable=False,
+                                visible=True,
+                            )
+                            with gr.Row():
+                                image_editor_create_button = gr.Button(
+                                    "이미지로 새 작업 만들기", variant="secondary"
+                                )
+                                image_editor_clear_button = gr.Button("가져오기 초기화")
+                            image_editor_session_select = gr.Dropdown(
+                                choices=[],
+                                label="가져온 이미지",
+                                visible=False,
+                                interactive=True,
+                                filterable=False,
+                            )
+                            image_editor_open_button = gr.Button(
+                                "가져온 이미지 편집하기",
+                                visible=False,
+                            )
+                image_editor_status = gr.Textbox(
+                    label="상태",
+                    interactive=False,
+                    elem_id="image_editor_status_message",
+                )
 
             with gr.TabItem("Batch"):
                 with gr.Row():
@@ -4188,6 +4219,32 @@ def create_layout(
             queue=False,
         )
 
+        existing_editor_refresh_button.click(
+            fn=callbacks.handle_refresh_existing_editor_sessions,
+            inputs=[],
+            outputs=[
+                existing_editor_session_select,
+                existing_editor_open_button,
+                image_editor_status,
+            ],
+            queue=False,
+            show_progress="hidden",
+        )
+        existing_editor_session_select.change(
+            fn=lambda session_path: gr.update(
+                visible=bool(session_path), interactive=bool(session_path)
+            ),
+            inputs=[existing_editor_session_select],
+            outputs=[existing_editor_open_button],
+            queue=False,
+        )
+        existing_editor_open_button.click(
+            fn=callbacks.handle_launch_advanced_editor,
+            inputs=[existing_editor_session_select],
+            outputs=[image_editor_status],
+            queue=False,
+        )
+
         image_editor_create_button.click(
             fn=functools.partial(
                 callbacks.handle_create_image_editor_sessions,
@@ -4399,6 +4456,16 @@ def create_layout(
                 openai_compatible_api_key_input,
             ],
             outputs=[config_model_name],
+            queue=False,
+        )
+        app.load(
+            fn=callbacks.handle_refresh_existing_editor_sessions,
+            inputs=[],
+            outputs=[
+                existing_editor_session_select,
+                existing_editor_open_button,
+                image_editor_status,
+            ],
             queue=False,
         )
         app.load(fn=None, inputs=None, outputs=None, js=js_folder_upload, queue=False)

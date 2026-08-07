@@ -1,5 +1,5 @@
-import os
 import json
+import os
 import re
 import subprocess
 import sys
@@ -35,10 +35,10 @@ from .ui_models import (
     UIConfigState,
     UIDetectionSettings,
     UIGeneralSettings,
+    UIGoogleRateLimitSettings,
     UIOutputSettings,
     UIOutsideTextSettings,
     UIRenderingSettings,
-    UIGoogleRateLimitSettings,
     UITranslationLLMSettings,
     UITranslationProviderSettings,
     flux_offload_flags,
@@ -110,62 +110,49 @@ def _plain_download_path(
 def handle_browse_output_directory(current_value: str) -> gr.update:
     """Open a native folder picker and return the chosen absolute output path."""
     try:
-        repo_root = Path(__file__).resolve().parents[1]
-        initial = Path(os.path.expandvars(str(current_value or "").strip())).expanduser()
-        if not initial.is_absolute():
-            initial = repo_root / initial
-        if not initial.exists():
-            initial = initial.parent if initial.parent.exists() else repo_root
-
-        script = r"""
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = '저장 폴더 선택'
-$dialog.ShowNewFolderButton = $true
-$initial = $env:MT_OUTPUT_INITIAL_DIR
-if (-not [string]::IsNullOrWhiteSpace($initial) -and (Test-Path -LiteralPath $initial -PathType Container)) {
-    $dialog.SelectedPath = $initial
-}
-$result = $dialog.ShowDialog()
-if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
-    Write-Output $dialog.SelectedPath
-}
-"""
-        env = dict(os.environ)
-        env["MT_OUTPUT_INITIAL_DIR"] = str(initial)
-        completed = subprocess.run(
-            [
-                "powershell.exe",
-                "-NoProfile",
-                "-STA",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                script,
-            ],
-            cwd=str(repo_root),
-            env=env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            timeout=3600,
-        )
-        selected = (
-            completed.stdout.strip().splitlines()[-1].strip()
-            if completed.stdout.strip()
-            else ""
-        )
+        selected = _select_folder_with_explorer(current_value, "저장 폴더 선택")
         if selected:
-            return gr.update(value=str(Path(selected).resolve()))
-        if completed.returncode not in (0, None):
-            error_text = completed.stderr.strip() or f"exit code {completed.returncode}"
-            gr.Warning(f"폴더 선택 창을 열 수 없습니다: {error_text}")
+            return gr.update(value=selected)
     except Exception as exc:
         gr.Warning(f"폴더 선택 창을 열 수 없습니다: {exc}")
     return gr.update(value=current_value)
+
+
+def _select_folder_with_explorer(current_value: Any, title: str) -> str:
+    repo_root = Path(__file__).resolve().parents[1]
+    current_text = os.path.expandvars(str(current_value or "").strip())
+    initial = Path(current_text).expanduser() if current_text else repo_root
+    if not initial.is_absolute():
+        initial = repo_root / initial
+    if initial.is_file():
+        initial = initial.parent
+    if not initial.exists():
+        initial = initial.parent if initial.parent.exists() else repo_root
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "advanced_editor.folder_picker",
+            str(initial),
+            title,
+        ],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        timeout=3600,
+    )
+    if completed.returncode != 0:
+        error_text = completed.stderr.strip() or f"exit code {completed.returncode}"
+        raise RuntimeError(error_text)
+    return (
+        completed.stdout.strip().splitlines()[-1].strip()
+        if completed.stdout.strip()
+        else ""
+    )
 
 
 def _remember_image_editor_source_path(value: Any) -> str:
@@ -182,80 +169,79 @@ def handle_remember_image_editor_source_path(value: Any) -> None:
 
 
 def handle_browse_image_editor_folder(current_value: str) -> gr.update:
-    """Open a topmost native folder picker for the standalone image editor."""
+    """Open the native Windows Explorer folder picker for image import."""
     try:
-        repo_root = Path(__file__).resolve().parents[1]
-        current_text = os.path.expandvars(str(current_value or "").strip())
-        initial = Path(current_text).expanduser() if current_text else repo_root
-        if not initial.is_absolute():
-            initial = repo_root / initial
-        if initial.is_file():
-            initial = initial.parent
-        if not initial.exists():
-            initial = initial.parent if initial.parent.exists() else repo_root
-
-        script = r"""
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-Add-Type -AssemblyName System.Windows.Forms
-$owner = New-Object System.Windows.Forms.Form
-$owner.Text = 'MangaTranslator'
-$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-$owner.Size = New-Object System.Drawing.Size(1, 1)
-$owner.ShowInTaskbar = $false
-$owner.TopMost = $true
-$owner.Opacity = 0
-$owner.Show()
-$owner.Activate()
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = '편집할 이미지 폴더 선택'
-$dialog.ShowNewFolderButton = $false
-$initial = $env:MT_IMAGE_EDITOR_SOURCE_INITIAL
-if (-not [string]::IsNullOrWhiteSpace($initial) -and (Test-Path -LiteralPath $initial -PathType Container)) {
-    $dialog.SelectedPath = $initial
-}
-$result = $dialog.ShowDialog($owner)
-if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
-    Write-Output $dialog.SelectedPath
-}
-$owner.Close()
-$owner.Dispose()
-"""
-        env = dict(os.environ)
-        env["MT_IMAGE_EDITOR_SOURCE_INITIAL"] = str(initial)
-        completed = subprocess.run(
-            [
-                "powershell.exe",
-                "-NoProfile",
-                "-STA",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                script,
-            ],
-            cwd=str(repo_root),
-            env=env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            timeout=3600,
-        )
-        selected = (
-            completed.stdout.strip().splitlines()[-1].strip()
-            if completed.stdout.strip()
-            else ""
+        selected = _select_folder_with_explorer(
+            current_value, "새 이미지 폴더 가져오기"
         )
         if selected:
-            resolved = str(Path(selected).resolve())
-            _remember_image_editor_source_path(resolved)
-            return gr.update(value=resolved)
-        if completed.returncode not in (0, None):
-            error_text = completed.stderr.strip() or f"exit code {completed.returncode}"
-            gr.Warning(f"폴더 선택 창을 열 수 없습니다: {error_text}")
+            _remember_image_editor_source_path(selected)
+            return gr.update(value=selected)
     except Exception as exc:
         gr.Warning(f"폴더 선택 창을 열 수 없습니다: {exc}")
     return gr.update(value=current_value)
+
+
+def _discover_existing_editor_sessions(
+    repo_root: Optional[Path] = None,
+) -> tuple[List[Tuple[str, str]], int]:
+    repo_root = (repo_root or Path(__file__).resolve().parents[1]).resolve()
+    session_paths: Dict[str, Path] = {}
+    for folder_name in ("editor_sessions", "editor_imports"):
+        root = repo_root / folder_name
+        if not root.is_dir():
+            continue
+        for path in root.rglob("*.json"):
+            if path.name.casefold().endswith("edit_session.json"):
+                resolved = path.resolve()
+                session_paths.setdefault(str(resolved).casefold(), resolved)
+
+    choices: List[Tuple[float, str, str]] = []
+    invalid_count = 0
+    for path in session_paths.values():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("invalid session")
+            display_name = str(data.get("source_display_path") or "").strip()
+            if not display_name:
+                source = str(
+                    data.get("translated_image_path")
+                    or data.get("source_image_path")
+                    or ""
+                ).strip()
+                display_name = Path(source).name if source else path.stem
+            region_count = len(data.get("regions") or [])
+            modified = path.stat().st_mtime
+            modified_text = time.strftime("%Y-%m-%d %H:%M", time.localtime(modified))
+            label = f"{display_name}  ·  영역 {region_count}개  ·  {modified_text}"
+            choices.append((modified, label, str(path)))
+        except Exception:
+            invalid_count += 1
+
+    choices.sort(key=lambda item: (-item[0], item[1].casefold()))
+    return [(label, path) for _modified, label, path in choices], invalid_count
+
+
+def handle_refresh_existing_editor_sessions() -> Tuple[gr.update, gr.update, gr.update]:
+    choices, invalid_count = _discover_existing_editor_sessions()
+    selected = choices[0][1] if choices else None
+    if choices:
+        message = f"저장된 편집 세션 {len(choices)}개를 찾았습니다. 최근 작업부터 표시합니다."
+        if invalid_count:
+            message += f" 읽을 수 없는 세션 {invalid_count}개는 제외했습니다."
+    else:
+        message = "저장된 편집 세션을 찾지 못했습니다. 새 이미지 폴더를 가져올 수 있습니다."
+    return (
+        gr.update(
+            choices=choices,
+            value=selected,
+            visible=True,
+            interactive=bool(choices),
+        ),
+        _editor_button_update(selected),
+        _status_update(message),
+    )
 
 
 def handle_output_path_explorer_select(
@@ -284,8 +270,11 @@ def handle_output_path_explorer_select(
 
 def _editor_session_choices_from_outputs(output_files: List[str]) -> List[Tuple[str, str]]:
     try:
-        from core.editor_session import default_edit_session_path, legacy_edit_session_path
         from core.editor_package import has_embedded_editor_package
+        from core.editor_session import (
+            default_edit_session_path,
+            legacy_edit_session_path,
+        )
     except Exception:
         return []
 
