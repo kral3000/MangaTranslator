@@ -230,6 +230,12 @@ class ResizableTextEdit(QTextEdit):
             painter.drawLine(right - offset, bottom, right, bottom - offset)
 
 
+class AutoHideStatusLabel(QLabel):
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self.setVisible(bool(str(text or "").strip()))
+
+
 class TaskSignals(QObject):
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
@@ -1283,6 +1289,8 @@ class AdvancedEditorWindow(QMainWindow):
         action_toolbar.setAllowedAreas(Qt.ToolBarArea.TopToolBarArea)
         action_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         action_toolbar.setIconSize(QSize(18, 18))
+        action_toolbar.setMinimumHeight(50)
+        action_toolbar.setMaximumHeight(50)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, action_toolbar)
         self.action_toolbar = action_toolbar
 
@@ -1297,7 +1305,7 @@ class AdvancedEditorWindow(QMainWindow):
 
         self.history_menu = QMenu(self)
         self.history_button = QToolButton(self)
-        self.history_button.setText("기록")
+        self.history_button.setText("작업 기록")
         self.history_button.setIcon(_editor_icon("history"))
         self.history_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.history_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -1331,7 +1339,7 @@ class AdvancedEditorWindow(QMainWindow):
         )
         action_toolbar.addWidget(toolbar_spacer)
 
-        self.render_action = QAction(_editor_icon("save"), "저장", self)
+        self.render_action = QAction(_editor_icon("save"), "저장  Ctrl+S", self)
         self.render_action.setShortcut(QKeySequence("Ctrl+S"))
         self.render_action.setToolTip("편집 세션과 결과 저장 (Ctrl+S)")
         self.render_action.triggered.connect(self.render_and_save)
@@ -1347,12 +1355,14 @@ class AdvancedEditorWindow(QMainWindow):
             save_button.setProperty("toolbarRole", "primary")
 
         central = QWidget(self)
+        central.setObjectName("CentralSurface")
         self.setCentralWidget(central)
         root = QHBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
+        self.splitter.setHandleWidth(1)
         root.addWidget(self.splitter)
 
         self.splitter.addWidget(self._build_side_panel())
@@ -1459,35 +1469,48 @@ class AdvancedEditorWindow(QMainWindow):
     def _apply_theme(self) -> None:
         self.setStyleSheet(
             """
-            QMainWindow, QWidget {
-                background: #f6f8fb;
+            QMainWindow {
+                background: #edf2f7;
+            }
+            QWidget {
                 color: #172033;
                 font-family: "Segoe UI", "Malgun Gothic";
                 font-size: 12px;
             }
+            QWidget#CentralSurface {
+                background: #edf2f7;
+            }
             QToolBar#TopBar {
-                background: #111827;
+                background: #0f172a;
                 border: 0;
                 border-bottom: 1px solid #263244;
-                spacing: 6px;
-                padding: 7px 10px;
+                spacing: 5px;
+                padding: 6px 12px;
             }
             QToolBar#TopBar QToolButton {
                 color: #e5e7eb;
                 background: transparent;
                 border: 1px solid transparent;
                 border-radius: 6px;
-                padding: 7px 10px;
+                min-height: 22px;
+                padding: 6px 9px;
             }
             QToolBar#TopBar QToolButton:hover {
                 background: #273449;
                 border-color: #3b4a60;
+            }
+            QToolBar#TopBar QToolButton:disabled {
+                color: #64748b;
+                background: transparent;
+                border-color: transparent;
             }
             QToolBar#TopBar QToolButton[toolbarRole="primary"] {
                 background: #2563eb;
                 border-color: #60a5fa;
                 color: #ffffff;
                 font-weight: 700;
+                padding-left: 12px;
+                padding-right: 12px;
             }
             QToolBar#TopBar QToolButton[toolbarRole="primary"]:hover {
                 background: #1d4ed8;
@@ -1505,21 +1528,41 @@ class AdvancedEditorWindow(QMainWindow):
             QToolBar#TopBar QSpinBox {
                 min-height: 20px;
                 padding: 4px 6px;
+                background: #ffffff;
+                border: 1px solid #64748b;
+                border-radius: 5px;
+            }
+            QToolBar#TopBar QSlider::groove:horizontal {
+                height: 4px;
+                background: #475569;
+                border-radius: 2px;
+            }
+            QToolBar#TopBar QSlider::sub-page:horizontal {
+                background: #60a5fa;
+                border-radius: 2px;
+            }
+            QToolBar#TopBar QSlider::handle:horizontal {
+                width: 14px;
+                margin: -5px 0;
+                background: #ffffff;
+                border: 2px solid #2563eb;
+                border-radius: 7px;
             }
             QToolBar#ToolRail {
                 background: #111827;
                 border: 0;
                 border-right: 1px solid #263244;
-                spacing: 5px;
-                padding: 10px 7px;
+                spacing: 4px;
+                padding: 12px 9px;
             }
             QToolBar#ToolRail QToolButton {
                 color: #cbd5e1;
                 background: transparent;
                 border: 1px solid transparent;
                 border-radius: 6px;
-                padding: 9px 7px;
-                min-width: 140px;
+                min-height: 26px;
+                padding: 8px 10px;
+                min-width: 142px;
                 text-align: left;
             }
             QToolBar#ToolRail QToolButton:hover {
@@ -1530,14 +1573,36 @@ class AdvancedEditorWindow(QMainWindow):
             QToolBar#ToolRail QToolButton:checked {
                 background: #2563eb;
                 border-color: #60a5fa;
-                color: white;
+                color: #ffffff;
+                font-weight: 700;
+            }
+            QToolBar#ToolRail QToolButton:focus,
+            QToolBar#TopBar QToolButton:focus {
+                border-color: #93c5fd;
+            }
+            QWidget#InspectorShell,
+            QScrollArea#InspectorScroll,
+            QWidget#InspectorPanel {
+                background: #f4f7fb;
+            }
+            QWidget#InspectorShell {
+                border-right: 1px solid #d5dde8;
+            }
+            QScrollArea#InspectorScroll {
+                border: 0;
             }
             QWidget#CanvasPanel {
-                background: #20242b;
+                background: #1c222b;
+            }
+            QSplitter::handle {
+                background: #d5dde8;
+            }
+            QSplitter::handle:hover {
+                background: #60a5fa;
             }
             QWidget#ZoomBar {
-                background: #202733;
-                border-bottom: 1px solid #374151;
+                background: #252d3a;
+                border-bottom: 1px solid #3a4657;
             }
             QWidget#ZoomBar QLabel {
                 color: #f8fafc;
@@ -1546,11 +1611,11 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QWidget#ZoomBar QPushButton {
                 min-height: 20px;
-                padding: 4px 10px;
+                padding: 4px 9px;
                 color: #f8fafc;
-                background: #374151;
-                border: 1px solid #4b5563;
-                border-radius: 4px;
+                background: #364152;
+                border: 1px solid #4b5a6f;
+                border-radius: 5px;
             }
             QWidget#ZoomBar QPushButton:hover {
                 background: #475569;
@@ -1598,61 +1663,89 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QScrollArea {
                 border: 0;
-                background: #eef2f7;
+                background: #f4f7fb;
             }
             QLabel {
                 color: #334155;
-                font-weight: 600;
+                font-weight: 500;
+            }
+            QLabel#SectionTitle,
+            QLabel#PanelTitle {
+                color: #172033;
+                font-size: 13px;
+                font-weight: 700;
+                padding-top: 3px;
+                padding-bottom: 6px;
+                border-bottom: 1px solid #d5dde8;
             }
             QTextEdit, QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
                 background: #ffffff;
-                color: #111827;
-                border: 1px solid #cbd5e1;
+                color: #172033;
+                border: 1px solid #c4cfdd;
                 border-radius: 6px;
-                padding: 6px;
+                min-height: 20px;
+                padding: 6px 8px;
                 selection-background-color: #bfdbfe;
             }
             QTextEdit:focus, QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
                 border: 1px solid #2563eb;
             }
             QPushButton {
-                background: #e8edf5;
-                color: #111827;
-                border: 1px solid #cbd5e1;
+                background: #ffffff;
+                color: #172033;
+                border: 1px solid #c4cfdd;
                 border-radius: 6px;
-                padding: 8px 10px;
-                font-weight: 700;
+                min-height: 20px;
+                padding: 7px 10px;
+                font-weight: 600;
             }
             QPushButton:hover {
-                background: #dbeafe;
+                background: #eff6ff;
                 border-color: #60a5fa;
             }
             QPushButton:pressed {
-                background: #bfdbfe;
+                background: #dbeafe;
+            }
+            QPushButton:focus {
+                border: 1px solid #2563eb;
+            }
+            QPushButton:disabled {
+                background: #edf1f6;
+                border-color: #d5dde8;
+                color: #94a3b8;
             }
             QTabWidget::pane {
-                border: 1px solid #d8dee9;
-                border-radius: 6px;
+                border: 1px solid #d5dde8;
+                border-radius: 8px;
                 background: #ffffff;
                 margin-top: -1px;
+                padding: 2px;
             }
             QTabBar::tab {
-                background: #e8edf5;
-                color: #475569;
-                border: 1px solid #d8dee9;
-                padding: 7px 12px;
-                margin-right: 2px;
+                background: transparent;
+                color: #64748b;
+                border: 1px solid transparent;
+                border-bottom: 2px solid transparent;
+                padding: 7px 9px;
+                margin-right: 1px;
                 border-top-left-radius: 6px;
                 border-top-right-radius: 6px;
+            }
+            QTabBar::tab:hover {
+                color: #1d4ed8;
+                background: #eff6ff;
             }
             QTabBar::tab:selected {
                 background: #ffffff;
                 color: #1d4ed8;
-                border-bottom-color: #ffffff;
+                border-color: #d5dde8;
+                border-bottom-color: #2563eb;
+                font-weight: 700;
             }
             QCheckBox {
                 spacing: 8px;
                 color: #1f2937;
+                min-height: 22px;
             }
             QSlider::groove:horizontal {
                 height: 6px;
@@ -1669,18 +1762,104 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #eef6ff;
                 color: #1e3a8a;
                 border: 1px solid #bfdbfe;
-                border-radius: 6px;
-                padding: 8px;
+                border-radius: 7px;
+                margin: 8px 10px 10px 10px;
+                padding: 9px 10px;
                 font-weight: 500;
             }
             QLabel#HelpLabel {
-                background: #f8fafc;
-                color: #334155;
-                border: 1px solid #dbe4ee;
+                background: #ffffff;
+                color: #475569;
+                border: 1px solid #d5dde8;
                 border-radius: 6px;
-                padding: 10px;
-                font-size: 12px;
-                font-weight: 500;
+                padding: 9px 10px;
+                font-size: 11px;
+                font-weight: 400;
+            }
+            QWidget#SessionPanel {
+                background: #f8fafc;
+                border-left: 1px solid #d5dde8;
+            }
+            QListWidget {
+                background: #ffffff;
+                color: #334155;
+                border: 1px solid #d5dde8;
+                border-radius: 7px;
+                outline: 0;
+                padding: 4px;
+            }
+            QListWidget::item {
+                min-height: 26px;
+                padding: 6px 8px;
+                border-radius: 5px;
+            }
+            QListWidget::item:hover {
+                background: #eff6ff;
+            }
+            QListWidget::item:selected {
+                background: #dbeafe;
+                color: #1d4ed8;
+                font-weight: 700;
+            }
+            QMenu {
+                background: #ffffff;
+                color: #172033;
+                border: 1px solid #c4cfdd;
+                padding: 5px;
+            }
+            QMenu::item {
+                padding: 7px 24px 7px 10px;
+                border-radius: 5px;
+            }
+            QMenu::item:selected {
+                background: #eff6ff;
+                color: #1d4ed8;
+            }
+            QToolTip {
+                background: #172033;
+                color: #ffffff;
+                border: 1px solid #334155;
+                padding: 6px 8px;
+            }
+            QScrollBar:vertical {
+                width: 10px;
+                background: transparent;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                min-height: 32px;
+                background: #a8b4c4;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #64748b;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical,
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical {
+                height: 0;
+                background: transparent;
+            }
+            QScrollBar:horizontal {
+                height: 10px;
+                background: transparent;
+                margin: 2px;
+            }
+            QScrollBar::handle:horizontal {
+                min-width: 32px;
+                background: #a8b4c4;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #64748b;
+            }
+            QScrollBar::add-line:horizontal,
+            QScrollBar::sub-line:horizontal,
+            QScrollBar::add-page:horizontal,
+            QScrollBar::sub-page:horizontal {
+                width: 0;
+                background: transparent;
             }
             """
         )
@@ -1855,14 +2034,15 @@ class AdvancedEditorWindow(QMainWindow):
 
     def _build_session_panel(self) -> QWidget:
         panel = QWidget(self)
+        panel.setObjectName("SessionPanel")
         panel.setMinimumWidth(190)
         panel.setMaximumWidth(280)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(10, 14, 8, 14)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 16, 12, 16)
+        layout.setSpacing(10)
 
         title = QLabel(f"편집 이미지 ({len(self.related_session_paths)}장)")
-        title.setStyleSheet("font-weight: 700;")
+        title.setObjectName("PanelTitle")
         layout.addWidget(title)
 
         self.session_list = QListWidget()
@@ -2000,9 +2180,12 @@ class AdvancedEditorWindow(QMainWindow):
         panel.setMinimumWidth(340)
         panel.setMaximumWidth(450)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 18)
+        layout.setSpacing(10)
 
+        region_title = QLabel("영역과 텍스트")
+        region_title.setObjectName("SectionTitle")
+        layout.addWidget(region_title)
         layout.addWidget(QLabel("텍스트 영역"))
         self.region_combo = QComboBox()
         self.region_combo.currentIndexChanged.connect(self._on_region_combo_changed)
@@ -2034,7 +2217,7 @@ class AdvancedEditorWindow(QMainWindow):
         italic_button = QPushButton("기울임")
         italic_button.setToolTip("선택한 텍스트를 기울임으로 표시합니다.")
         italic_button.clicked.connect(lambda: self.wrap_translation_selection("*"))
-        bold_italic_button = QPushButton("굵+기")
+        bold_italic_button = QPushButton("굵게+기울임")
         bold_italic_button.setToolTip("선택한 텍스트를 굵게+기울임으로 표시합니다.")
         bold_italic_button.clicked.connect(lambda: self.wrap_translation_selection("***"))
         style_row.addWidget(bold_button)
@@ -2058,6 +2241,11 @@ class AdvancedEditorWindow(QMainWindow):
         self.vertical_checkbox.stateChanged.connect(self.commit_region_form)
         layout.addWidget(self.enabled_checkbox)
         layout.addWidget(self.vertical_checkbox)
+
+        layout.addSpacing(8)
+        style_title = QLabel("글자 모양과 배치")
+        style_title.setObjectName("SectionTitle")
+        layout.addWidget(style_title)
 
         self.x_spin = self._spin("X", layout, 0, 99999)
         self.y_spin = self._spin("Y", layout, 0, 99999)
@@ -2114,13 +2302,22 @@ class AdvancedEditorWindow(QMainWindow):
         color_row.addWidget(self.paint_color_button)
         layout.addLayout(color_row)
 
+        layout.addSpacing(8)
+        settings_title = QLabel("도구별 상세 설정")
+        settings_title.setObjectName("SectionTitle")
+        layout.addWidget(settings_title)
         settings_tabs = QTabWidget()
+        settings_tabs.setObjectName("InspectorTabs")
         settings_tabs.addTab(self._build_ocr_tab(), "OCR")
         settings_tabs.addTab(self._build_inpaint_tab(), "인페인팅")
         settings_tabs.addTab(self._build_translation_tab(), "번역")
         settings_tabs.addTab(self._build_editor_settings_tab(), "편집기 설정")
         layout.addWidget(settings_tabs)
 
+        layout.addSpacing(8)
+        output_title = QLabel("출력")
+        output_title.setObjectName("SectionTitle")
+        layout.addWidget(output_title)
         output_row = QHBoxLayout()
         output_row.addWidget(QLabel("저장 위치"))
         self.output_path_edit = QLineEdit(self._initial_custom_output_path())
@@ -2128,7 +2325,7 @@ class AdvancedEditorWindow(QMainWindow):
             "저장할 폴더를 선택하세요. 비워두면 설정의 기본 저장 폴더 또는 편집 세션 기본 위치에 저장"
         )
         output_row.addWidget(self.output_path_edit, 1)
-        browse_output_button = QPushButton("찾기")
+        browse_output_button = QPushButton("폴더 선택")
         browse_output_button.clicked.connect(self.choose_output_path)
         output_row.addWidget(browse_output_button)
         layout.addLayout(output_row)
@@ -2143,9 +2340,10 @@ class AdvancedEditorWindow(QMainWindow):
             self._persist_output_settings
         )
 
-        self.status_label = QLabel("")
+        self.status_label = AutoHideStatusLabel("")
         self.status_label.setObjectName("StatusLabel")
         self.status_label.setWordWrap(True)
+        self.status_label.setVisible(False)
         layout.addStretch(1)
 
         scroll = QScrollArea()
@@ -2171,6 +2369,8 @@ class AdvancedEditorWindow(QMainWindow):
     def _build_ocr_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 14)
+        layout.setSpacing(9)
         saved = self._saved_section("ocr")
         saved.update(self.session.get("ocr_settings", {}) or {})
 
@@ -2272,6 +2472,8 @@ class AdvancedEditorWindow(QMainWindow):
     def _build_inpaint_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 14)
+        layout.setSpacing(9)
         saved = self._saved_section("inpaint")
         saved.update(self.session.get("inpaint_settings", {}) or {})
         try:
@@ -2491,6 +2693,8 @@ class AdvancedEditorWindow(QMainWindow):
     def _build_translation_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 14)
+        layout.setSpacing(9)
         defaults = get_translation_defaults()
         saved = self._saved_section("translation")
         saved.update(self.session.get("editor_translation_settings", {}) or {})
@@ -2539,6 +2743,8 @@ class AdvancedEditorWindow(QMainWindow):
     def _build_editor_settings_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 14)
+        layout.setSpacing(9)
 
         self.show_help_checkbox = QCheckBox("설명 보기")
         self.show_help_checkbox.setChecked(

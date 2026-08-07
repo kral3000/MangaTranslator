@@ -2,28 +2,49 @@
 name: MangaTranslatorKo Advanced Editor
 description: Native PyQt6 manga editing workspace with an ink rail, light inspector, and canvas-first feedback.
 colors:
+  app-chrome: "#0f172a"
   active-blue: "#2563eb"
+  active-blue-deep: "#1d4ed8"
   active-blue-border: "#60a5fa"
+  active-blue-focus: "#93c5fd"
   active-blue-soft: "#bfdbfe"
   ink-rail: "#111827"
   ink-hover: "#1f2937"
-  workspace-paper: "#f6f8fb"
+  chrome-border: "#263244"
+  chrome-hover: "#273449"
+  chrome-hover-border: "#3b4a60"
+  workspace-paper: "#edf2f7"
+  inspector-paper: "#f4f7fb"
+  session-paper: "#f8fafc"
   field-paper: "#ffffff"
-  canvas-charcoal: "#20242b"
-  canvas-bar: "#202733"
-  canvas-control: "#374151"
+  canvas-charcoal: "#1c222b"
+  canvas-bar: "#252d3a"
+  canvas-control: "#364152"
+  canvas-divider: "#3a4657"
+  canvas-control-border: "#4b5a6f"
   body-ink: "#172033"
   label-slate: "#334155"
   quiet-slate: "#475569"
-  control-border: "#cbd5e1"
-  control-fill: "#e8edf5"
+  muted-slate: "#64748b"
+  disabled-slate: "#94a3b8"
+  scrollbar-slate: "#a8b4c4"
+  control-border: "#c4cfdd"
+  panel-divider: "#d5dde8"
+  control-fill: "#edf1f6"
+  control-hover: "#eff6ff"
+  control-pressed: "#dbeafe"
   toolbar-text: "#e5e7eb"
   status-paper: "#eef6ff"
   status-ink: "#1e3a8a"
+  pure-black: "#000000"
   canvas-selection: "#2196f3"
   canvas-region: "#ffc107"
   canvas-disabled: "#969696"
 typography:
+  supporting:
+    fontFamily: "Segoe UI, Malgun Gothic"
+    fontSize: "11px"
+    fontWeight: 400
   body:
     fontFamily: "Segoe UI, Malgun Gothic"
     fontSize: "12px"
@@ -31,19 +52,26 @@ typography:
   label:
     fontFamily: "Segoe UI, Malgun Gothic"
     fontSize: "12px"
-    fontWeight: 600
+    fontWeight: 500
   action:
     fontFamily: "Segoe UI, Malgun Gothic"
     fontSize: "12px"
+    fontWeight: 600
+  section:
+    fontFamily: "Segoe UI, Malgun Gothic"
+    fontSize: "13px"
     fontWeight: 700
   canvas-index:
     fontFamily: "Arial"
     fontSize: "10px"
     fontWeight: 700
 rounded:
+  micro: "2px"
   compact: "3px"
   small-control: "4px"
+  toolbar-control: "5px"
   control: "6px"
+  panel: "7px"
   circular-handle: "8px"
 spacing:
   tight: "5px"
@@ -51,6 +79,7 @@ spacing:
   control: "8px"
   standard: "10px"
   panel: "14px"
+  inspector-inset: "16px"
 components:
   topbar-action:
     backgroundColor: "transparent"
@@ -63,15 +92,15 @@ components:
     textColor: "{colors.control-border}"
     typography: "{typography.body}"
     rounded: "{rounded.control}"
-    padding: "9px 7px"
-    width: "68px"
+    padding: "8px 10px"
+    width: "142px"
   toolrail-action-selected:
     backgroundColor: "{colors.active-blue}"
     textColor: "{colors.field-paper}"
     typography: "{typography.body}"
     rounded: "{rounded.control}"
-    padding: "9px 7px"
-    width: "68px"
+    padding: "8px 10px"
+    width: "142px"
   inspector-button:
     backgroundColor: "{colors.control-fill}"
     textColor: "{colors.ink-rail}"
@@ -169,11 +198,11 @@ The palette uses dark ink for application chrome, cool paper neutrals for editab
 
 ## Layout
 
-The first viewport runs left to right as an 88–108px fixed tool rail, a 360–470px inspector, the flexible central canvas, and an optional 190–280px session list when multiple images are present. The horizontal splitter cannot collapse children; the canvas receives all remaining stretch and retains at least 480px in the initial sizing calculation.
+The first viewport runs left to right as a 160–180px fixed tool rail, a 360–470px inspector, the flexible central canvas, and an optional 190–280px session list when multiple images are present. The 50px top action bar spans the workspace. The horizontal splitter uses one-pixel handles and cannot collapse children; the canvas receives all remaining stretch and retains at least 480px in the initial sizing calculation.
 
 The window opens at 96% of available screen width and 94% of available height, bounded to 1680×1040px and a minimum of 1120×680px, or 1200×680px when the session list is present. The inspector targets 25% of the starting width within a 360–450px range. On screens narrower than 1280px or shorter than 760px, the editor starts maximized.
 
-Inspector content uses 14px outer insets and an 8px vertical rhythm. The zoom bar uses 8px horizontal by 5px vertical insets with 6px spacing. Keep the top action bar minimal and let splitter resizing, scrolling, and native window management handle adaptation.
+Inspector content uses 16px outer insets and a 10px vertical rhythm. Related controls keep 6–9px internal gaps; distinct sections receive 8px breathing room and a one-pixel divider below the 13px section title. Tool tabs use 12px internal insets and a 9px rhythm. The zoom bar uses 8px horizontal by 5px vertical insets with 6px spacing. Keep the top action bar minimal and let splitter resizing, scrolling, and native window management handle adaptation.
 
 **The Left-to-Canvas Rule.** A user chooses a tool on the far left, changes its values immediately beside it, and verifies the result in the center without crossing the canvas.
 
@@ -194,22 +223,22 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 ### Top Action Bar
 
 - **Character:** Minimal global operations in a fixed ink strip. Undo, redo, named history, and brush size stay on the left; save and export stay anchored at the far right.
-- **Shape:** Transparent 6px actions with 7px × 10px padding.
+- **Shape:** Transparent 6px actions with 6px × 9px padding; the filled save action receives 12px horizontal padding.
 - **States:** Hover adds a darker slate fill and visible border; shortcuts and tooltips preserve the full operation meaning.
 - **Content:** Every action pairs a consistent 1.8px line icon with an explicit Korean label. The history menu names each undoable action and can undo back to a selected point. Save uses the only filled blue toolbar treatment; export remains neutral.
 
 ### Tool Rail
 
 - **Character:** Narrow, text-only, and left aligned.
-- **Shape:** 68px minimum action width inside an 88–108px fixed toolbar; each action uses 9px × 7px padding and a 6px radius.
+- **Shape:** 142px minimum action width inside a 160–180px fixed toolbar; each action uses 8px × 10px padding and a 6px radius.
 - **States:** Default is quiet slate on transparent ink; hover brightens the label and darkens the row; checked state fills with Operational Blue and adds a lighter blue border.
 - **Behavior:** Actions remain mutually legible through checked state, icons, full visible labels, and tooltips; color is not the sole signal. Never shorten `인페인팅 브러시`, `인페인팅 마스크 지우개`, or the restore/paint tools to an ambiguous `지우기`.
 
 ### Buttons
 
 - **Shape:** Restrained 6px corners and 8px × 10px padding.
-- **Default:** Cool control fill, dark ink text, one-pixel border, and bold action weight.
-- **Hover / Pressed:** Hover shifts to a pale blue fill with a blue edge; pressed uses the stronger selection wash.
+- **Default:** White field paper, dark ink text, one-pixel border, and 600 action weight.
+- **Hover / Pressed:** Hover shifts to the pale operational-blue wash with a blue edge; pressed uses the stronger blue wash. Disabled actions use muted slate over disabled paper.
 
 ### Inputs / Fields
 

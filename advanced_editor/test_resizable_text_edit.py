@@ -7,7 +7,7 @@ from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
-from advanced_editor.launcher import ResizableTextEdit
+from advanced_editor.launcher import AutoHideStatusLabel, ResizableTextEdit
 
 
 class ResizableTextEditTest(TestCase):
@@ -31,3 +31,13 @@ class ResizableTextEditTest(TestCase):
 
         self.assertEqual(edit.height(), 104)
         edit.close()
+
+    def test_empty_status_does_not_leave_a_blank_panel(self) -> None:
+        app = QApplication.instance() or QApplication([])
+        label = AutoHideStatusLabel("")
+        app.processEvents()
+        label.setText("저장했습니다.")
+        self.assertFalse(label.isHidden())
+        label.setText("")
+        self.assertTrue(label.isHidden())
+        label.close()
