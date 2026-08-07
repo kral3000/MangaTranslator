@@ -257,7 +257,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 
 - **Zoom Bar:** A dark strip with compact 4px controls, white labels, and explicit pan, zoom, fit, and 100% actions.
 - **Scrollbars:** 18px native bars with 36px minimum handles; handles turn blue on hover.
-- **Region Overlays:** Selected regions use blue with thicker outlines and visible resize handles; enabled unselected regions use amber; disabled regions use gray. Number badges pair color with an explicit index.
+- **Region Overlays:** Selected regions use a 2px blue outline and visible resize handles; enabled unselected regions use a 1px translucent amber outline; disabled regions use gray. Number badges never default to the text box interior: they score positions above, below, left, and right, avoid other regions and already placed badges, prefer page-exterior canvas space, and use the least-obstructive visible fallback only when every candidate is blocked.
 
 ### Status and Help
 

@@ -887,28 +887,129 @@ class EditorCanvas(QWidget):
         )
         painter.drawImage(target, _pil_to_qimage(overlay))
 
+    @staticmethod
+    def _overlap_area(first: QRectF, second: QRectF) -> float:
+        overlap = first.intersected(second)
+        return max(0.0, overlap.width()) * max(0.0, overlap.height())
+
+    @classmethod
+    def _choose_region_badge_rect(
+        cls,
+        region_rect: QRectF,
+        badge_width: float,
+        badge_height: float,
+        other_regions: list[QRectF],
+        placed_badges: list[QRectF],
+        viewport_rect: QRectF,
+        image_rect: QRectF,
+    ) -> QRectF:
+        gap = 3.0
+        centered_x = region_rect.center().x() - badge_width / 2.0
+        centered_y = region_rect.center().y() - badge_height / 2.0
+        candidates = (
+            QRectF(centered_x, region_rect.top() - badge_height - gap, badge_width, badge_height),
+            QRectF(centered_x, region_rect.bottom() + gap, badge_width, badge_height),
+            QRectF(region_rect.left(), region_rect.top() - badge_height - gap, badge_width, badge_height),
+            QRectF(region_rect.right() - badge_width, region_rect.top() - badge_height - gap, badge_width, badge_height),
+            QRectF(region_rect.right() + gap, centered_y, badge_width, badge_height),
+            QRectF(region_rect.left() - badge_width - gap, centered_y, badge_width, badge_height),
+            QRectF(region_rect.right() + gap, region_rect.top(), badge_width, badge_height),
+            QRectF(region_rect.left() - badge_width - gap, region_rect.top(), badge_width, badge_height),
+            QRectF(region_rect.left(), region_rect.bottom() + gap, badge_width, badge_height),
+            QRectF(region_rect.right() - badge_width, region_rect.bottom() + gap, badge_width, badge_height),
+        )
+
+        ranked: list[tuple[float, QRectF]] = []
+        badge_area = max(1.0, badge_width * badge_height)
+        for order, candidate in enumerate(candidates):
+            if not viewport_rect.contains(candidate):
+                continue
+            region_overlap = sum(
+                cls._overlap_area(candidate, obstacle.adjusted(-1, -1, 1, 1))
+                for obstacle in other_regions
+            )
+            badge_overlap = sum(
+                cls._overlap_area(candidate, obstacle.adjusted(-2, -2, 2, 2))
+                for obstacle in placed_badges
+            )
+            image_coverage = cls._overlap_area(candidate, image_rect) / badge_area
+            score = (
+                badge_overlap * 1_000_000.0
+                + region_overlap * 100_000.0
+                + image_coverage * 100.0
+                + order
+            )
+            ranked.append((score, candidate))
+        if ranked:
+            return min(ranked, key=lambda item: item[0])[1]
+
+        fallback = QRectF(
+            min(
+                max(viewport_rect.left(), region_rect.left()),
+                viewport_rect.right() - badge_width,
+            ),
+            min(
+                max(viewport_rect.top(), region_rect.top()),
+                viewport_rect.bottom() - badge_height,
+            ),
+            badge_width,
+            badge_height,
+        )
+        return fallback
+
     def _draw_regions(self, painter: QPainter) -> None:
-        for index, region in enumerate(self.window.session.get("regions", [])):
-            rect = self._region_rect_view(region)
+        regions = list(self.window.session.get("regions", []))
+        region_rects = [self._region_rect_view(region) for region in regions]
+        region_styles: list[tuple[QColor, bool]] = []
+        for index, (region, rect) in enumerate(zip(regions, region_rects)):
             selected = index == self.window.selected_index
             if not region.get("enabled", True):
                 color = QColor(150, 150, 150, 190)
             elif selected:
-                color = QColor(33, 150, 243, 255)
+                color = QColor(33, 150, 243, 235)
             else:
-                color = QColor(255, 193, 7, 220)
-            painter.setPen(QPen(color, 3 if selected else 2))
+                color = QColor(255, 193, 7, 185)
+            region_styles.append((color, selected))
+            painter.setPen(QPen(color, 2 if selected else 1))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(rect)
-            painter.setFont(QFont("Arial", 10, QFont.Weight.Bold))
-            painter.fillRect(QRectF(rect.left(), rect.top(), 24, 18), QColor(0, 0, 0, 160))
-            painter.setPen(QColor(255, 255, 255))
-            painter.drawText(QRectF(rect.left(), rect.top(), 24, 18), Qt.AlignmentFlag.AlignCenter, str(index + 1))
             if selected:
                 painter.setBrush(QColor(33, 150, 243))
                 painter.setPen(QPen(QColor(255, 255, 255), 1))
                 for handle in self._handle_rects(rect).values():
                     painter.drawRect(handle)
+
+        painter.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+        metrics = painter.fontMetrics()
+        viewport_rect = QRectF(self.rect()).adjusted(2, 2, -2, -2)
+        image = self.window.display_image
+        image_rect = QRectF(
+            self.offset.x(),
+            self.offset.y(),
+            image.width * self.scale,
+            image.height * self.scale,
+        )
+        placed_badges: list[QRectF] = []
+        for index, rect in enumerate(region_rects):
+            label = str(index + 1)
+            badge_width = max(20.0, float(metrics.horizontalAdvance(label) + 10))
+            badge_height = 17.0
+            badge_rect = self._choose_region_badge_rect(
+                rect,
+                badge_width,
+                badge_height,
+                [other for position, other in enumerate(region_rects) if position != index],
+                placed_badges,
+                viewport_rect,
+                image_rect,
+            )
+            placed_badges.append(badge_rect)
+            color, selected = region_styles[index]
+            painter.setBrush(QColor(23, 32, 51, 235 if selected else 210))
+            painter.setPen(QPen(color, 1))
+            painter.drawRoundedRect(badge_rect, 3, 3)
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, label)
 
     def _draw_stroke_preview(self, painter: QPainter) -> None:
         if len(self.stroke_points) == 0:
