@@ -216,6 +216,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **Style:** White field paper, dark ink text, one-pixel cool border, 6px corners, and 6px internal padding.
 - **Focus:** The border changes to Operational Blue while native focus and editing behavior remain intact.
 - **Selection:** Text selection uses the soft blue wash.
+- **Resizable Text:** Source and translated text fields start compact at 68px and 82px. Their lower-right diagonal grip adjusts height from 52–360px without changing the inspector width.
 
 ### Tabs
 

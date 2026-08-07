@@ -118,6 +118,69 @@ TOOL_RAIL_LABELS = {
 }
 
 
+class ResizableTextEdit(QTextEdit):
+    """Compact text edit with a browser-style vertical resize corner."""
+
+    _GRIP_SIZE = 16
+
+    def __init__(self, height: int, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._resize_start_y: Optional[int] = None
+        self._resize_start_height = height
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        self.setFixedHeight(height)
+        self.setToolTip("오른쪽 아래 모서리를 끌어 입력 상자 높이를 조절할 수 있습니다.")
+
+    def _over_resize_grip(self, event: QMouseEvent) -> bool:
+        position = event.position()
+        return (
+            position.x() >= self.viewport().width() - self._GRIP_SIZE
+            and position.y() >= self.viewport().height() - self._GRIP_SIZE
+        )
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._over_resize_grip(event)
+        ):
+            self._resize_start_y = int(event.globalPosition().y())
+            self._resize_start_height = self.height()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._resize_start_y is not None:
+            delta = int(event.globalPosition().y()) - self._resize_start_y
+            self.setFixedHeight(max(52, min(360, self._resize_start_height + delta)))
+            event.accept()
+            return
+        cursor = (
+            Qt.CursorShape.SizeFDiagCursor
+            if self._over_resize_grip(event)
+            else Qt.CursorShape.IBeamCursor
+        )
+        self.viewport().setCursor(cursor)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if self._resize_start_y is not None:
+            self._resize_start_y = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self.viewport())
+        painter.setPen(QPen(QColor("#475569"), 1))
+        right = self.viewport().width() - 4
+        bottom = self.viewport().height() - 4
+        for offset in (4, 8, 12):
+            painter.drawLine(right - offset, bottom, right, bottom - offset)
+
+
 class TaskSignals(QObject):
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
@@ -1781,15 +1844,13 @@ class AdvancedEditorWindow(QMainWindow):
         button_row.addWidget(delete_button)
         layout.addLayout(button_row)
 
-        self.source_edit = QTextEdit()
+        self.source_edit = ResizableTextEdit(68)
         self.source_edit.setReadOnly(True)
-        self.source_edit.setMinimumHeight(86)
         layout.addWidget(QLabel("원문"))
         layout.addWidget(self.source_edit)
 
         layout.addWidget(QLabel("편집할 텍스트"))
-        self.translation_edit = QTextEdit()
-        self.translation_edit.setMinimumHeight(120)
+        self.translation_edit = ResizableTextEdit(82)
         self.translation_edit.textChanged.connect(self._on_translation_text_changed)
         layout.addWidget(self.translation_edit)
 
