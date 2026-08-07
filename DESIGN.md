@@ -169,13 +169,15 @@ The palette uses dark ink for application chrome, cool paper neutrals for editab
 
 ## Layout
 
-The first viewport runs left to right as an 88–108px fixed tool rail, an optional 190–280px session list when multiple images are present, a 360–470px inspector, and the flexible central canvas. The horizontal splitter cannot collapse children; the canvas receives all remaining stretch and retains at least 480px in the initial sizing calculation.
+The first viewport runs left to right as an 88–108px fixed tool rail, a 360–470px inspector, the flexible central canvas, and an optional 190–280px session list when multiple images are present. The horizontal splitter cannot collapse children; the canvas receives all remaining stretch and retains at least 480px in the initial sizing calculation.
 
 The window opens at 96% of available screen width and 94% of available height, bounded to 1680×1040px and a minimum of 1120×680px, or 1200×680px when the session list is present. The inspector targets 25% of the starting width within a 360–450px range. On screens narrower than 1280px or shorter than 760px, the editor starts maximized.
 
 Inspector content uses 14px outer insets and an 8px vertical rhythm. The zoom bar uses 8px horizontal by 5px vertical insets with 6px spacing. Keep the top action bar minimal and let splitter resizing, scrolling, and native window management handle adaptation.
 
 **The Left-to-Canvas Rule.** A user chooses a tool on the far left, changes its values immediately beside it, and verifies the result in the center without crossing the canvas.
+
+**The Page List Stays Right Rule.** When a job contains multiple images, its page list stays at the far right: tool rail → inspector → manga canvas → image list. A single-image job hides the list without changing the other three positions.
 
 ## Elevation & Depth
 
@@ -237,6 +239,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 ### Do:
 
 - **Do** keep the advanced editor canvas-first and preserve the left rail → inspector → canvas reading order.
+- **Do** keep the multi-image page list at the far right of the canvas.
 - **Do** reserve blue for active, focused, selected, or directly manipulated state.
 - **Do** preserve native Qt keyboard shortcuts, tooltips, dialogs, scrollbars, focus behavior, and existing editing behavior.
 - **Do** keep user-facing editor labels in clear Korean and verify that they render correctly on Windows.
@@ -246,6 +249,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 ### Don't:
 
 - **Don't** move the inspector across the canvas or split related tool choice and settings between opposite sides.
+- **Don't** place the multi-image page list between the tool rail and inspector.
 - **Don't** add gradients, decorative shadows, floating cards, oversized headings, or ornamental chrome.
 - **Don't** use Operational Blue as a broad background or decorative accent unrelated to state.
 - **Don't** replace the system font stack or imitate browser UI patterns that weaken standard Qt affordances.

@@ -1052,9 +1052,9 @@ class AdvancedEditorWindow(QMainWindow):
             self.resize(1480, 920)
             if hasattr(self, "splitter"):
                 if len(self.related_session_paths) > 1:
-                    self.splitter.setSizes([210, 410, 860])
+                    self.splitter.setSizes([410, 860, 210])
                 else:
-                    self.splitter.setSizes([0, 410, 1070])
+                    self.splitter.setSizes([410, 1070, 0])
             return
         available = screen.availableGeometry()
         minimum_width = 1200 if len(self.related_session_paths) > 1 else 1120
@@ -1068,9 +1068,9 @@ class AdvancedEditorWindow(QMainWindow):
             list_width = 210 if len(self.related_session_paths) > 1 else 0
             self.splitter.setSizes(
                 [
-                    list_width,
                     inspector_width,
                     max(480, width - inspector_width - list_width),
+                    list_width,
                 ]
             )
         self.move(
@@ -1180,8 +1180,6 @@ class AdvancedEditorWindow(QMainWindow):
         self.splitter.setChildrenCollapsible(False)
         root.addWidget(self.splitter)
 
-        self.session_panel = self._build_session_panel()
-        self.splitter.addWidget(self.session_panel)
         self.splitter.addWidget(self._build_side_panel())
 
         canvas_panel = QWidget(self)
@@ -1275,9 +1273,11 @@ class AdvancedEditorWindow(QMainWindow):
         canvas_grid.setColumnStretch(0, 1)
         canvas_layout.addWidget(canvas_view, 1)
         self.splitter.addWidget(canvas_panel)
+        self.session_panel = self._build_session_panel()
+        self.splitter.addWidget(self.session_panel)
         self.splitter.setStretchFactor(0, 0)
-        self.splitter.setStretchFactor(1, 0)
-        self.splitter.setStretchFactor(2, 1)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(2, 0)
 
     def _apply_theme(self) -> None:
         self.setStyleSheet(
