@@ -567,15 +567,15 @@ def create_layout(
                         with gr.Group():
                             gr.Markdown(
                                 "### 기존 작업 계속하기\n"
-                                "번역기를 다시 켠 뒤에도 디스크에 남아 있는 편집 세션을 최근 작업부터 찾습니다."
+                                "번역기를 다시 켠 뒤에도 저장된 작업을 찾습니다. 일괄 번역은 여러 장을 한 묶음으로 엽니다."
                             )
                             existing_editor_refresh_button = gr.Button(
                                 "저장된 세션 새로고침", variant="secondary"
                             )
                             existing_editor_session_select = gr.Dropdown(
                                 choices=[],
-                                label="저장된 편집 세션",
-                                info="목록을 클릭한 뒤 이미지 이름을 입력하면 검색할 수 있습니다.",
+                                label="저장된 편집 작업",
+                                info="‘묶음 N장’ 작업을 열면 편집기 왼쪽 목록에서 모든 이미지를 이동할 수 있습니다.",
                                 visible=True,
                                 interactive=False,
                                 filterable=True,

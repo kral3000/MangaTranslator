@@ -185,6 +185,8 @@ def handle_browse_image_editor_folder(current_value: str) -> gr.update:
 def _discover_existing_editor_sessions(
     repo_root: Optional[Path] = None,
 ) -> tuple[List[Tuple[str, str]], int]:
+    from core.editor_session import related_edit_session_paths
+
     repo_root = (repo_root or Path(__file__).resolve().parents[1]).resolve()
     session_paths: Dict[str, Path] = {}
     for folder_name in ("editor_sessions", "editor_imports"):
@@ -196,7 +198,7 @@ def _discover_existing_editor_sessions(
                 resolved = path.resolve()
                 session_paths.setdefault(str(resolved).casefold(), resolved)
 
-    choices: List[Tuple[float, str, str]] = []
+    sessions: Dict[str, tuple[Path, Dict[str, Any], float, str]] = {}
     invalid_count = 0
     for path in session_paths.values():
         try:
@@ -211,13 +213,44 @@ def _discover_existing_editor_sessions(
                     or ""
                 ).strip()
                 display_name = Path(source).name if source else path.stem
-            region_count = len(data.get("regions") or [])
             modified = path.stat().st_mtime
-            modified_text = time.strftime("%Y-%m-%d %H:%M", time.localtime(modified))
-            label = f"{display_name}  ·  영역 {region_count}개  ·  {modified_text}"
-            choices.append((modified, label, str(path)))
+            sessions[str(path).casefold()] = (path, data, modified, display_name)
         except Exception:
             invalid_count += 1
+
+    groups: Dict[tuple[str, ...], List[Path]] = {}
+    for path, _data, _modified, _display_name in sessions.values():
+        related = [
+            candidate
+            for candidate in related_edit_session_paths(path)
+            if str(candidate).casefold() in sessions
+        ]
+        key = tuple(str(candidate).casefold() for candidate in related) or (
+            str(path).casefold(),
+        )
+        groups.setdefault(key, related or [path])
+
+    choices: List[Tuple[float, str, str]] = []
+    for paths in groups.values():
+        records = [sessions[str(path).casefold()] for path in paths]
+        modified = max(record[2] for record in records)
+        modified_text = time.strftime("%Y-%m-%d %H:%M", time.localtime(modified))
+        if len(records) > 1:
+            first_name = records[0][3]
+            last_name = records[-1][3]
+            range_text = (
+                first_name
+                if first_name == last_name
+                else f"{first_name} → {last_name}"
+            )
+            label = f"{range_text}  ·  묶음 {len(records)}장  ·  {modified_text}"
+        else:
+            path, data, _modified, display_name = records[0]
+            label = (
+                f"{display_name}  ·  영역 {len(data.get('regions') or [])}개"
+                f"  ·  {modified_text}"
+            )
+        choices.append((modified, label, str(paths[0])))
 
     choices.sort(key=lambda item: (-item[0], item[1].casefold()))
     return [(label, path) for _modified, label, path in choices], invalid_count
@@ -227,7 +260,7 @@ def handle_refresh_existing_editor_sessions() -> Tuple[gr.update, gr.update, gr.
     choices, invalid_count = _discover_existing_editor_sessions()
     selected = choices[0][1] if choices else None
     if choices:
-        message = f"저장된 편집 세션 {len(choices)}개를 찾았습니다. 최근 작업부터 표시합니다."
+        message = f"저장된 편집 작업 {len(choices)}개를 찾았습니다. 여러 장 작업은 한 묶음으로 엽니다."
         if invalid_count:
             message += f" 읽을 수 없는 세션 {invalid_count}개는 제외했습니다."
     else:

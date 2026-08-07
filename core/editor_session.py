@@ -23,7 +23,6 @@ from core.text.text_processing import extract_translation_tag
 from core.text.text_renderer import render_text_skia
 from utils.logging import log_message
 
-
 SESSION_VERSION = 1
 INVALID_TEXT_MARKERS = {
     "[OCR FAILED]",
@@ -239,16 +238,28 @@ def _resolve_stored_path(session_path: Path, value: Any) -> Optional[Path]:
     if not text:
         return None
     stored = Path(text)
-    if stored.is_absolute():
+    if stored.is_absolute() and stored.exists():
         return stored
     repo_root = Path(__file__).resolve().parents[1]
+    for parent in (session_path.parent, *session_path.parents):
+        if parent.name.casefold() in {"editor_sessions", "editor_imports"}:
+            repo_root = parent.parent
+            break
+    relocated = None
+    if stored.is_absolute():
+        parts = list(stored.parts)
+        for index, part in enumerate(parts):
+            if part.casefold() in {"editor_sessions", "editor_imports", "output"}:
+                relocated = repo_root.joinpath(*parts[index:])
+                break
     candidates = (
+        relocated,
         repo_root / stored,
         session_path.parent / stored,
         session_path.parent / stored.name,
     )
     for candidate in candidates:
-        if candidate.exists():
+        if candidate is not None and candidate.exists():
             return candidate.resolve()
     return (repo_root / stored).resolve()
 

@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
+from core.editor_session import related_edit_session_paths
 from ui.callbacks import _discover_existing_editor_sessions
 
 
@@ -36,3 +37,30 @@ class ExistingEditorSessionDiscoveryTest(TestCase):
             ])
             self.assertIn("영역 2개", choices[0][0])
             self.assertEqual(invalid_count, 1)
+
+    def test_restores_a_group_after_the_repository_folder_was_renamed(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session_dir = root / "editor_sessions" / "translation_sessions" / "batch"
+            session_dir.mkdir(parents=True)
+            first = session_dir / "01_edit_session.json"
+            second = session_dir / "02_edit_session.json"
+            old_root = Path("C:/old/MangaTranslator")
+            old_group = [
+                str(old_root / path.relative_to(root)) for path in (first, second)
+            ]
+            for index, path in enumerate((first, second), start=1):
+                path.write_text(
+                    json.dumps({
+                        "source_display_path": f"{index:02d}.png",
+                        "regions": [],
+                        "editor_session_group": old_group,
+                    }),
+                    encoding="utf-8",
+                )
+
+            self.assertEqual(related_edit_session_paths(first), [first, second])
+            choices, invalid_count = _discover_existing_editor_sessions(root)
+            self.assertEqual(len(choices), 1)
+            self.assertIn("묶음 2장", choices[0][0])
+            self.assertEqual(invalid_count, 0)
