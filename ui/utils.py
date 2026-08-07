@@ -59,19 +59,41 @@ OPENROUTER_MODEL_CACHE = {}
 COMPATIBLE_MODEL_CACHE = {"url": None, "models": None}
 
 
+FONT_FILE_SUFFIXES = {".ttf", ".otf", ".ttc"}
+
+
 def get_available_font_packs(fonts_base_dir: Path) -> Tuple[List[str], Optional[str]]:
-    """Get list of available font packs (subdirectories) in the fonts directory"""
+    """Get selectable fonts: each pack directory, plus each font file inside it.
+
+    Picking the directory lets find_font_variants() detect regular/bold/italic by
+    filename, which is what emphasis (`**...**`) needs.  Picking a single file
+    pins that exact weight instead, e.g. to render a tag in Bold without keeping a
+    separate one-file pack directory around.  File entries are returned as a
+    "<pack>/<file>" relative path, which stays valid everywhere the value is
+    joined onto fonts_base_dir.
+    """
     if not fonts_base_dir.exists():
         return [], None
-    font_dirs = [d.name for d in fonts_base_dir.iterdir() if d.is_dir()]
-    font_dirs.sort()
 
-    if font_dirs:
-        default_font = font_dirs[0]
-    else:
-        default_font = None
+    choices: List[str] = []
+    default_font: Optional[str] = None
 
-    return font_dirs, default_font
+    for pack_dir in sorted(fonts_base_dir.iterdir(), key=lambda p: p.name.lower()):
+        if not pack_dir.is_dir():
+            continue
+        choices.append(pack_dir.name)
+        if default_font is None:
+            default_font = pack_dir.name
+
+        font_files = [
+            item
+            for item in pack_dir.rglob("*")
+            if item.is_file() and item.suffix.lower() in FONT_FILE_SUFFIXES
+        ]
+        for font_file in sorted(font_files, key=lambda p: str(p).lower()):
+            choices.append(font_file.relative_to(fonts_base_dir).as_posix())
+
+    return choices, default_font
 
 
 def validate_api_key(api_key: str, provider: str) -> tuple[bool, str]:
@@ -176,12 +198,16 @@ def validate_image(image: Any) -> tuple[bool, str]:
 
 
 def validate_font_directory(font_dir: Path) -> tuple[bool, str]:
-    """Validate that the font directory contains at least one font file"""
+    """Validate a font selection: either a pack directory or a single font file"""
     if not font_dir.exists():
         return (
             False,
             f"Font directory '{font_dir.name}' not found at {font_dir.resolve()}",
         )
+    if font_dir.is_file():
+        if font_dir.suffix.lower() not in FONT_FILE_SUFFIXES:
+            return False, f"'{font_dir.name}' is not a .ttf, .otf, or .ttc font file."
+        return True, f"Using single font file '{font_dir.name}'"
     if not font_dir.is_dir():
         return False, f"Path '{font_dir.name}' is not a directory."
 

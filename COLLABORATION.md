@@ -55,6 +55,9 @@
 
 작업을 마칠 때마다 아래에 새 항목을 맨 위에 추가한다 (날짜, 작업자, 요약, 변경 파일).
 
+- 2026-08-07 (Claude): 글꼴 선택창에 개별 글꼴 **파일**도 노출. 기존에는 `fonts/` 하위 **폴더**만 선택 가능해서, 특정 굵기(예: Bold)로 렌더링하려면 파일 하나만 든 폴더를 따로 만들어야 했음(`OE` 태그의 `Hahmlet`이 그 사례). 백엔드 `find_font_variants()`는 원래 파일 경로도 받게 돼 있어서(`font_manager.py:337`) 선택지 노출과 폴더 전제 검증만 손보면 됐음. 선택값은 `<팩>/<파일>` 상대 경로라 기존 폴더 값과 저장 형식이 호환됨(마이그레이션 불필요). 선택지 26 → 75개. 변경 파일: `ui/utils.py`(선택지 열거 + `validate_font_directory`), `core/validation.py`, `core/editor_session.py` (`.bak_before_fontfile_choices` 백업 있음).
+  - 검증: 폴더/TTF/OTF 선택 각각 `validate_core_inputs` 통과 + `render_text_skia` 실제 렌더 성공, 없는 경로는 여전히 `FileNotFoundError`로 차단됨. 폴더 선택은 굵기 자동 감지(강조 `**...**`용)라 파일 선택과 용도가 달라 둘 다 남겨둠.
+
 - 2026-08-07 (Claude): 일본어 방점(傍点) 강조 처리. 모델이 방점을 정확히 감지하는데 표현 통로가 없어 `·`를 본문에 삽입하던 문제(세로쓰기에서 점이 독립 글자 칸을 차지해 글자 수가 배로 늘고 폰트가 작아짐). 렌더러의 `**...**` 인라인 강조 + `emphasis_font_dir`는 이미 구현돼 있었으나 프롬프트가 마커 존재를 안 알려주고 `emphasis_font_pack`도 비어 있어 통로 전체가 잠들어 있었음. `emphasis_font_pack`을 `Nanum_Gothic`(bold 슬롯이 ExtraBold로 잡힘)으로 설정하고, 지침에 방점→`**...**` 규칙을 6번 섹션으로 추가. 코드 변경 없음. 변경 파일: 라이브 `%LOCALAPPDATA%\MangaTranslator\config.json`, `config.public.json` (`.bak_before_emphasis` 백업 있음).
   - 68페이지 실측 검증 완료: 방점 있는 `히·나·양!!!!`→`**히나**!!!!`, `...히·나·?`→`...**히나**?`, 방점 **없는** `히나`엔 별표 안 붙음(오탐 없음). 세션 파일에서 두 강조 항목 모두 `emphasis_font_dir` 적용 확인.
   - 후속: 말풍선 밖(OSB) 태그는 `outside_text_osb_emphasis_font_pack`이라는 별도 설정을 쓰는데 비어 있어서 강조가 무시되고 있었음(`placeholders.py:110`). 같은 값(`Nanum_Gothic`)으로 설정. 백업 `.bak_before_osb_emphasis`. OSB 방점은 아직 실측 미검증.

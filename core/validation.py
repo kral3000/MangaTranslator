@@ -272,17 +272,23 @@ def validate_core_inputs(
     if not rendering_cfg.font_dir:
         raise ValidationError("Font pack (font_dir in rendering config) not specified.")
 
+    # A font selection is either a pack directory or a single font file inside one.
     font_dir_path = fonts_base_dir / rendering_cfg.font_dir
-    if not font_dir_path.is_dir():
+    if font_dir_path.is_file():
+        if font_dir_path.suffix.lower() not in {".ttf", ".otf", ".ttc"}:
+            raise ValidationError(
+                f"Selected font '{rendering_cfg.font_dir}' is not a .ttf, .otf, or .ttc file"
+            )
+    elif not font_dir_path.is_dir():
         raise FileNotFoundError(
             f"Specified font pack directory '{rendering_cfg.font_dir}' not found within {fonts_base_dir}"
         )
-
-    font_files = list(font_dir_path.glob("*.ttf")) + list(font_dir_path.glob("*.otf"))
-    if not font_files:
-        raise ValidationError(
-            f"No font files (.ttf or .otf) found in the font pack directory: '{font_dir_path}'"
-        )
+    else:
+        font_files = list(font_dir_path.glob("*.ttf")) + list(font_dir_path.glob("*.otf"))
+        if not font_files:
+            raise ValidationError(
+                f"No font files (.ttf or .otf) found in the font pack directory: '{font_dir_path}'"
+            )
 
     # --- Rendering Config Validation ---
     if not (

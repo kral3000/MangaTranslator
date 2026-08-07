@@ -1431,9 +1431,10 @@ def create_image_edit_sessions(
     if not paths:
         raise ValueError("편집할 이미지를 한 장 이상 선택해 주세요.")
 
+    # 글꼴 선택은 폰트팩 폴더이거나 그 안의 개별 글꼴 파일 하나다.
     selected_font_dir = Path(str(font_dir or "")).resolve()
-    if not selected_font_dir.is_dir():
-        raise FileNotFoundError(f"선택한 글꼴 폴더를 찾을 수 없습니다: {selected_font_dir}")
+    if not selected_font_dir.is_dir() and not selected_font_dir.is_file():
+        raise FileNotFoundError(f"선택한 글꼴을 찾을 수 없습니다: {selected_font_dir}")
 
     repo_root = Path(__file__).resolve().parents[1]
     run_name = f"imported_{time.strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:6]}"
