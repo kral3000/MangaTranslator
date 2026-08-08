@@ -46,6 +46,7 @@ from PyQt6.QtGui import (
     QTextCursor,
 )
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QColorDialog,
@@ -1473,12 +1474,24 @@ class AdvancedEditorWindow(QMainWindow):
 
         self.plain_render_action = QAction(_editor_icon("export"), "내보내기", self)
         self.plain_render_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
-        self.plain_render_action.setToolTip("편집 정보가 없는 이미지로 내보내기 (Ctrl+Shift+S)")
+        self.plain_render_action.setToolTip("범위와 새 저장 위치를 골라 내보내기 (Ctrl+Shift+S)")
         self.plain_render_action.triggered.connect(self.save_plain_rendered_image)
+        self.export_menu = QMenu(self)
+        self.export_current_action = self.export_menu.addAction("현재 이미지 내보내기…")
+        self.export_selected_action = self.export_menu.addAction("선택한 이미지 내보내기…")
+        self.export_all_action = self.export_menu.addAction("묶음 전체 내보내기…")
+        self.export_current_action.triggered.connect(self.save_plain_rendered_image)
+        self.export_selected_action.triggered.connect(self.export_selected_images)
+        self.export_all_action.triggered.connect(self.export_all_images)
+        self.export_menu.aboutToShow.connect(self._refresh_export_menu)
+        self.plain_render_action.setMenu(self.export_menu)
         action_toolbar.addAction(self.plain_render_action)
         save_button = action_toolbar.widgetForAction(self.render_action)
         if save_button is not None:
             save_button.setProperty("toolbarRole", "primary")
+        export_button = action_toolbar.widgetForAction(self.plain_render_action)
+        if isinstance(export_button, QToolButton):
+            export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
 
         central = QWidget(self)
         central.setObjectName("CentralSurface")
@@ -2219,6 +2232,9 @@ class AdvancedEditorWindow(QMainWindow):
         layout.addWidget(title)
 
         self.session_list = QListWidget()
+        self.session_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
         try:
             collection_root = Path(
                 os.path.commonpath(
@@ -2241,9 +2257,13 @@ class AdvancedEditorWindow(QMainWindow):
         panel.setVisible(len(self.related_session_paths) > 1)
         return panel
 
-    def _set_session_list_current(self, path: Path) -> None:
+    def _set_session_list_current(self, path: Path, *, preserve_selection: bool = False) -> None:
         if not hasattr(self, "session_list"):
             return
+        selected = {
+            str(item.data(Qt.ItemDataRole.UserRole) or "")
+            for item in self.session_list.selectedItems()
+        }
         target = str(path.resolve()).casefold()
         self.session_list.blockSignals(True)
         try:
@@ -2253,6 +2273,11 @@ class AdvancedEditorWindow(QMainWindow):
                 if str(Path(value).resolve()).casefold() == target:
                     self.session_list.setCurrentRow(row)
                     break
+            if preserve_selection:
+                for row in range(self.session_list.count()):
+                    item = self.session_list.item(row)
+                    if str(item.data(Qt.ItemDataRole.UserRole) or "") in selected:
+                        item.setSelected(True)
         finally:
             self.session_list.blockSignals(False)
 
@@ -2266,7 +2291,7 @@ class AdvancedEditorWindow(QMainWindow):
         if target == self.session_path.resolve():
             return
         if self._background_job_count > 0 or self._inpainting_running:
-            self._set_session_list_current(self.session_path)
+            self._set_session_list_current(self.session_path, preserve_selection=True)
             QMessageBox.information(
                 self,
                 "작업 진행 중",
@@ -2486,32 +2511,6 @@ class AdvancedEditorWindow(QMainWindow):
         settings_tabs.addTab(self._build_translation_tab(), "번역")
         settings_tabs.addTab(self._build_editor_settings_tab(), "편집기 설정")
         layout.addWidget(settings_tabs)
-
-        layout.addSpacing(8)
-        output_title = QLabel("출력")
-        output_title.setObjectName("SectionTitle")
-        layout.addWidget(output_title)
-        output_row = QHBoxLayout()
-        output_row.addWidget(QLabel("저장 위치"))
-        self.output_path_edit = QLineEdit(self._initial_custom_output_path())
-        self.output_path_edit.setPlaceholderText(
-            "저장할 폴더를 선택하세요. 비워두면 설정의 기본 저장 폴더 또는 편집 세션 기본 위치에 저장"
-        )
-        output_row.addWidget(self.output_path_edit, 1)
-        browse_output_button = QPushButton("폴더 선택")
-        browse_output_button.clicked.connect(self.choose_output_path)
-        output_row.addWidget(browse_output_button)
-        layout.addLayout(output_row)
-
-        self.overwrite_source_checkbox = QCheckBox("불러온 파일에 그대로 덮어쓰기")
-        self.overwrite_source_checkbox.setChecked(
-            self._initial_overwrite_source_on_save()
-        )
-        layout.addWidget(self.overwrite_source_checkbox)
-        self.output_path_edit.editingFinished.connect(self._persist_output_settings)
-        self.overwrite_source_checkbox.stateChanged.connect(
-            self._persist_output_settings
-        )
 
         self.status_label = AutoHideStatusLabel("")
         self.status_label.setObjectName("StatusLabel")
@@ -2944,7 +2943,7 @@ class AdvancedEditorWindow(QMainWindow):
             "편집기 설정값은 자동 저장됩니다.\n"
             "프리셋1은 편집기를 열 때 자동으로 불러오는 기본 프리셋입니다.\n"
             "프리셋1도 다른 프리셋과 똑같이 원하는 값으로 다시 저장할 수 있습니다.\n"
-            "프리셋1~5는 OCR, 인페인팅, 편집기 옵션, 저장 위치와 불러온 파일 덮어쓰기 값을 "
+            "프리셋1~5는 OCR, 인페인팅과 편집기 옵션 값을 "
             "바꾼 뒤 해당 줄의 현재값 저장 버튼을 누르면 저장됩니다."
         ))
 
@@ -5374,84 +5373,172 @@ class AdvancedEditorWindow(QMainWindow):
         finally:
             temporary_path.unlink(missing_ok=True)
 
+    def _refresh_export_menu(self) -> None:
+        selected_count = (
+            len(self.session_list.selectedItems())
+            if hasattr(self, "session_list")
+            else 1
+        )
+        total_count = len(self.related_session_paths)
+        self.export_selected_action.setText(
+            f"선택한 이미지 내보내기 ({selected_count}장)…"
+        )
+        self.export_selected_action.setEnabled(selected_count > 0)
+        self.export_all_action.setText(f"묶음 전체 내보내기 ({total_count}장)…")
+        self.export_all_action.setEnabled(total_count > 0)
+
+    def _selected_session_paths(self) -> list[Path]:
+        if not hasattr(self, "session_list"):
+            return [self.session_path]
+        return [
+            Path(str(item.data(Qt.ItemDataRole.UserRole))).resolve()
+            for item in self.session_list.selectedItems()
+        ]
+
+    def _prepare_current_session_for_export(self) -> None:
+        self.commit_region_form(mark_dirty=False)
+        self._persist_editor_control_settings()
+        self._persist_output_settings()
+        save_session(self.session_path, self.session)
+
+    def _session_export_relative_path(
+        self, session_path: Path, session: dict[str, Any]
+    ) -> Path:
+        display_path = str(session.get("source_display_path") or "").strip()
+        if display_path:
+            parts = self._safe_relative_output_parts(display_path)
+            if parts:
+                candidate = Path(*parts)
+                if candidate.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES:
+                    return candidate
+                return candidate.with_suffix(".png")
+        for key in (
+            "translated_image_path",
+            "source_image_path",
+            "rendered_snapshot_path",
+        ):
+            value = str(session.get(key) or "").strip()
+            if value:
+                candidate = Path(value).name
+                if Path(candidate).suffix.lower() not in SUPPORTED_IMAGE_SUFFIXES:
+                    candidate = f"{Path(candidate).stem or 'image'}.png"
+                return Path(candidate)
+        stem = session_path.stem.removesuffix("_edit_session") or "image"
+        return Path(f"{stem}.png")
+
+    @staticmethod
+    def _unique_export_target(target: Path, used: set[Path]) -> Path:
+        candidate = target
+        index = 2
+        while candidate in used or candidate.exists():
+            candidate = target.with_name(f"{target.stem}_{index}{target.suffix}")
+            index += 1
+        used.add(candidate)
+        return candidate
+
     def save_plain_rendered_image(self, _checked: bool = False) -> None:
-        self.render_and_save(embed_editor_info=False)
+        self._prepare_current_session_for_export()
+        suggested = self._session_export_relative_path(
+            self.session_path, self.session
+        ).name
+        start = (
+            Path(self.session.get("edited_image_path") or self.session_path).parent
+            / suggested
+        )
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            "현재 이미지 내보내기",
+            str(start),
+            "이미지 (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff)",
+        )
+        if selected:
+            self._export_sessions([self.session_path], Path(selected), single_file=True)
+
+    def export_selected_images(self, _checked: bool = False) -> None:
+        self._choose_export_folder(self._selected_session_paths())
+
+    def export_all_images(self, _checked: bool = False) -> None:
+        self._choose_export_folder(list(self.related_session_paths))
+
+    def _choose_export_folder(self, session_paths: list[Path]) -> None:
+        if not session_paths:
+            return
+        self._prepare_current_session_for_export()
+        start = Path(self.session.get("edited_image_path") or self.session_path).parent
+        selected = QFileDialog.getExistingDirectory(
+            self, f"{len(session_paths)}개 이미지 내보낼 폴더 선택", str(start)
+        )
+        if selected:
+            self._export_sessions(session_paths, Path(selected), single_file=False)
+
+    def _export_sessions(
+        self, session_paths: list[Path], destination: Path, *, single_file: bool
+    ) -> None:
+        exported: list[Path] = []
+        failures: list[str] = []
+        warnings: list[str] = []
+        used: set[Path] = set()
+        for session_path in session_paths:
+            try:
+                session = load_session(session_path)
+                image, render_errors = render_session_image(session)
+                target = (
+                    destination
+                    if single_file
+                    else destination
+                    / self._session_export_relative_path(session_path, session)
+                ).resolve()
+                if not single_file:
+                    target = self._unique_export_target(target, used)
+                self._save_image_to_target(image, target)
+                exported.append(target)
+                warnings.extend(render_errors)
+            except Exception as exc:
+                failures.append(f"{session_path.name}: {exc}")
+        if exported:
+            destination_text = exported[0] if single_file else destination.resolve()
+            self.status_label.setText(
+                f"{len(exported)}개 이미지 내보내기 완료: {destination_text}"
+            )
+            self._show_save_toast(f"{len(exported)}개 이미지 내보내기 완료")
+        if failures:
+            QMessageBox.warning(
+                self,
+                "일부 이미지 내보내기 실패",
+                "\n".join(failures[:8]),
+            )
+        elif warnings:
+            self.status_label.setText(
+                self.status_label.text() + f"\n렌더링 경고 {len(warnings)}건"
+            )
 
     def render_and_save(
         self,
         _checked: bool = False,
-        *,
-        embed_editor_info: bool = True,
     ) -> None:
         self.commit_region_form(mark_dirty=False)
         self._persist_editor_control_settings()
         self._persist_output_settings()
         save_session(self.session_path, self.session)
         try:
-            archive_target = (
-                self._overwrite_archive_reference()
-                if self.overwrite_source_checkbox.isChecked()
-                else None
-            )
-            export_target = (
-                None if archive_target is not None else self._selected_output_target()
-            )
-            direct_output_path = (
-                export_target
-                if export_target is not None
-                and self.overwrite_source_checkbox.isChecked()
-                else None
-            )
             output_path = Path(
-                direct_output_path
-                or self.session.get("edited_image_path")
+                self.session.get("edited_image_path")
                 or self.session_path.with_name(f"{self.session_path.stem}_edited.png")
             ).resolve()
             self.session["edited_image_path"] = str(output_path)
-            if direct_output_path is not None:
-                self.session["overwrite_target_path"] = str(output_path)
             save_session(self.session_path, self.session)
             image, output_path, render_errors = rerender_session(self.session_path)
             self.session = load_session(self.session_path)
-            if archive_target is not None:
-                archive_path, archive_member = archive_target
-                self._save_image_to_zip(image, archive_path, archive_member)
-                self.session["last_export_path"] = (
-                    f"{archive_path}!/{archive_member}"
-                )
-            elif export_target is not None and direct_output_path is None:
-                self._save_image_to_target(image, export_target)
-                self.session["last_export_path"] = str(export_target)
-            elif direct_output_path is not None:
-                self.session["last_export_path"] = str(output_path)
-                self.session["overwrite_target_path"] = str(output_path)
             if not render_errors:
                 self._flatten_fast_editor_layers_after_save(output_path)
-            self._persist_output_settings()
             save_session(self.session_path, self.session)
             package_warnings: list[str] = []
-            if embed_editor_info and archive_target is None:
-                embedded_targets: list[Path] = [output_path]
-                if export_target is not None and export_target.resolve() != output_path.resolve():
-                    embedded_targets.append(export_target.resolve())
-                for target in embedded_targets:
-                    try:
-                        embed_editor_package(target, self.session_path)
-                    except Exception as exc:
-                        package_warnings.append(f"{target}: {exc}")
+            try:
+                embed_editor_package(output_path, self.session_path)
+            except Exception as exc:
+                package_warnings.append(f"{output_path}: {exc}")
             self.reload_display_image()
-            if embed_editor_info:
-                message = f"렌더링 결과를 저장했습니다: {output_path}"
-            else:
-                message = f"편집 정보 없는 일반 이미지로 저장했습니다: {output_path}"
-            if archive_target is not None:
-                archive_path, archive_member = archive_target
-                message += (
-                    f"\n원본 ZIP에 덮어썼습니다: {archive_path}"
-                    f"\nZIP 내부 파일: {archive_member}"
-                )
-            elif export_target is not None:
-                message += f"\n지정한 위치에도 저장했습니다: {export_target}"
+            message = f"렌더링 결과를 저장했습니다: {output_path}"
             if render_errors:
                 message += (
                     "\n일부 영역 렌더링 경고가 있어 기준값은 갱신하지 않았습니다.\n"
@@ -5463,12 +5550,7 @@ class AdvancedEditorWindow(QMainWindow):
                     + "\n".join(package_warnings[:3])
                 )
             self.status_label.setText(message)
-            saved_name = (
-                Path(archive_target[1]).name
-                if archive_target is not None
-                else Path(export_target or output_path).name
-            )
-            self._show_save_toast(f"{saved_name} 저장 완료")
+            self._show_save_toast(f"{output_path.name} 저장 완료")
         except Exception as exc:
             QMessageBox.critical(self, "렌더링 실패", str(exc))
 
