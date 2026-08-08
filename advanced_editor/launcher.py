@@ -1497,13 +1497,47 @@ class AdvancedEditorWindow(QMainWindow):
         self.brush_slider.valueChanged.connect(self._on_brush_size_changed)
         action_toolbar.addWidget(self.brush_slider)
         self.brush_size_spin = QSpinBox()
+        self.brush_size_spin.setObjectName("TopBarMetricSpin")
         self.brush_size_spin.setRange(5, 200)
         self.brush_size_spin.setSuffix(" px")
         self.brush_size_spin.setValue(self.brush_size)
-        self.brush_size_spin.setFixedWidth(76)
+        self.brush_size_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.brush_size_spin.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.brush_size_spin.valueChanged.connect(self.brush_slider.setValue)
         self.brush_slider.valueChanged.connect(self.brush_size_spin.setValue)
-        action_toolbar.addWidget(self.brush_size_spin)
+        brush_size_field = QWidget(self)
+        brush_size_field.setObjectName("TopBarMetricField")
+        brush_size_field.setFixedSize(82, 30)
+        brush_size_layout = QHBoxLayout(brush_size_field)
+        brush_size_layout.setContentsMargins(1, 1, 1, 1)
+        brush_size_layout.setSpacing(0)
+        brush_size_layout.addWidget(self.brush_size_spin, 1)
+        brush_size_stepper = QWidget(brush_size_field)
+        brush_size_stepper.setObjectName("TopBarMetricStepper")
+        brush_size_stepper.setFixedSize(16, 28)
+        brush_size_stepper_layout = QVBoxLayout(brush_size_stepper)
+        brush_size_stepper_layout.setContentsMargins(0, 0, 0, 0)
+        brush_size_stepper_layout.setSpacing(0)
+        for icon_name, role, tooltip, callback in (
+            ("chevron_up", "up", "브러시 크기 증가", self.brush_size_spin.stepUp),
+            (
+                "chevron_down",
+                "down",
+                "브러시 크기 감소",
+                self.brush_size_spin.stepDown,
+            ),
+        ):
+            button = QToolButton(brush_size_stepper)
+            button.setObjectName("TopBarMetricStepButton")
+            button.setProperty("stepRole", role)
+            button.setFixedSize(16, 14)
+            button.setIcon(_editor_icon(icon_name, "#334155"))
+            button.setIconSize(QSize(10, 10))
+            button.setToolTip(tooltip)
+            button.clicked.connect(callback)
+            brush_size_stepper_layout.addWidget(button)
+        brush_size_layout.addWidget(brush_size_stepper)
+        action_toolbar.addWidget(brush_size_field)
 
         self.paint_color_toolbar_button = QToolButton(self)
         self.paint_color_toolbar_button.setText("브러시 색")
@@ -1733,12 +1767,41 @@ class AdvancedEditorWindow(QMainWindow):
                 background: transparent;
                 border: 0;
             }
-            QToolBar#TopBar QSpinBox {
-                min-height: 20px;
-                padding: 4px 6px;
+            QToolBar#TopBar QWidget#TopBarMetricField {
                 background: #ffffff;
                 border: 1px solid #64748b;
-                border-radius: 5px;
+                border-radius: 6px;
+            }
+            QToolBar#TopBar QSpinBox#TopBarMetricSpin {
+                min-height: 0;
+                padding: 2px 5px;
+                color: #172033;
+                background: #ffffff;
+                border: 0;
+                border-radius: 5px 0 0 5px;
+            }
+            QToolBar#TopBar QWidget#TopBarMetricStepper {
+                background: #e8eef5;
+                border: 0;
+                border-left: 1px solid #cbd5e1;
+                border-top-right-radius: 5px;
+                border-bottom-right-radius: 5px;
+            }
+            QToolBar#TopBar QToolButton#TopBarMetricStepButton {
+                min-width: 0;
+                max-width: 16px;
+                min-height: 0;
+                max-height: 14px;
+                padding: 0;
+                background: transparent;
+                border: 0;
+                border-radius: 0;
+            }
+            QToolBar#TopBar QToolButton#TopBarMetricStepButton:hover {
+                background: #dbeafe;
+            }
+            QToolBar#TopBar QToolButton#TopBarMetricStepButton[stepRole="up"] {
+                border-bottom: 1px solid #cbd5e1;
             }
             QToolBar#TopBar QSlider::groove:horizontal {
                 height: 4px;
@@ -2844,13 +2907,13 @@ class AdvancedEditorWindow(QMainWindow):
                 field_layout.setSpacing(0)
                 lead = QWidget(field)
                 lead.setObjectName("MetricFieldLead")
-                lead.setFixedWidth(50)
+                lead.setFixedWidth(54)
                 lead_layout = QHBoxLayout(lead)
-                lead_layout.setContentsMargins(5, 0, 2, 0)
-                lead_layout.setSpacing(3)
+                lead_layout.setContentsMargins(3, 0, 1, 0)
+                lead_layout.setSpacing(2)
                 icon = QLabel(lead)
                 icon.setObjectName("MetricIcon")
-                icon.setPixmap(_editor_icon(icon_name, "#94a3b8").pixmap(13, 13))
+                icon.setPixmap(_editor_icon(icon_name, "#94a3b8").pixmap(12, 12))
                 lead_layout.addWidget(icon)
                 label = QLabel(field_label, lead)
                 label.setObjectName("MetricFieldLabel")
