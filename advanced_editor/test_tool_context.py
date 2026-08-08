@@ -6,6 +6,17 @@ from advanced_editor.launcher import AdvancedEditorWindow
 
 
 class ToolContextTest(TestCase):
+    def test_alignment_buttons_keep_the_existing_session_values(self) -> None:
+        window = SimpleNamespace(
+            alignment_buttons={
+                "left": SimpleNamespace(isChecked=Mock(return_value=False)),
+                "center": SimpleNamespace(isChecked=Mock(return_value=False)),
+                "right": SimpleNamespace(isChecked=Mock(return_value=True)),
+            }
+        )
+
+        self.assertEqual(AdvancedEditorWindow._current_alignment(window), "right")
+
     def test_inpaint_tool_opens_its_contextual_settings(self) -> None:
         window = SimpleNamespace(
             inspector_sections=SimpleNamespace(setCurrentIndex=Mock()),

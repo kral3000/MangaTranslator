@@ -48,6 +48,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -151,6 +152,9 @@ EDITOR_ICON_PATHS = {
     "minus": '<path d="M5 12h14"/>',
     "check": '<path d="M5 12l4 4L19 6"/>',
     "clear": '<path d="M6 6l12 12M18 6L6 18"/>',
+    "align_left": '<path d="M4 6h16M4 10h11M4 14h16M4 18h9"/>',
+    "align_center": '<path d="M4 6h16M7 10h10M4 14h16M8 18h8"/>',
+    "align_right": '<path d="M4 6h16M9 10h11M4 14h16M11 18h9"/>',
     "action": '<path d="M5 12h14M14 6l6 6-6 6"/>',
 }
 
@@ -1793,6 +1797,30 @@ class AdvancedEditorWindow(QMainWindow):
                 min-height: 18px;
                 spacing: 5px;
             }
+            QWidget#AlignmentControl {
+                background: #edf1f6;
+                border: 1px solid #c4cfdd;
+                border-radius: 6px;
+            }
+            QToolButton#AlignmentButton {
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 4px;
+                min-width: 27px;
+                min-height: 25px;
+                padding: 1px 3px;
+            }
+            QToolButton#AlignmentButton:hover {
+                background: #eff6ff;
+                border-color: #93c5fd;
+            }
+            QToolButton#AlignmentButton:checked {
+                background: #dbeafe;
+                border-color: #60a5fa;
+            }
+            QToolButton#AlignmentButton:focus {
+                border-color: #2563eb;
+            }
             QWidget#CanvasPanel {
                 background: #1c222b;
             }
@@ -2583,12 +2611,32 @@ class AdvancedEditorWindow(QMainWindow):
         options_row = QHBoxLayout()
         options_row.setSpacing(8)
         options_row.addWidget(QLabel("정렬"))
-        self.alignment_combo = QComboBox()
-        self.alignment_combo.addItem("왼쪽", "left")
-        self.alignment_combo.addItem("가운데", "center")
-        self.alignment_combo.addItem("오른쪽", "right")
-        self.alignment_combo.currentIndexChanged.connect(self.commit_region_form)
-        options_row.addWidget(self.alignment_combo, 1)
+        self.alignment_control = QWidget(region_page)
+        self.alignment_control.setObjectName("AlignmentControl")
+        alignment_layout = QHBoxLayout(self.alignment_control)
+        alignment_layout.setContentsMargins(2, 2, 2, 2)
+        alignment_layout.setSpacing(1)
+        self.alignment_group = QButtonGroup(self)
+        self.alignment_group.setExclusive(True)
+        self.alignment_buttons: dict[str, QToolButton] = {}
+        for key, label, icon_name in (
+            ("left", "왼쪽 정렬", "align_left"),
+            ("center", "가운데 정렬", "align_center"),
+            ("right", "오른쪽 정렬", "align_right"),
+        ):
+            button = QToolButton(self.alignment_control)
+            button.setObjectName("AlignmentButton")
+            button.setCheckable(True)
+            button.setIcon(_editor_icon(icon_name, "#334155"))
+            button.setIconSize(QSize(18, 18))
+            button.setToolTip(label)
+            button.setAccessibleName(label)
+            button.clicked.connect(self.commit_region_form)
+            self.alignment_group.addButton(button)
+            self.alignment_buttons[key] = button
+            alignment_layout.addWidget(button)
+        self.alignment_buttons["center"].setChecked(True)
+        options_row.addWidget(self.alignment_control)
 
         self.enabled_checkbox = QCheckBox("이 영역 렌더링")
         self.vertical_checkbox = QCheckBox("세로쓰기")
@@ -4160,7 +4208,7 @@ class AdvancedEditorWindow(QMainWindow):
                 self.stroke_color_button,
                 self.font_family_combo,
                 self.font_style_combo,
-                self.alignment_combo,
+                self.alignment_control,
             ):
                 widget.setEnabled(enabled)
             if region is None:
@@ -4203,9 +4251,20 @@ class AdvancedEditorWindow(QMainWindow):
             self._set_color_button(self.stroke_color_button, outline_hex)
             font_target = self._font_combo_target(render.get("font_dir") or "")
             self._select_font_target(font_target)
-            self._set_combo_data(self.alignment_combo, render.get("text_alignment") or "center")
+            self._set_alignment(render.get("text_alignment") or "center")
         finally:
             self._syncing = False
+
+    def _set_alignment(self, value: str) -> None:
+        self.alignment_buttons.get(value, self.alignment_buttons["center"]).setChecked(
+            True
+        )
+
+    def _current_alignment(self) -> str:
+        for value, button in self.alignment_buttons.items():
+            if button.isChecked():
+                return value
+        return "center"
 
     def commit_region_form(self, *_args, mark_dirty: bool = True) -> None:
         if self._syncing:
@@ -4234,7 +4293,7 @@ class AdvancedEditorWindow(QMainWindow):
         render["vertical_emphasis_line_spacing_mult"] = line_spacing
         render["padding_pixels"] = float(self.padding_spin.value())
         render["outline_width"] = float(self.stroke_width_spin.value())
-        render["text_alignment"] = self.alignment_combo.currentData() or "center"
+        render["text_alignment"] = self._current_alignment()
         if region["vertical_stack"]:
             render["auto_vertical_text"] = False
             render["compare_forced_vertical_layout"] = False

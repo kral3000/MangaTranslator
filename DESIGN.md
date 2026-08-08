@@ -269,6 +269,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 
 - **Context:** A compact blue-tinted header names the active tool and gives one sentence of immediate guidance.
 - **Sections:** Text and layout share one compact tab because they are adjusted together; tool settings use the second tab. Position, size, typography, and spacing values use a two-column control grid so the complete text-editing path fits without scrolling at 1200×760. Selecting a tool opens the most relevant tab and nested settings tab without preventing manual navigation.
+- **Alignment:** Horizontal text alignment uses a persistent three-button icon group—left, center, right—with a single checked state and tooltips, matching familiar document-editor controls instead of hiding the choices in a dropdown.
 - **Image List:** Multi-image jobs show the current page and selection count, offer select-all and clear-selection actions, and can collapse from the top action bar to return width to the canvas.
 
 ## Do's and Don'ts
