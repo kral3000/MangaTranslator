@@ -133,8 +133,8 @@ EDITOR_ICON_PATHS = {
     "brush": '<path d="M14 4l6 6-9 9H5v-6z"/><path d="M4 20c2 0 3-1 3-3"/>',
     "eraser": '<path d="M13 4l7 7-8 8H7l-4-4z"/><path d="M9 19h11"/>',
     "restore": '<path d="M4 8V3m0 0h5M4 3l4 4"/><path d="M5 13a8 8 0 1 0 2-7"/>',
-    "undo": '<path d="M9 8H4V3"/><path d="M4 8l4-4"/><path d="M4 8h10a7 7 0 0 1 0 14h-4"/>',
-    "redo": '<path d="M15 8h5V3"/><path d="M20 8l-4-4"/><path d="M20 8H10a7 7 0 0 0 0 14h4"/>',
+    "undo": '<path d="M8 5a8 8 0 1 1-4 7" stroke-width="2.4"/><path d="M8.5 1.5L2 7.5l6.5 6z" fill="currentColor" stroke="none"/>',
+    "redo": '<path d="M16 5a8 8 0 1 0 4 7" stroke-width="2.4"/><path d="M15.5 1.5L22 7.5l-6.5 6z" fill="currentColor" stroke="none"/>',
     "history": '<circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/>',
     "save": '<path d="M4 3h13l3 3v15H4z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/>',
     "export": '<path d="M14 3h7v7M21 3l-10 10"/><path d="M18 14v7H3V6h7"/>',
@@ -162,6 +162,17 @@ EDITOR_ICON_PATHS = {
     "paint_eraser": '<path d="M13 4l7 7-8 8H7l-4-4zM9 19h11"/>',
     "restore_brush": '<path d="M4 7V3h4M4 3l4 4M6 12a7 7 0 1 0 2-6"/><path d="M14 11l4 4-5 5H9v-4z"/>',
     "restore_eraser": '<path d="M4 7V3h4M4 3l4 4M6 12a7 7 0 1 0 2-6"/><path d="M14 12l5 5-3 3h-5l-2-2z"/>',
+    "metric_x": '<path d="M4 12h16M4 12l3-3M4 12l3 3M20 12l-3-3M20 12l-3 3"/>',
+    "metric_y": '<path d="M12 4v16M12 4l-3 3M12 4l3 3M12 20l-3-3M12 20l3-3"/>',
+    "metric_width": '<path d="M4 7v10M20 7v10M4 12h16M7 9l-3 3 3 3M17 9l3 3-3 3"/>',
+    "metric_height": '<path d="M7 4h10M7 20h10M12 4v16M9 7l3-3 3 3M9 17l3 3 3-3"/>',
+    "metric_type": '<path d="M5 19L10 5h2l5 14M7 14h8M18 9h4M20 7v4"/>',
+    "metric_spacing": '<path d="M6 7h12M6 12h12M6 17h12M3 7v10M2 8l1-1 1 1M2 16l1 1 1-1"/>',
+    "metric_padding": '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/>',
+    "metric_rotation": '<path d="M19 8V4h-4M19 4l-4 4M18 13a7 7 0 1 1-2-6"/>',
+    "metric_outline": '<path d="M7 5h10M12 5v14M8 19h8"/><rect x="4" y="3" width="16" height="18" rx="2"/>',
+    "chevron_up": '<path d="M7 15l5-5 5 5"/>',
+    "chevron_down": '<path d="M7 9l5 5 5-5"/>',
     "action": '<path d="M5 12h14M14 6l6 6-6 6"/>',
 }
 
@@ -171,7 +182,7 @@ def _editor_icon(name: str, color: str = "#e5e7eb") -> QIcon:
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
         'viewBox="0 0 24 24" fill="none" '
-        f'stroke="{color}" stroke-width="1.8" stroke-linecap="round" '
+        f'color="{color}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
         f'stroke-linejoin="round">{paths}</svg>'
     )
     renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
@@ -1820,14 +1831,22 @@ class AdvancedEditorWindow(QMainWindow):
                 border-bottom: 1px solid #d5dde8;
             }
             QWidget#MetricRow {
+                background: transparent;
+                border: 0;
+            }
+            QWidget#MetricField {
                 background: #f8fafc;
                 border: 1px solid #d5dde8;
                 border-radius: 6px;
             }
-            QLabel#MetricGroupLabel {
-                color: #64748b;
-                font-size: 11px;
-                font-weight: 700;
+            QLabel#MetricIcon {
+                background: transparent;
+                border: 0;
+            }
+            QLabel#MetricFieldLabel {
+                color: #475569;
+                font-size: 10px;
+                font-weight: 600;
             }
             QWidget#TextLayoutPage QPushButton {
                 min-height: 18px;
@@ -1850,6 +1869,29 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #f8fafc;
                 padding-left: 8px;
                 padding-right: 8px;
+            }
+            QWidget#MetricField QSpinBox,
+            QWidget#MetricField QDoubleSpinBox {
+                background: transparent;
+                border: 0;
+                border-left: 1px solid #e2e8f0;
+                border-radius: 0;
+                min-height: 20px;
+                padding: 2px 3px;
+            }
+            QWidget#MetricStepper {
+                background: #edf1f6;
+                border: 0;
+                border-left: 1px solid #d5dde8;
+            }
+            QToolButton#MetricStepButton {
+                background: transparent;
+                border: 0;
+                border-radius: 0;
+                padding: 0;
+            }
+            QToolButton#MetricStepButton:hover {
+                background: #dbeafe;
             }
             QWidget#TextLayoutPage QCheckBox {
                 min-height: 18px;
@@ -2749,55 +2791,75 @@ class AdvancedEditorWindow(QMainWindow):
             spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
             spin.setAlignment(Qt.AlignmentFlag.AlignRight)
             spin.setKeyboardTracking(False)
+            spin.setMinimumWidth(0)
+            spin.setSizePolicy(
+                QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+            )
         self.rotation_spin.setSuffix("°")
         self.rotation_spin.setSingleStep(1.0)
         self.line_spacing_spin.setSingleStep(0.1)
         self.padding_spin.setSingleStep(0.5)
         self.stroke_width_spin.setSingleStep(0.5)
-        metric_groups = (
+        metric_rows = (
             (
-                "영역",
-                (
-                    ("X", self.x_spin),
-                    ("Y", self.y_spin),
-                    ("W", self.w_spin),
-                    ("H", self.h_spin),
-                ),
+                ("X", "metric_x", self.x_spin),
+                ("Y", "metric_y", self.y_spin),
+                ("회전", "metric_rotation", self.rotation_spin),
             ),
             (
-                "글자",
-                (
-                    ("크기", self.font_size_spin),
-                    ("간격", self.line_spacing_spin),
-                    ("여백", self.padding_spin),
-                ),
+                ("너비", "metric_width", self.w_spin),
+                ("높이", "metric_height", self.h_spin),
+                ("여백", "metric_padding", self.padding_spin),
             ),
             (
-                "효과",
-                (("회전", self.rotation_spin), ("외곽선", self.stroke_width_spin)),
+                ("크기", "metric_type", self.font_size_spin),
+                ("간격", "metric_spacing", self.line_spacing_spin),
+                ("외곽선", "metric_outline", self.stroke_width_spin),
             ),
         )
-        accessible_names = {
-            "X": "X 위치",
-            "Y": "Y 위치",
-            "W": "너비",
-            "H": "높이",
-        }
-        for group_label, fields in metric_groups:
+        for fields in metric_rows:
             row_widget = QWidget(region_page)
             row_widget.setObjectName("MetricRow")
             row_widget.setFixedHeight(32)
             row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(6, 2, 4, 2)
+            row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.setSpacing(4)
-            label = QLabel(group_label)
-            label.setObjectName("MetricGroupLabel")
-            label.setFixedWidth(34)
-            row_layout.addWidget(label)
-            for field_label, spin in fields:
-                spin.setPrefix(f"{field_label} ")
-                spin.setAccessibleName(accessible_names.get(field_label, field_label))
-                row_layout.addWidget(spin, 1)
+            for field_label, icon_name, spin in fields:
+                field = QWidget(row_widget)
+                field.setObjectName("MetricField")
+                field_layout = QHBoxLayout(field)
+                field_layout.setContentsMargins(5, 2, 2, 2)
+                field_layout.setSpacing(3)
+                icon = QLabel(field)
+                icon.setObjectName("MetricIcon")
+                icon.setPixmap(_editor_icon(icon_name, "#94a3b8").pixmap(13, 13))
+                field_layout.addWidget(icon)
+                label = QLabel(field_label, field)
+                label.setObjectName("MetricFieldLabel")
+                field_layout.addWidget(label)
+                spin.setPrefix("")
+                spin.setAccessibleName(field_label)
+                spin.setToolTip(field_label)
+                field_layout.addWidget(spin, 1)
+                stepper = QWidget(field)
+                stepper.setObjectName("MetricStepper")
+                stepper.setFixedWidth(15)
+                stepper_layout = QVBoxLayout(stepper)
+                stepper_layout.setContentsMargins(0, 0, 0, 0)
+                stepper_layout.setSpacing(0)
+                for icon_name, tooltip, callback in (
+                    ("chevron_up", f"{field_label} 증가", spin.stepUp),
+                    ("chevron_down", f"{field_label} 감소", spin.stepDown),
+                ):
+                    button = QToolButton(stepper)
+                    button.setObjectName("MetricStepButton")
+                    button.setIcon(_editor_icon(icon_name, "#64748b"))
+                    button.setIconSize(QSize(8, 8))
+                    button.setToolTip(tooltip)
+                    button.clicked.connect(callback)
+                    stepper_layout.addWidget(button)
+                field_layout.addWidget(stepper)
+                row_layout.addWidget(field, 1)
             metrics_layout.addWidget(row_widget)
 
         font_row = QHBoxLayout()

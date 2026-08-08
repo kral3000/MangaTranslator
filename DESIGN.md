@@ -226,7 +226,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **Shape:** Transparent 6px actions with 6px × 9px padding; the filled save action receives 12px horizontal padding.
 - **States:** Hover adds a darker slate fill and visible border; shortcuts and tooltips preserve the full operation meaning.
 - **Content:** Every action pairs a consistent 1.8px line icon with an explicit Korean label. The history menu names each undoable action and can undo back to a selected point. Save uses the only filled blue toolbar treatment; export remains neutral.
-- **Undo/Redo:** Use mirrored, conventional U-turn arrows with an open return path; avoid cursor-like chevrons or boxed arrow shapes that become ambiguous at 18px.
+- **Undo/Redo:** Use mirrored near-circular return arrows with a heavier arc and a filled triangular head, matching familiar desktop editor controls at 18px.
 
 ### Tool Rail
 
@@ -248,6 +248,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **Focus:** The border changes to Operational Blue while native focus and editing behavior remain intact.
 - **Selection:** Text selection uses the soft blue wash.
 - **Resizable Text:** Source and translated text fields start compact at 68px and 82px. Their lower-right diagonal grip adjusts height from 52–360px without changing the inspector width.
+- **Metric Fields:** Position, size, and effect values use a balanced 3×3 grid. Every field reads left-to-right as a quiet semantic icon, a short label, the value, then explicit stacked increment/decrement controls.
 
 ### Tabs
 
