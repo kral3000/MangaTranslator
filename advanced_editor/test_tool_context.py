@@ -37,3 +37,16 @@ class ToolContextTest(TestCase):
         window.inspector_sections.setCurrentIndex.assert_called_once_with(1)
         window.settings_tabs.setCurrentIndex.assert_called_once_with(1)
         window.paint_color_toolbar_button.setVisible.assert_called_once_with(False)
+
+    def test_paint_brush_opens_color_settings_and_toolbar_swatch(self) -> None:
+        window = SimpleNamespace(
+            inspector_sections=SimpleNamespace(setCurrentIndex=Mock()),
+            settings_tabs=SimpleNamespace(setCurrentIndex=Mock()),
+            paint_color_toolbar_button=SimpleNamespace(setVisible=Mock()),
+        )
+
+        AdvancedEditorWindow._sync_tool_context(window, "paint_brush")
+
+        window.inspector_sections.setCurrentIndex.assert_called_once_with(1)
+        window.settings_tabs.setCurrentIndex.assert_called_once_with(3)
+        window.paint_color_toolbar_button.setVisible.assert_called_once_with(True)

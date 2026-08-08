@@ -1290,8 +1290,18 @@ class AdvancedEditorWindow(QMainWindow):
         self.displaying_rendered_result = False
         self._start_maximized = False
         self.selected_index: Optional[int] = 0 if self.session.get("regions") else None
-        self.brush_size = 30
-        self.paint_color = "#ffffff"
+        brush_settings = self.editor_settings.get("brush", {})
+        if not isinstance(brush_settings, dict):
+            brush_settings = {}
+        try:
+            saved_brush_size = int(brush_settings.get("size", 30))
+        except (TypeError, ValueError):
+            saved_brush_size = 30
+        self.brush_size = max(5, min(200, saved_brush_size))
+        saved_paint_color = QColor(str(brush_settings.get("color", "#ffffff")))
+        self.paint_color = (
+            saved_paint_color.name() if saved_paint_color.isValid() else "#ffffff"
+        )
         self.history: list[dict[str, Any]] = []
         self.redo_stack: list[dict[str, Any]] = []
         self._syncing = False
@@ -1504,6 +1514,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.brush_slider.setValue(self.brush_size)
         self.brush_slider.setFixedWidth(120)
         self.brush_slider.valueChanged.connect(self._on_brush_size_changed)
+        self.brush_slider.sliderReleased.connect(self._store_brush_settings)
         action_toolbar.addWidget(self.brush_slider)
         self.brush_size_spin = QSpinBox()
         self.brush_size_spin.setObjectName("TopBarMetricSpin")
@@ -1514,6 +1525,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.brush_size_spin.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.brush_size_spin.valueChanged.connect(self.brush_slider.setValue)
         self.brush_slider.valueChanged.connect(self.brush_size_spin.setValue)
+        self.brush_size_spin.editingFinished.connect(self._store_brush_settings)
         brush_size_field = QWidget(self)
         brush_size_field.setObjectName("TopBarMetricField")
         brush_size_field.setFixedSize(82, 30)
@@ -1544,17 +1556,20 @@ class AdvancedEditorWindow(QMainWindow):
             button.setIconSize(QSize(10, 10))
             button.setToolTip(tooltip)
             button.clicked.connect(callback)
+            button.clicked.connect(self._store_brush_settings)
             brush_size_stepper_layout.addWidget(button)
         brush_size_layout.addWidget(brush_size_stepper)
         action_toolbar.addWidget(brush_size_field)
 
         self.paint_color_toolbar_button = QToolButton(self)
         self.paint_color_toolbar_button.setText("브러시 색")
+        self.paint_color_toolbar_button.setProperty("colorLabel", "브러시 색")
         self.paint_color_toolbar_button.setIcon(_editor_icon("palette"))
         self.paint_color_toolbar_button.setToolButtonStyle(
             Qt.ToolButtonStyle.ToolButtonTextBesideIcon
         )
         self.paint_color_toolbar_button.clicked.connect(self.choose_paint_color)
+        self._set_color_button(self.paint_color_toolbar_button, self.paint_color)
         self.paint_color_toolbar_button.setVisible(False)
         action_toolbar.addWidget(self.paint_color_toolbar_button)
 
@@ -3033,6 +3048,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.settings_tabs.addTab(self._build_ocr_tab(), "OCR")
         self.settings_tabs.addTab(self._build_inpaint_tab(), "인페인팅")
         self.settings_tabs.addTab(self._build_translation_tab(), "번역")
+        self.settings_tabs.addTab(self._build_brush_tab(), "브러시")
         self.settings_tabs.addTab(self._build_editor_settings_tab(), "편집기 설정")
         settings_layout.addWidget(self.settings_tabs)
         self.inspector_sections.addTab(settings_page, "도구 설정")
@@ -3498,6 +3514,67 @@ class AdvancedEditorWindow(QMainWindow):
         settings_path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(settings_path)
 
+        layout.addStretch(1)
+        return tab
+
+    def _build_brush_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 14)
+        layout.setSpacing(9)
+
+        color_label = QLabel("그리기 색상")
+        color_label.setObjectName("CompactSectionLabel")
+        layout.addWidget(color_label)
+
+        self.paint_color_button = QPushButton()
+        self.paint_color_button.setProperty("colorLabel", "현재 색상")
+        self.paint_color_button.clicked.connect(self.choose_paint_color)
+        self._set_color_button(self.paint_color_button, self.paint_color)
+        layout.addWidget(self.paint_color_button)
+
+        quick_colors = QHBoxLayout()
+        quick_colors.setSpacing(6)
+        for label, color in (("흰색", "#ffffff"), ("검정", "#000000"), ("회색", "#808080")):
+            button = QPushButton(label)
+            foreground = "#ffffff" if QColor(color).lightness() < 140 else "#172033"
+            button.setAccessibleName(f"브러시 색상 {label}")
+            button.setStyleSheet(
+                f"background: {color}; color: {foreground}; border-color: #94a3b8;"
+            )
+            button.clicked.connect(
+                lambda _checked=False, value=color: self._set_paint_color(value)
+            )
+            quick_colors.addWidget(button)
+        layout.addLayout(quick_colors)
+
+        size_label = QLabel("브러시 크기")
+        size_label.setObjectName("CompactSectionLabel")
+        layout.addWidget(size_label)
+        size_row = QHBoxLayout()
+        self.brush_panel_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brush_panel_slider.setRange(5, 200)
+        self.brush_panel_slider.setValue(self.brush_size)
+        self.brush_panel_slider.valueChanged.connect(self.brush_slider.setValue)
+        self.brush_slider.valueChanged.connect(self.brush_panel_slider.setValue)
+        self.brush_panel_slider.sliderReleased.connect(self._store_brush_settings)
+        size_row.addWidget(self.brush_panel_slider, 1)
+        self.brush_panel_spin = QSpinBox()
+        self.brush_panel_spin.setRange(5, 200)
+        self.brush_panel_spin.setSuffix(" px")
+        self.brush_panel_spin.setValue(self.brush_size)
+        self.brush_panel_spin.valueChanged.connect(self.brush_slider.setValue)
+        self.brush_slider.valueChanged.connect(self.brush_panel_spin.setValue)
+        self.brush_panel_spin.editingFinished.connect(self._store_brush_settings)
+        size_row.addWidget(self.brush_panel_spin)
+        layout.addLayout(size_row)
+
+        layout.addWidget(
+            self._help_label(
+                "그리기 브러시는 선택한 색을 별도 레이어에 칠합니다. "
+                "그리기 지우개는 이 레이어만 지우며 원본 이미지는 손상시키지 않습니다."
+            )
+        )
         layout.addStretch(1)
         return tab
 
@@ -4175,8 +4252,8 @@ class AdvancedEditorWindow(QMainWindow):
             "inpaint_eraser": (1, 1),
             "paint_brush": (1, 3),
             "paint_eraser": (1, 3),
-            "restore_brush": (1, 3),
-            "restore_eraser": (1, 3),
+            "restore_brush": (1, 4),
+            "restore_eraser": (1, 4),
             "pan": (None, None),
         }
         section_index, settings_index = contexts.get(tool, (None, None))
@@ -5006,11 +5083,25 @@ class AdvancedEditorWindow(QMainWindow):
         color = QColorDialog.getColor(QColor(self.paint_color), self, "브러시 색 선택")
         if not color.isValid():
             return
-        self.paint_color = _hex_from_qcolor(color)
-        self.paint_color_toolbar_button.setStyleSheet(
-            f"border-bottom: 3px solid {self.paint_color};"
-        )
+        self._set_paint_color(_hex_from_qcolor(color))
+
+    def _set_paint_color(self, value: str) -> None:
+        color = QColor(str(value))
+        if not color.isValid():
+            return
+        self.paint_color = color.name()
+        self._set_color_button(self.paint_color_toolbar_button, self.paint_color)
+        if hasattr(self, "paint_color_button"):
+            self._set_color_button(self.paint_color_button, self.paint_color)
+        self._store_brush_settings()
         self.canvas.update()
+
+    def _store_brush_settings(self) -> None:
+        self.editor_settings["brush"] = {
+            "size": int(self.brush_size),
+            "color": self.paint_color,
+        }
+        _save_editor_settings(self.editor_settings)
 
     def apply_stroke(self, tool: str, points: list[tuple[int, int]]) -> None:
         if not points:
