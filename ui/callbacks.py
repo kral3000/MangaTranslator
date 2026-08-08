@@ -28,7 +28,7 @@ from core.validation import (
 from utils.exceptions import CancellationError, ValidationError
 from utils.token_usage import format_usage
 
-from . import logic, settings_manager, utils
+from . import character_profiles, logic, settings_manager, utils
 from .cancellation import CancellationManager
 from .korean import ko
 from .ui_models import (
@@ -93,6 +93,88 @@ def _clean_error_message(message: Any) -> str:
     if text.startswith(ERROR_PREFIX):
         return text
     return f"{ERROR_PREFIX}{text}"
+
+
+def _character_profile_updates(
+    store: dict[str, Any], selected: str, *, editor_visible: bool, message: str
+) -> tuple[Any, ...]:
+    choices = character_profiles.profile_choices(store)
+    entries = store["profiles"].get(selected, "")
+    line_count = len([line for line in entries.splitlines() if line.strip()])
+    status = message or (
+        f"선택한 사전의 이름 표기 {line_count}개가 번역 지침에 자동 적용됩니다."
+        if selected
+        else "작품을 선택하면 저장된 이름 표기가 번역 지침에 자동 적용됩니다."
+    )
+    return (
+        gr.update(choices=choices, value=selected),
+        gr.update(choices=choices, value=selected),
+        gr.update(value=selected),
+        gr.update(value=selected),
+        gr.update(value=entries),
+        gr.update(value=entries),
+        gr.update(visible=editor_visible),
+        gr.update(visible=editor_visible),
+        status,
+        status,
+    )
+
+
+def handle_character_profile_select(name: str) -> tuple[Any, ...]:
+    store, _entries = character_profiles.select_profile(name)
+    selected = store["active"]
+    return _character_profile_updates(
+        store, selected, editor_visible=bool(selected), message=""
+    )
+
+
+def handle_new_character_profile() -> tuple[Any, ...]:
+    store, _entries = character_profiles.select_profile("")
+    choices = character_profiles.profile_choices(store)
+    message = "새 작품 이름과 이름 표기를 입력한 뒤 ‘사전 저장’을 누르세요."
+    return (
+        gr.update(choices=choices, value=""),
+        gr.update(choices=choices, value=""),
+        gr.update(value=""),
+        gr.update(value=""),
+        gr.update(value=""),
+        gr.update(value=""),
+        gr.update(visible=True),
+        gr.update(visible=True),
+        message,
+        message,
+    )
+
+
+def handle_save_character_profile(
+    original_name: str, name: str, entries: str
+) -> tuple[Any, ...]:
+    try:
+        store = character_profiles.save_profile(original_name, name, entries)
+    except ValueError as exc:
+        gr.Warning(str(exc))
+        return tuple(gr.update() for _ in range(10))
+    selected = store["active"]
+    return _character_profile_updates(
+        store,
+        selected,
+        editor_visible=True,
+        message=f"‘{selected}’ 등장인물 사전을 저장했습니다.",
+    )
+
+
+def handle_delete_character_profile(name: str) -> tuple[Any, ...]:
+    selected = str(name or "").strip()
+    if not selected:
+        gr.Warning("삭제할 작품을 먼저 선택해 주세요.")
+        return tuple(gr.update() for _ in range(10))
+    store = character_profiles.delete_profile(selected)
+    return _character_profile_updates(
+        store,
+        "",
+        editor_visible=False,
+        message=f"‘{selected}’ 등장인물 사전을 삭제했습니다.",
+    )
 
 
 def _status_update(message: str) -> gr.update:
@@ -729,6 +811,7 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         batch_input_language,
         batch_output_language,
         batch_font_dropdown,
+        character_profile_name,
         special_instructions_val,
         batch_special_instructions_val,
         batch_parallel_requests_val,
@@ -741,8 +824,11 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
     final_input_language = batch_input_language if is_batch else input_language
     final_output_language = batch_output_language if is_batch else output_language
     final_font_pack = batch_font_dropdown if is_batch else font_dropdown
-    final_special_instructions = (
+    base_special_instructions = (
         batch_special_instructions_val if is_batch else special_instructions_val
+    )
+    final_special_instructions = character_profiles.merge_with_special_instructions(
+        character_profile_name, base_special_instructions
     )
 
     flux_cpu_offload, flux_low_vram = flux_offload_flags(

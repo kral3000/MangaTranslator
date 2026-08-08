@@ -6,7 +6,7 @@ import gradio as gr
 
 from core.tag_styles import TAG_DEFINITIONS, TAG_STYLE_COLUMNS, tag_styles_to_table
 
-from . import callbacks, korean, settings_manager, utils
+from . import callbacks, character_profiles, korean, settings_manager, utils
 
 korean.install_gradio_korean(gr)
 
@@ -440,6 +440,75 @@ def create_layout(
     """Creates the Gradio UI layout and connects callbacks."""
 
     css_path = Path(__file__).with_name("style.css")
+    profile_store = character_profiles.load_profiles()
+    profile_choices = character_profiles.profile_choices(profile_store)
+    active_profile = profile_store["active"]
+    active_profile_entries = profile_store["profiles"].get(active_profile, "")
+
+    def build_character_profile_panel(prefix: str):
+        with gr.Group(elem_classes=["character-profile-card"]):
+            gr.Markdown(
+                "#### 작품별 등장인물 이름\n"
+                "선택한 작품의 이름 표기를 번역 지침에 자동으로 추가합니다.",
+                elem_classes=["character-profile-heading"],
+            )
+            with gr.Row(elem_classes=["character-profile-picker"]):
+                selector = gr.Dropdown(
+                    choices=profile_choices,
+                    value=active_profile,
+                    label="작품 사전",
+                    filterable=True,
+                    elem_id=f"{prefix}-character-profile-select",
+                )
+                new_button = gr.Button(
+                    "새 작품",
+                    variant="secondary",
+                    scale=0,
+                    min_width=104,
+                    elem_classes=["character-profile-new"],
+                )
+            status = gr.Markdown(
+                (
+                    f"이름 표기 {len([line for line in active_profile_entries.splitlines() if line.strip()])}개가 적용됩니다."
+                    if active_profile
+                    else "사용 안 함 — 기존 추가 지시사항만 적용됩니다."
+                ),
+                elem_classes=["character-profile-status"],
+            )
+            with gr.Group(
+                visible=bool(active_profile),
+                elem_classes=["character-profile-editor"],
+            ) as editor:
+                name = gr.Textbox(
+                    label="작품 이름",
+                    value=active_profile,
+                    placeholder="예: 그리하여 계절은 푸름을 알게 된다",
+                )
+                entries = gr.Textbox(
+                    label="일본어 이름과 사용할 표기",
+                    value=active_profile_entries,
+                    placeholder=(
+                        "한 줄에 한 명씩 입력하세요.\n"
+                        "秋吉 直（あきよし すなお）= 아키요시 나오\n"
+                        "西川 樺梛（にしかわ わかもん）= 니시카와 와카몬"
+                    ),
+                    lines=5,
+                    max_lines=16,
+                    elem_id=f"{prefix}-character-profile-entries",
+                )
+                with gr.Row(elem_classes=["character-profile-actions"]):
+                    save_button = gr.Button("사전 저장", variant="primary")
+                    delete_button = gr.Button("삭제", variant="stop")
+        return {
+            "selector": selector,
+            "new": new_button,
+            "status": status,
+            "editor": editor,
+            "name": name,
+            "entries": entries,
+            "save": save_button,
+            "delete": delete_button,
+        }
 
     with gr.Blocks(
         title="MangaTranslator", js=js_credits, css_paths=str(css_path)
@@ -591,6 +660,9 @@ def create_layout(
                                 value=saved_settings.get("output_language", "English"),
                                 allow_custom_value=True,
                             )
+                        translator_character_profile = build_character_profile_panel(
+                            "translator"
+                        )
                         special_instructions = gr.Textbox(
                             label="Special Instructions",
                             placeholder="Give the LLM optional context, formatting instructions, etc.",
@@ -784,6 +856,7 @@ def create_layout(
                                 ),
                                 allow_custom_value=True,
                             )
+                        batch_character_profile = build_character_profile_panel("batch")
                         batch_special_instructions = gr.Textbox(
                             label="Special Instructions",
                             placeholder="Give the LLM optional context, formatting instructions, etc.",
@@ -3578,6 +3651,7 @@ def create_layout(
             batch_input_language,
             batch_output_language,
             batch_font_dropdown,
+            translator_character_profile["selector"],
             special_instructions,
             batch_special_instructions,
             batch_parallel_requests,
@@ -3740,6 +3814,7 @@ def create_layout(
             batch_input_language,
             batch_output_language,
             batch_font_dropdown,
+            batch_character_profile["selector"],
             special_instructions,
             batch_special_instructions,
             batch_parallel_requests,
@@ -3750,6 +3825,43 @@ def create_layout(
         ]
 
         # Config Tab Navigation & Updates
+        character_profile_outputs = [
+            translator_character_profile["selector"],
+            batch_character_profile["selector"],
+            translator_character_profile["name"],
+            batch_character_profile["name"],
+            translator_character_profile["entries"],
+            batch_character_profile["entries"],
+            translator_character_profile["editor"],
+            batch_character_profile["editor"],
+            translator_character_profile["status"],
+            batch_character_profile["status"],
+        ]
+        for panel in (translator_character_profile, batch_character_profile):
+            panel["selector"].input(
+                fn=callbacks.handle_character_profile_select,
+                inputs=[panel["selector"]],
+                outputs=character_profile_outputs,
+                queue=False,
+            )
+            panel["new"].click(
+                fn=callbacks.handle_new_character_profile,
+                outputs=character_profile_outputs,
+                queue=False,
+            )
+            panel["save"].click(
+                fn=callbacks.handle_save_character_profile,
+                inputs=[panel["selector"], panel["name"], panel["entries"]],
+                outputs=character_profile_outputs,
+                queue=False,
+            )
+            panel["delete"].click(
+                fn=callbacks.handle_delete_character_profile,
+                inputs=[panel["selector"]],
+                outputs=character_profile_outputs,
+                queue=False,
+            )
+
         runtime_log_toggle_button.click(
             fn=callbacks.handle_runtime_log_toggle,
             inputs=[runtime_log_open_state],

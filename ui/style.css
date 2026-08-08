@@ -374,6 +374,104 @@
     outline-offset: 2px !important;
 }
 
+/* --- CHARACTER NAME PROFILES --- */
+.character-profile-card {
+    margin: 10px 0 14px !important;
+    padding: 14px !important;
+    border: 1px solid var(--border-color-primary) !important;
+    border-radius: 8px !important;
+    background: color-mix(
+        in srgb,
+        var(--primary-500) 5%,
+        var(--block-background-fill)
+    ) !important;
+    box-shadow: none !important;
+}
+
+.character-profile-card > .styler {
+    gap: 10px !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+.character-profile-heading,
+.character-profile-heading h4,
+.character-profile-heading p,
+.character-profile-status,
+.character-profile-status p {
+    margin: 0 !important;
+}
+
+.character-profile-heading h4 {
+    margin-bottom: 4px !important;
+    font-size: 15px !important;
+}
+
+.character-profile-heading p,
+.character-profile-status p {
+    color: var(--body-text-color) !important;
+    opacity: 0.76;
+    font-size: 12px !important;
+    line-height: 1.45 !important;
+}
+
+.character-profile-picker {
+    align-items: flex-end !important;
+    gap: 8px !important;
+}
+
+.character-profile-picker > .block,
+.character-profile-picker > .form {
+    min-width: 0 !important;
+    margin: 0 !important;
+}
+
+.character-profile-new {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 104px !important;
+    white-space: nowrap !important;
+}
+
+.character-profile-editor {
+    margin-top: 2px !important;
+    padding: 12px 0 0 !important;
+    border: 0 !important;
+    border-top: 1px solid var(--border-color-primary) !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+.character-profile-editor > .styler {
+    gap: 9px !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+.character-profile-actions {
+    justify-content: flex-end !important;
+    gap: 8px !important;
+}
+
+.character-profile-actions button {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 104px !important;
+    border-radius: 6px !important;
+}
+
+.character-profile-card button:focus-visible,
+.character-profile-card input:focus-visible,
+.character-profile-card textarea:focus-visible {
+    outline: 2px solid var(--primary-500) !important;
+    outline-offset: 2px !important;
+}
+
 /* --- ADVANCED EDITOR LAUNCHER --- */
 #advanced-editor-tab {
     --editor-radius: 6px;
