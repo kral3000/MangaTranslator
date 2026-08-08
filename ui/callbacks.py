@@ -12,6 +12,7 @@ import gradio as gr
 import torch
 from PIL import Image
 
+import runtime_logging
 from core.config import MangaTranslatorConfig
 from core.pipeline import (
     BATCH_EMBEDDED_OUTPUT_DIR_NAME,
@@ -50,6 +51,29 @@ SUCCESS_PREFIX = "완료: "
 IMAGE_EDITOR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
 CANCELLATION_MANAGER: Optional[CancellationManager] = None
+
+
+def handle_runtime_log_refresh() -> str:
+    return runtime_logging.read_log_tail()
+
+
+def handle_runtime_log_toggle(is_open: bool):
+    next_open = not bool(is_open)
+    return (
+        gr.update(visible=next_open),
+        next_open,
+        gr.update(active=next_open),
+        gr.update(value="로그 닫기" if next_open else "실행 로그"),
+        runtime_logging.read_log_tail() if next_open else gr.update(),
+    )
+
+
+def handle_open_runtime_log_directory() -> None:
+    try:
+        directory = runtime_logging.open_log_directory()
+        gr.Info(f"로그 폴더를 열었습니다: {directory}")
+    except OSError as exc:
+        gr.Warning(f"로그 폴더를 열 수 없습니다: {exc}")
 
 
 def _clean_error_message(message: Any) -> str:

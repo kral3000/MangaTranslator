@@ -403,6 +403,36 @@ js_reset_status_height = """
 }
 """
 
+js_copy_runtime_log = """
+async () => {
+    const output = document.querySelector('#runtime-log-output textarea');
+    const button = document.getElementById('runtime-log-copy');
+    if (!output || !button) return [];
+
+    try {
+        await navigator.clipboard.writeText(output.value || '');
+    } catch (_) {
+        output.focus();
+        output.select();
+        document.execCommand('copy');
+        output.setSelectionRange(0, 0);
+    }
+
+    const original = button.textContent;
+    button.textContent = '복사 완료';
+    setTimeout(() => { button.textContent = original; }, 1200);
+    return [];
+}
+"""
+
+js_scroll_runtime_log = """
+() => {
+    const output = document.querySelector('#runtime-log-output textarea');
+    if (output) output.scrollTop = output.scrollHeight;
+    return [];
+}
+"""
+
 
 def create_layout(
     models_dir: Path, fonts_base_dir: Path, target_device: Any
@@ -415,7 +445,46 @@ def create_layout(
         title="MangaTranslator", js=js_credits, css_paths=str(css_path)
     ) as app:
 
-        gr.Markdown("# MangaTranslator")
+        runtime_log_open_state = gr.State(False)
+        with gr.Row(elem_id="app-header-row"):
+            gr.Markdown("# MangaTranslator", elem_classes=["app-title"])
+            runtime_log_toggle_button = gr.Button(
+                "실행 로그",
+                variant="secondary",
+                scale=0,
+                min_width=112,
+                elem_id="runtime-log-toggle",
+            )
+
+        with gr.Column(visible=False, elem_id="runtime-log-drawer") as runtime_log_drawer:
+            with gr.Row(elem_id="runtime-log-toolbar"):
+                gr.Markdown(
+                    "### 실행 로그\n"
+                    "창을 닫아도 기록은 계속되며 전체 로그는 `output/logs`에 저장됩니다.",
+                    elem_classes=["runtime-log-heading"],
+                )
+                runtime_log_refresh_button = gr.Button(
+                    "새로고침", scale=0, min_width=96
+                )
+                runtime_log_copy_button = gr.Button(
+                    "전체 복사",
+                    scale=0,
+                    min_width=96,
+                    elem_id="runtime-log-copy",
+                )
+                runtime_log_folder_button = gr.Button(
+                    "로그 폴더 열기", scale=0, min_width=128
+                )
+            runtime_log_output = gr.Textbox(
+                value="",
+                label="실행 로그 내용",
+                show_label=False,
+                interactive=False,
+                lines=14,
+                max_lines=24,
+                elem_id="runtime-log-output",
+            )
+        runtime_log_timer = gr.Timer(value=1.0, active=False)
 
         font_choices, initial_default_font = utils.get_available_font_packs(
             fonts_base_dir
@@ -3681,6 +3750,38 @@ def create_layout(
         ]
 
         # Config Tab Navigation & Updates
+        runtime_log_toggle_button.click(
+            fn=callbacks.handle_runtime_log_toggle,
+            inputs=[runtime_log_open_state],
+            outputs=[
+                runtime_log_drawer,
+                runtime_log_open_state,
+                runtime_log_timer,
+                runtime_log_toggle_button,
+                runtime_log_output,
+            ],
+            queue=False,
+        ).then(fn=None, js=js_scroll_runtime_log, queue=False)
+        runtime_log_refresh_button.click(
+            fn=callbacks.handle_runtime_log_refresh,
+            outputs=[runtime_log_output],
+            queue=False,
+        ).then(fn=None, js=js_scroll_runtime_log, queue=False)
+        runtime_log_timer.tick(
+            fn=callbacks.handle_runtime_log_refresh,
+            outputs=[runtime_log_output],
+            queue=False,
+        ).then(fn=None, js=js_scroll_runtime_log, queue=False)
+        runtime_log_copy_button.click(
+            fn=None,
+            js=js_copy_runtime_log,
+            queue=False,
+        )
+        runtime_log_folder_button.click(
+            fn=callbacks.handle_open_runtime_log_directory,
+            queue=False,
+        )
+
         output_components_for_switch = setting_groups + nav_buttons
         nav_button_detection.click(
             fn=lambda idx=0: utils.switch_settings_view(

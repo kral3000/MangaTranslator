@@ -278,6 +278,102 @@
     min-height: 12em;
 }
 
+/* --- DESKTOP HEADER & RUNTIME LOG DRAWER --- */
+#app-header-row {
+    align-items: center !important;
+    gap: 16px !important;
+    margin-bottom: 2px !important;
+}
+
+#app-header-row .app-title {
+    flex: 1 1 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+#app-header-row .app-title h1 {
+    margin: 0 !important;
+}
+
+#runtime-log-toggle {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 112px !important;
+    border-radius: 6px !important;
+    white-space: nowrap !important;
+}
+
+#runtime-log-drawer {
+    margin: 10px 0 16px !important;
+    padding: 14px !important;
+    gap: 10px !important;
+    border: 1px solid var(--border-color-primary) !important;
+    border-radius: 6px !important;
+    background: var(--block-background-fill) !important;
+    box-shadow: none !important;
+}
+
+#runtime-log-toolbar {
+    align-items: center !important;
+    gap: 8px !important;
+}
+
+#runtime-log-toolbar .runtime-log-heading {
+    flex: 1 1 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+#runtime-log-toolbar .runtime-log-heading h3 {
+    margin: 0 0 3px !important;
+}
+
+#runtime-log-toolbar .runtime-log-heading p {
+    margin: 0 !important;
+    color: var(--body-text-color) !important;
+    opacity: 0.78;
+}
+
+#runtime-log-toolbar button {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    border-radius: 6px !important;
+    white-space: nowrap !important;
+}
+
+#runtime-log-output {
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 1px solid var(--border-color-primary) !important;
+    border-radius: 6px !important;
+    background: var(--background-fill-secondary) !important;
+    box-shadow: none !important;
+}
+
+#runtime-log-output textarea {
+    min-height: 280px !important;
+    max-height: 440px !important;
+    padding: 12px !important;
+    border: 0 !important;
+    background: transparent !important;
+    color: var(--body-text-color) !important;
+    font-family: "Cascadia Mono", Consolas, monospace !important;
+    font-size: 13px !important;
+    line-height: 1.55 !important;
+    resize: vertical !important;
+    white-space: pre !important;
+}
+
+#runtime-log-drawer button:focus-visible,
+#runtime-log-output textarea:focus-visible {
+    outline: 2px solid var(--primary-500) !important;
+    outline-offset: 2px !important;
+}
+
 /* --- ADVANCED EDITOR LAUNCHER --- */
 #advanced-editor-tab {
     --editor-radius: 6px;

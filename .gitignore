@@ -30,6 +30,7 @@ Thumbs.db
 /.vscode/
 *.log
 *.txt
+/MangaTranslatorKo.exe
 
 # large runtime/data — not source code, keep out of repo
 /advanced_editor/hgmzhn_runtime/models/
