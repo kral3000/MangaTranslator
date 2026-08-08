@@ -2,6 +2,8 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock
 
+import numpy as np
+
 from advanced_editor.launcher import AdvancedEditorWindow
 
 
@@ -50,3 +52,28 @@ class ToolContextTest(TestCase):
         window.inspector_sections.setCurrentIndex.assert_called_once_with(1)
         window.settings_tabs.setCurrentIndex.assert_called_once_with(3)
         window.paint_color_toolbar_button.setVisible.assert_called_once_with(True)
+
+    def test_square_brush_mask_has_square_corners(self) -> None:
+        window = SimpleNamespace(
+            image_size=(30, 30),
+            brush_size=10,
+            brush_shape="square",
+        )
+
+        mask = AdvancedEditorWindow._stroke_mask(window, [(15, 15)])
+
+        self.assertIsInstance(mask, np.ndarray)
+        self.assertEqual(mask[10, 10], 255)
+        self.assertEqual(mask[9, 9], 0)
+
+    def test_circle_brush_mask_keeps_square_corner_clear(self) -> None:
+        window = SimpleNamespace(
+            image_size=(30, 30),
+            brush_size=10,
+            brush_shape="circle",
+        )
+
+        mask = AdvancedEditorWindow._stroke_mask(window, [(15, 15)])
+
+        self.assertEqual(mask[10, 10], 0)
+        self.assertEqual(mask[15, 15], 255)

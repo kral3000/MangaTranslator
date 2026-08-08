@@ -146,6 +146,8 @@ EDITOR_ICON_PATHS = {
     "folder": '<path d="M3 6h7l2 2h9v12H3z"/>',
     "play": '<path d="M8 5l11 7-11 7z"/>',
     "palette": '<path d="M12 3a9 9 0 0 0 0 18h2a2 2 0 0 0 0-4h-1a2 2 0 0 1 0-4h4a4 4 0 0 0 4-4c0-4-4-6-9-6z"/><path d="M7 10h.01M9 6h.01M14 6h.01M18 9h.01"/>',
+    "brush_circle": '<circle cx="12" cy="12" r="7"/>',
+    "brush_square": '<rect x="5" y="5" width="14" height="14" rx="1"/>',
     "bold": '<path d="M7 4h6a4 4 0 0 1 0 8H7zM7 12h7a4 4 0 0 1 0 8H7z"/>',
     "italic": '<path d="M10 4h8M6 20h8M14 4L10 20"/>',
     "hand": '<path d="M7 12V7a2 2 0 0 1 4 0v3-5a2 2 0 0 1 4 0v5-3a2 2 0 0 1 4 0v7c0 5-3 7-7 7-3 0-5-2-7-5l-2-3a2 2 0 0 1 4-2z"/>',
@@ -1086,19 +1088,33 @@ class EditorCanvas(QWidget):
             color = QColor(255, 214, 10, 180)
         else:
             color = QColor(0, 150, 255, 150)
+        square_brush = self.window.brush_shape == "square"
         painter.setPen(
             QPen(
                 color,
                 max(1.0, self.window.brush_size * self.scale),
                 Qt.PenStyle.SolidLine,
-                Qt.PenCapStyle.RoundCap,
-                Qt.PenJoinStyle.RoundJoin,
+                (
+                    Qt.PenCapStyle.SquareCap
+                    if square_brush
+                    else Qt.PenCapStyle.RoundCap
+                ),
+                (
+                    Qt.PenJoinStyle.MiterJoin
+                    if square_brush
+                    else Qt.PenJoinStyle.RoundJoin
+                ),
             )
         )
         points = [self.image_to_view(QPointF(x, y)) for x, y in self.stroke_points]
         if len(points) == 1:
             r = max(1.0, self.window.brush_size * self.scale / 2.0)
-            painter.drawEllipse(points[0], r, r)
+            if square_brush:
+                painter.drawRect(
+                    QRectF(points[0].x() - r, points[0].y() - r, r * 2, r * 2)
+                )
+            else:
+                painter.drawEllipse(points[0], r, r)
         else:
             for i in range(1, len(points)):
                 painter.drawLine(points[i - 1], points[i])
@@ -1115,11 +1131,23 @@ class EditorCanvas(QWidget):
             return
         center = self.image_to_view(self.hover_image_pos)
         radius = max(2.0, self.window.brush_size * self.scale / 2.0)
+        cursor_rect = QRectF(
+            center.x() - radius,
+            center.y() - radius,
+            radius * 2,
+            radius * 2,
+        )
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(QPen(QColor(0, 0, 0, 210), 3.0))
-        painter.drawEllipse(center, radius, radius)
+        if self.window.brush_shape == "square":
+            painter.drawRect(cursor_rect)
+        else:
+            painter.drawEllipse(center, radius, radius)
         painter.setPen(QPen(QColor(255, 255, 255, 235), 1.0))
-        painter.drawEllipse(center, radius, radius)
+        if self.window.brush_shape == "square":
+            painter.drawRect(cursor_rect)
+        else:
+            painter.drawEllipse(center, radius, radius)
 
     def _draw_textbox_preview(self, painter: QPainter) -> None:
         if self.textbox_start is None or self.textbox_current is None:
@@ -1301,6 +1329,18 @@ class AdvancedEditorWindow(QMainWindow):
         saved_paint_color = QColor(str(brush_settings.get("color", "#ffffff")))
         self.paint_color = (
             saved_paint_color.name() if saved_paint_color.isValid() else "#ffffff"
+        )
+        saved_custom_color = QColor(
+            str(brush_settings.get("custom_color", "#808080"))
+        )
+        self.custom_paint_color = (
+            saved_custom_color.name() if saved_custom_color.isValid() else "#808080"
+        )
+        saved_brush_shape = str(brush_settings.get("shape", "circle"))
+        self.brush_shape = (
+            saved_brush_shape
+            if saved_brush_shape in {"circle", "square"}
+            else "circle"
         )
         self.history: list[dict[str, Any]] = []
         self.redo_stack: list[dict[str, Any]] = []
@@ -2411,6 +2451,11 @@ class AdvancedEditorWindow(QMainWindow):
 
     def _apply_button_icons(self, root: QWidget) -> None:
         for button in root.findChildren(QPushButton):
+            if button.property("preserveIcon"):
+                continue
+            if button.property("noAutoIcon"):
+                button.setIcon(QIcon())
+                continue
             color = (
                 "#f8fafc"
                 if button.parentWidget()
@@ -3535,43 +3580,59 @@ class AdvancedEditorWindow(QMainWindow):
 
         quick_colors = QHBoxLayout()
         quick_colors.setSpacing(6)
-        for label, color in (("흰색", "#ffffff"), ("검정", "#000000"), ("회색", "#808080")):
+        for label, color in (("흰색", "#ffffff"), ("검정", "#000000")):
             button = QPushButton(label)
+            button.setProperty("noAutoIcon", True)
             foreground = "#ffffff" if QColor(color).lightness() < 140 else "#172033"
             button.setAccessibleName(f"브러시 색상 {label}")
             button.setStyleSheet(
-                f"background: {color}; color: {foreground}; border-color: #94a3b8;"
+                f"background: {color}; color: {foreground}; border: 1px solid #64748b;"
             )
             button.clicked.connect(
                 lambda _checked=False, value=color: self._set_paint_color(value)
             )
-            quick_colors.addWidget(button)
+            quick_colors.addWidget(button, 1)
+        self.custom_paint_color_button = QPushButton()
+        self.custom_paint_color_button.setProperty("noAutoIcon", True)
+        self.custom_paint_color_button.setToolTip("마지막으로 직접 고른 색을 다시 사용합니다")
+        self.custom_paint_color_button.clicked.connect(
+            lambda: self._set_paint_color(self.custom_paint_color)
+        )
+        self._sync_custom_paint_color_button()
+        quick_colors.addWidget(self.custom_paint_color_button, 1)
         layout.addLayout(quick_colors)
 
-        size_label = QLabel("브러시 크기")
-        size_label.setObjectName("CompactSectionLabel")
-        layout.addWidget(size_label)
-        size_row = QHBoxLayout()
-        self.brush_panel_slider = QSlider(Qt.Orientation.Horizontal)
-        self.brush_panel_slider.setRange(5, 200)
-        self.brush_panel_slider.setValue(self.brush_size)
-        self.brush_panel_slider.valueChanged.connect(self.brush_slider.setValue)
-        self.brush_slider.valueChanged.connect(self.brush_panel_slider.setValue)
-        self.brush_panel_slider.sliderReleased.connect(self._store_brush_settings)
-        size_row.addWidget(self.brush_panel_slider, 1)
-        self.brush_panel_spin = QSpinBox()
-        self.brush_panel_spin.setRange(5, 200)
-        self.brush_panel_spin.setSuffix(" px")
-        self.brush_panel_spin.setValue(self.brush_size)
-        self.brush_panel_spin.valueChanged.connect(self.brush_slider.setValue)
-        self.brush_slider.valueChanged.connect(self.brush_panel_spin.setValue)
-        self.brush_panel_spin.editingFinished.connect(self._store_brush_settings)
-        size_row.addWidget(self.brush_panel_spin)
-        layout.addLayout(size_row)
+        shape_label = QLabel("브러시 모양")
+        shape_label.setObjectName("CompactSectionLabel")
+        layout.addWidget(shape_label)
+        shape_row = QHBoxLayout()
+        shape_row.setSpacing(6)
+        self.brush_shape_group = QButtonGroup(self)
+        self.brush_shape_group.setExclusive(True)
+        self.brush_shape_buttons: dict[str, QPushButton] = {}
+        for shape, label, icon_name in (
+            ("circle", "원형", "brush_circle"),
+            ("square", "사각형", "brush_square"),
+        ):
+            button = QPushButton(label)
+            button.setObjectName("OptionToggle")
+            button.setCheckable(True)
+            button.setChecked(self.brush_shape == shape)
+            button.setProperty("preserveIcon", True)
+            button.setIcon(_editor_icon(icon_name, "#334155"))
+            button.setIconSize(QSize(16, 16))
+            button.clicked.connect(
+                lambda _checked=False, value=shape: self._set_brush_shape(value)
+            )
+            self.brush_shape_group.addButton(button)
+            self.brush_shape_buttons[shape] = button
+            shape_row.addWidget(button)
+        layout.addLayout(shape_row)
 
         layout.addWidget(
             self._help_label(
-                "그리기 브러시는 선택한 색을 별도 레이어에 칠합니다. "
+                "크기는 상단 도구 막대에서 조절합니다. 사용자 색상은 색 선택 창에서 "
+                "마지막으로 고른 색을 기억합니다. 그리기 브러시는 선택한 색을 별도 레이어에 칠합니다. "
                 "그리기 지우개는 이 레이어만 지우며 원본 이미지는 손상시키지 않습니다."
             )
         )
@@ -5083,23 +5144,53 @@ class AdvancedEditorWindow(QMainWindow):
         color = QColorDialog.getColor(QColor(self.paint_color), self, "브러시 색 선택")
         if not color.isValid():
             return
-        self._set_paint_color(_hex_from_qcolor(color))
+        self._set_paint_color(_hex_from_qcolor(color), remember_custom=True)
 
-    def _set_paint_color(self, value: str) -> None:
+    def _set_paint_color(self, value: str, *, remember_custom: bool = False) -> None:
         color = QColor(str(value))
         if not color.isValid():
             return
         self.paint_color = color.name()
+        if remember_custom:
+            self.custom_paint_color = self.paint_color
         self._set_color_button(self.paint_color_toolbar_button, self.paint_color)
         if hasattr(self, "paint_color_button"):
             self._set_color_button(self.paint_color_button, self.paint_color)
+        if hasattr(self, "custom_paint_color_button"):
+            self._sync_custom_paint_color_button()
         self._store_brush_settings()
         self.canvas.update()
 
-    def _store_brush_settings(self) -> None:
+    def _sync_custom_paint_color_button(self) -> None:
+        color = QColor(self.custom_paint_color)
+        foreground = "#ffffff" if color.lightness() < 140 else "#172033"
+        self.custom_paint_color_button.setText("사용자 색")
+        self.custom_paint_color_button.setToolTip(
+            f"마지막으로 직접 고른 색 {color.name().upper()}"
+        )
+        self.custom_paint_color_button.setAccessibleName(
+            f"저장된 사용자 브러시 색상 {color.name().upper()}"
+        )
+        self.custom_paint_color_button.setStyleSheet(
+            f"background: {color.name()}; color: {foreground}; "
+            "border: 1px solid #64748b;"
+        )
+
+    def _set_brush_shape(self, value: str) -> None:
+        if value not in {"circle", "square"}:
+            return
+        self.brush_shape = value
+        for shape, button in self.brush_shape_buttons.items():
+            button.setChecked(shape == value)
+        self._store_brush_settings()
+        self.canvas.update()
+
+    def _store_brush_settings(self, *_args) -> None:
         self.editor_settings["brush"] = {
             "size": int(self.brush_size),
             "color": self.paint_color,
+            "custom_color": self.custom_paint_color,
+            "shape": self.brush_shape,
         }
         _save_editor_settings(self.editor_settings)
 
@@ -5142,7 +5233,35 @@ class AdvancedEditorWindow(QMainWindow):
         stroke = np.zeros((height, width), dtype=np.uint8)
         radius = max(1, int(round(self.brush_size / 2)))
         thickness = max(1, int(round(self.brush_size)))
-        if len(points) == 1:
+        if self.brush_shape == "square":
+            half = max(1, int(round(self.brush_size / 2)))
+
+            def stamp_square(point: tuple[int, int]) -> None:
+                x, y = point
+                cv2.rectangle(
+                    stroke,
+                    (x - half, y - half),
+                    (x + half, y + half),
+                    255,
+                    thickness=-1,
+                    lineType=cv2.LINE_8,
+                )
+
+            if len(points) == 1:
+                stamp_square(points[0])
+            else:
+                for start, end in zip(points, points[1:]):
+                    dx, dy = end[0] - start[0], end[1] - start[1]
+                    steps = max(1, max(abs(dx), abs(dy)) // max(1, half))
+                    for step in range(steps + 1):
+                        ratio = step / steps
+                        stamp_square(
+                            (
+                                round(start[0] + dx * ratio),
+                                round(start[1] + dy * ratio),
+                            )
+                        )
+        elif len(points) == 1:
             cv2.circle(stroke, points[0], radius, 255, thickness=-1, lineType=cv2.LINE_8)
         else:
             for index in range(1, len(points)):
