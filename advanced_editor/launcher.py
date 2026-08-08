@@ -73,6 +73,7 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QToolBar,
     QToolButton,
+    QToolBox,
     QVBoxLayout,
     QWidget,
 )
@@ -136,6 +137,7 @@ EDITOR_ICON_PATHS = {
     "history": '<circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/>',
     "save": '<path d="M4 3h13l3 3v15H4z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/>',
     "export": '<path d="M14 3h7v7M21 3l-10 10"/><path d="M18 14v7H3V6h7"/>',
+    "images": '<rect x="3" y="5" width="14" height="14" rx="2"/><path d="M7 9h.01M4 16l4-4 3 3 2-2 4 4"/><path d="M7 2h14v14"/>',
     "add": '<path d="M12 5v14M5 12h14"/>',
     "trash": '<path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/>',
     "refresh": '<path d="M20 7V3l-3 3a8 8 0 1 0 2 9"/>',
@@ -148,6 +150,8 @@ EDITOR_ICON_PATHS = {
     "fit": '<path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/>',
     "reset": '<path d="M4 8V3m0 0h5M4 3l4 4"/><path d="M5 13a8 8 0 1 0 2-7"/>',
     "minus": '<path d="M5 12h14"/>',
+    "check": '<path d="M5 12l4 4L19 6"/>',
+    "clear": '<path d="M6 6l12 12M18 6L6 18"/>',
     "action": '<path d="M5 12h14M14 6l6 6-6 6"/>',
 }
 
@@ -1459,6 +1463,28 @@ class AdvancedEditorWindow(QMainWindow):
         self.brush_slider.valueChanged.connect(self.brush_size_spin.setValue)
         action_toolbar.addWidget(self.brush_size_spin)
 
+        self.paint_color_toolbar_button = QToolButton(self)
+        self.paint_color_toolbar_button.setText("브러시 색")
+        self.paint_color_toolbar_button.setIcon(_editor_icon("palette"))
+        self.paint_color_toolbar_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.paint_color_toolbar_button.clicked.connect(self.choose_paint_color)
+        self.paint_color_toolbar_button.setVisible(False)
+        action_toolbar.addWidget(self.paint_color_toolbar_button)
+
+        self.session_panel_action = QAction(
+            _editor_icon("images"),
+            f"이미지 목록 {len(self.related_session_paths)}",
+            self,
+        )
+        self.session_panel_action.setCheckable(True)
+        self.session_panel_action.setChecked(True)
+        self.session_panel_action.setVisible(len(self.related_session_paths) > 1)
+        self.session_panel_action.setToolTip("오른쪽 이미지 목록 표시/숨기기")
+        self.session_panel_action.triggered.connect(self._set_session_panel_visible)
+        action_toolbar.addAction(self.session_panel_action)
+
         toolbar_spacer = QWidget(self)
         toolbar_spacer.setObjectName("TopBarSpacer")
         toolbar_spacer.setSizePolicy(
@@ -1604,6 +1630,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.splitter.setStretchFactor(2, 0)
         self._apply_button_icons(central)
         self._refresh_history_menu()
+        self._sync_tool_context("select")
 
     def _apply_theme(self) -> None:
         self.setStyleSheet(
@@ -1729,6 +1756,44 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QScrollArea#InspectorScroll {
                 border: 0;
+            }
+            QFrame#InspectorContext {
+                background: #e8f0ff;
+                border: 1px solid #bfdbfe;
+                border-radius: 7px;
+            }
+            QLabel#ContextToolLabel {
+                color: #1d4ed8;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QLabel#ContextHintLabel {
+                color: #475569;
+                font-size: 11px;
+                font-weight: 400;
+            }
+            QToolBox#InspectorSections {
+                background: transparent;
+            }
+            QToolBox#InspectorSections::tab {
+                background: #edf1f6;
+                color: #475569;
+                border: 1px solid #d5dde8;
+                border-radius: 6px;
+                margin-top: 3px;
+                padding: 8px 10px;
+                font-weight: 600;
+            }
+            QToolBox#InspectorSections::tab:hover {
+                background: #eff6ff;
+                color: #1d4ed8;
+                border-color: #93c5fd;
+            }
+            QToolBox#InspectorSections::tab:selected {
+                background: #ffffff;
+                color: #1d4ed8;
+                border-color: #60a5fa;
+                font-weight: 700;
             }
             QWidget#CanvasPanel {
                 background: #1c222b;
@@ -1919,6 +1984,16 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #f8fafc;
                 border-left: 1px solid #d5dde8;
             }
+            QLabel#SessionSelectionLabel {
+                color: #475569;
+                font-size: 11px;
+                font-weight: 500;
+            }
+            QWidget#SessionPanel QPushButton {
+                min-height: 18px;
+                padding: 5px 7px;
+                font-size: 11px;
+            }
             QListWidget {
                 background: #ffffff;
                 color: #334155;
@@ -1939,6 +2014,11 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #dbeafe;
                 color: #1d4ed8;
                 font-weight: 700;
+            }
+            QListWidget::item:selected:active,
+            QListWidget::item:selected:!active {
+                background: #dbeafe;
+                color: #1d4ed8;
             }
             QMenu {
                 background: #ffffff;
@@ -2062,6 +2142,8 @@ class AdvancedEditorWindow(QMainWindow):
     def _button_icon_name(text: str) -> str:
         label = str(text or "").strip()
         rules = (
+            (("전체 선택",), "check"),
+            (("선택 해제",), "clear"),
             (("편집 정보 제거", "내보내기"), "export"),
             (("새로고침",), "refresh"),
             (("초기화", "되돌리기"), "reset"),
@@ -2227,9 +2309,26 @@ class AdvancedEditorWindow(QMainWindow):
         layout.setContentsMargins(14, 16, 12, 16)
         layout.setSpacing(10)
 
-        title = QLabel(f"편집 이미지 ({len(self.related_session_paths)}장)")
+        title_row = QHBoxLayout()
+        title_row.setSpacing(6)
+        title = QLabel("이미지 목록")
         title.setObjectName("PanelTitle")
-        layout.addWidget(title)
+        title_row.addWidget(title, 1)
+        layout.addLayout(title_row)
+
+        self.session_selection_label = QLabel("")
+        self.session_selection_label.setObjectName("SessionSelectionLabel")
+        layout.addWidget(self.session_selection_label)
+
+        selection_actions = QHBoxLayout()
+        selection_actions.setSpacing(6)
+        select_all_button = QPushButton("전체 선택")
+        select_all_button.clicked.connect(self.session_list_select_all)
+        clear_selection_button = QPushButton("선택 해제")
+        clear_selection_button.clicked.connect(self.session_list_clear_selection)
+        selection_actions.addWidget(select_all_button)
+        selection_actions.addWidget(clear_selection_button)
+        layout.addLayout(selection_actions)
 
         self.session_list = QListWidget()
         self.session_list.setSelectionMode(
@@ -2251,11 +2350,41 @@ class AdvancedEditorWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, str(path))
             item.setToolTip(str(path))
         self.session_list.currentRowChanged.connect(self._on_session_list_changed)
+        self.session_list.itemSelectionChanged.connect(
+            self._update_session_selection_summary
+        )
         layout.addWidget(self.session_list, 1)
 
         self._set_session_list_current(self.session_path)
+        self._update_session_selection_summary()
         panel.setVisible(len(self.related_session_paths) > 1)
         return panel
+
+    def _set_session_panel_visible(self, visible: bool) -> None:
+        if hasattr(self, "session_panel"):
+            self.session_panel.setVisible(visible)
+
+    def session_list_select_all(self) -> None:
+        if hasattr(self, "session_list"):
+            self.session_list.selectAll()
+
+    def session_list_clear_selection(self) -> None:
+        if not hasattr(self, "session_list"):
+            return
+        current = self.session_list.currentItem()
+        self.session_list.clearSelection()
+        if current is not None:
+            current.setSelected(True)
+
+    def _update_session_selection_summary(self) -> None:
+        if not hasattr(self, "session_selection_label"):
+            return
+        current_row = self.session_list.currentRow()
+        current_text = str(current_row + 1) if current_row >= 0 else "-"
+        selected_count = len(self.session_list.selectedItems())
+        self.session_selection_label.setText(
+            f"현재 {current_text} / {self.session_list.count()} · 선택 {selected_count}장"
+        )
 
     def _set_session_list_current(self, path: Path, *, preserve_selection: bool = False) -> None:
         if not hasattr(self, "session_list"):
@@ -2380,13 +2509,31 @@ class AdvancedEditorWindow(QMainWindow):
         layout.setContentsMargins(16, 16, 16, 18)
         layout.setSpacing(10)
 
-        region_title = QLabel("영역과 텍스트")
-        region_title.setObjectName("SectionTitle")
-        layout.addWidget(region_title)
-        layout.addWidget(QLabel("텍스트 영역"))
+        context = QFrame(panel)
+        context.setObjectName("InspectorContext")
+        context_layout = QVBoxLayout(context)
+        context_layout.setContentsMargins(11, 9, 11, 9)
+        context_layout.setSpacing(2)
+        self.context_tool_label = QLabel("선택")
+        self.context_tool_label.setObjectName("ContextToolLabel")
+        context_layout.addWidget(self.context_tool_label)
+        self.context_hint_label = QLabel("영역을 선택하고 텍스트와 배치를 조정합니다.")
+        self.context_hint_label.setObjectName("ContextHintLabel")
+        self.context_hint_label.setWordWrap(True)
+        context_layout.addWidget(self.context_hint_label)
+        layout.addWidget(context)
+
+        self.inspector_sections = QToolBox(panel)
+        self.inspector_sections.setObjectName("InspectorSections")
+
+        region_page = QWidget()
+        region_layout = QVBoxLayout(region_page)
+        region_layout.setContentsMargins(10, 12, 10, 14)
+        region_layout.setSpacing(9)
+        region_layout.addWidget(QLabel("텍스트 영역"))
         self.region_combo = QComboBox()
         self.region_combo.currentIndexChanged.connect(self._on_region_combo_changed)
-        layout.addWidget(self.region_combo)
+        region_layout.addWidget(self.region_combo)
 
         button_row = QHBoxLayout()
         add_button = QPushButton("추가")
@@ -2395,17 +2542,17 @@ class AdvancedEditorWindow(QMainWindow):
         delete_button.clicked.connect(self.delete_selected_region)
         button_row.addWidget(add_button)
         button_row.addWidget(delete_button)
-        layout.addLayout(button_row)
+        region_layout.addLayout(button_row)
 
         self.source_edit = ResizableTextEdit(68)
         self.source_edit.setReadOnly(True)
-        layout.addWidget(QLabel("원문"))
-        layout.addWidget(self.source_edit)
+        region_layout.addWidget(QLabel("원문"))
+        region_layout.addWidget(self.source_edit)
 
-        layout.addWidget(QLabel("편집할 텍스트"))
+        region_layout.addWidget(QLabel("편집할 텍스트"))
         self.translation_edit = ResizableTextEdit(82)
         self.translation_edit.textChanged.connect(self._on_translation_text_changed)
-        layout.addWidget(self.translation_edit)
+        region_layout.addWidget(self.translation_edit)
 
         style_row = QHBoxLayout()
         bold_button = QPushButton("굵게")
@@ -2420,7 +2567,7 @@ class AdvancedEditorWindow(QMainWindow):
         style_row.addWidget(bold_button)
         style_row.addWidget(italic_button)
         style_row.addWidget(bold_italic_button)
-        layout.addLayout(style_row)
+        region_layout.addLayout(style_row)
 
         align_row = QHBoxLayout()
         align_row.addWidget(QLabel("정렬"))
@@ -2430,34 +2577,40 @@ class AdvancedEditorWindow(QMainWindow):
         self.alignment_combo.addItem("오른쪽", "right")
         self.alignment_combo.currentIndexChanged.connect(self.commit_region_form)
         align_row.addWidget(self.alignment_combo, 1)
-        layout.addLayout(align_row)
+        region_layout.addLayout(align_row)
 
         self.enabled_checkbox = QCheckBox("이 영역 렌더링")
         self.vertical_checkbox = QCheckBox("세로쓰기")
         self.enabled_checkbox.stateChanged.connect(self.commit_region_form)
         self.vertical_checkbox.stateChanged.connect(self.commit_region_form)
-        layout.addWidget(self.enabled_checkbox)
-        layout.addWidget(self.vertical_checkbox)
+        region_layout.addWidget(self.enabled_checkbox)
+        region_layout.addWidget(self.vertical_checkbox)
+        region_layout.addStretch(1)
+        self.inspector_sections.addItem(region_page, "영역 · 텍스트")
 
-        layout.addSpacing(8)
-        style_title = QLabel("글자 모양과 배치")
-        style_title.setObjectName("SectionTitle")
-        layout.addWidget(style_title)
+        style_page = QWidget()
+        style_layout = QVBoxLayout(style_page)
+        style_layout.setContentsMargins(10, 12, 10, 14)
+        style_layout.setSpacing(9)
 
-        self.x_spin = self._spin("X", layout, 0, 99999)
-        self.y_spin = self._spin("Y", layout, 0, 99999)
-        self.w_spin = self._spin("너비", layout, 1, 99999)
-        self.h_spin = self._spin("높이", layout, 1, 99999)
-        self.font_size_spin = self._spin("글자 크기(px)", layout, 1, 999)
+        self.x_spin = self._spin("X", style_layout, 0, 99999)
+        self.y_spin = self._spin("Y", style_layout, 0, 99999)
+        self.w_spin = self._spin("너비", style_layout, 1, 99999)
+        self.h_spin = self._spin("높이", style_layout, 1, 99999)
+        self.font_size_spin = self._spin("글자 크기(px)", style_layout, 1, 999)
         self.font_size_spin.setToolTip(
             "번역 결과에 실제 사용된 글자 크기를 유지합니다. "
             "값을 변경하면 자동 맞춤 없이 지정한 크기로 렌더링하며, "
             "박스에 들어가지 않는 큰 글자는 박스 바깥까지 표시합니다."
         )
-        self.rotation_spin = self._double_spin("회전", layout, -180.0, 180.0)
-        self.line_spacing_spin = self._double_spin("줄/글자 간격", layout, 0.2, 4.0)
-        self.padding_spin = self._double_spin("여백", layout, 0.0, 80.0)
-        self.stroke_width_spin = self._double_spin("외곽선 굵기", layout, 0.0, 20.0)
+        self.rotation_spin = self._double_spin("회전", style_layout, -180.0, 180.0)
+        self.line_spacing_spin = self._double_spin(
+            "줄/글자 간격", style_layout, 0.2, 4.0
+        )
+        self.padding_spin = self._double_spin("여백", style_layout, 0.0, 80.0)
+        self.stroke_width_spin = self._double_spin(
+            "외곽선 굵기", style_layout, 0.0, 20.0
+        )
 
         font_row = QHBoxLayout()
         font_row.addWidget(QLabel("글꼴 가족"))
@@ -2473,7 +2626,7 @@ class AdvancedEditorWindow(QMainWindow):
         refresh_fonts_button = QPushButton("새로고침")
         refresh_fonts_button.clicked.connect(self.populate_font_combo)
         font_row.addWidget(refresh_fonts_button)
-        layout.addLayout(font_row)
+        style_layout.addLayout(font_row)
 
         font_style_row = QHBoxLayout()
         font_style_row.addWidget(QLabel("굵기/스타일"))
@@ -2484,7 +2637,7 @@ class AdvancedEditorWindow(QMainWindow):
         )
         self.font_style_combo.currentIndexChanged.connect(self._on_font_style_changed)
         font_style_row.addWidget(self.font_style_combo, 1)
-        layout.addLayout(font_style_row)
+        style_layout.addLayout(font_style_row)
         self.populate_font_combo()
 
         color_row = QHBoxLayout()
@@ -2497,19 +2650,22 @@ class AdvancedEditorWindow(QMainWindow):
         color_row.addWidget(self.font_color_button)
         color_row.addWidget(self.stroke_color_button)
         color_row.addWidget(self.paint_color_button)
-        layout.addLayout(color_row)
+        style_layout.addLayout(color_row)
+        style_layout.addStretch(1)
+        self.inspector_sections.addItem(style_page, "글자 모양 · 배치")
 
-        layout.addSpacing(8)
-        settings_title = QLabel("도구별 상세 설정")
-        settings_title.setObjectName("SectionTitle")
-        layout.addWidget(settings_title)
-        settings_tabs = QTabWidget()
-        settings_tabs.setObjectName("InspectorTabs")
-        settings_tabs.addTab(self._build_ocr_tab(), "OCR")
-        settings_tabs.addTab(self._build_inpaint_tab(), "인페인팅")
-        settings_tabs.addTab(self._build_translation_tab(), "번역")
-        settings_tabs.addTab(self._build_editor_settings_tab(), "편집기 설정")
-        layout.addWidget(settings_tabs)
+        settings_page = QWidget()
+        settings_layout = QVBoxLayout(settings_page)
+        settings_layout.setContentsMargins(8, 10, 8, 12)
+        self.settings_tabs = QTabWidget()
+        self.settings_tabs.setObjectName("InspectorTabs")
+        self.settings_tabs.addTab(self._build_ocr_tab(), "OCR")
+        self.settings_tabs.addTab(self._build_inpaint_tab(), "인페인팅")
+        self.settings_tabs.addTab(self._build_translation_tab(), "번역")
+        self.settings_tabs.addTab(self._build_editor_settings_tab(), "편집기 설정")
+        settings_layout.addWidget(self.settings_tabs)
+        self.inspector_sections.addItem(settings_page, "도구 설정")
+        layout.addWidget(self.inspector_sections, 1)
 
         self.status_label = AutoHideStatusLabel("")
         self.status_label.setObjectName("StatusLabel")
@@ -3643,6 +3799,61 @@ class AdvancedEditorWindow(QMainWindow):
         if hasattr(self, "canvas"):
             self.canvas.set_absolute_scale(1.0)
 
+    def _sync_tool_context(self, tool: str) -> None:
+        if not hasattr(self, "inspector_sections"):
+            return
+        contexts = {
+            "select": ("선택", "영역을 선택하고 텍스트와 배치를 조정합니다.", 0, None),
+            "textbox": ("텍스트 박스", "캔버스에 새 텍스트 영역을 그립니다.", 0, 0),
+            "inpaint_brush": (
+                "인페인팅 브러시",
+                "지울 부분을 칠한 뒤 인페인팅 설정에서 실행합니다.",
+                2,
+                1,
+            ),
+            "inpaint_eraser": (
+                "인페인팅 마스크 지우개",
+                "잘못 칠한 인페인팅 마스크를 지웁니다.",
+                2,
+                1,
+            ),
+            "paint_brush": (
+                "그리기 브러시",
+                "상단의 브러시 크기와 색을 사용해 이미지에 그립니다.",
+                2,
+                3,
+            ),
+            "paint_eraser": (
+                "그리기 지우개",
+                "그리기 브러시로 추가한 부분을 지웁니다.",
+                2,
+                3,
+            ),
+            "restore_brush": (
+                "원본 복구 브러시",
+                "번역 결과 위에 원본 이미지 일부를 복구합니다.",
+                2,
+                3,
+            ),
+            "restore_eraser": (
+                "원본 복구 지우개",
+                "원본 복구 마스크를 지웁니다.",
+                2,
+                3,
+            ),
+            "pan": ("화면 이동", "캔버스를 드래그해 보고 싶은 위치로 이동합니다.", None, None),
+        }
+        label, hint, section_index, settings_index = contexts.get(
+            tool, (tool, "", None, None)
+        )
+        self.context_tool_label.setText(label)
+        self.context_hint_label.setText(hint)
+        if section_index is not None:
+            self.inspector_sections.setCurrentIndex(section_index)
+        if settings_index is not None:
+            self.settings_tabs.setCurrentIndex(settings_index)
+        self.paint_color_toolbar_button.setVisible(tool == "paint_brush")
+
     def set_tool(self, tool: str) -> None:
         for key, action in self.tool_actions.items():
             action.setChecked(key == tool)
@@ -3651,6 +3862,7 @@ class AdvancedEditorWindow(QMainWindow):
             self.pan_tool_button.setChecked(tool == "pan")
             self.pan_tool_button.blockSignals(False)
         self.canvas.set_tool(tool)
+        self._sync_tool_context(tool)
         tool_label = "화면 이동" if tool == "pan" else TOOLS.get(tool, tool)
         if tool == "pan":
             self.status_label.setText(
@@ -4405,6 +4617,9 @@ class AdvancedEditorWindow(QMainWindow):
             return
         self.paint_color = _hex_from_qcolor(color)
         self.paint_color_button.setStyleSheet(f"background: {self.paint_color};")
+        self.paint_color_toolbar_button.setStyleSheet(
+            f"border-bottom: 3px solid {self.paint_color};"
+        )
         self.canvas.update()
 
     def apply_stroke(self, tool: str, points: list[tuple[int, int]]) -> None:

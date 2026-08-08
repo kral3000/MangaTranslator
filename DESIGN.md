@@ -265,6 +265,12 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **Save Toast:** A compact ink surface appears 18px from the lower-right window edge after a successful save. It pairs the save icon with `<파일명> 저장 완료`, reuses the same surface for repeated saves, and disappears after 2.4 seconds. Failures continue to use the blocking native error dialog.
 - **Help:** A light neutral bordered surface inside the inspector; its text is selectable and can be hidden through the existing editor setting.
 
+### Contextual Inspector
+
+- **Context:** A compact blue-tinted header names the active tool and gives one sentence of immediate guidance.
+- **Sections:** Region/text, typography/layout, and tool settings live in three mutually disclosed sections instead of one continuous settings wall. Selecting a tool opens the most relevant section and nested settings tab without preventing manual navigation.
+- **Image List:** Multi-image jobs show the current page and selection count, offer select-all and clear-selection actions, and can collapse from the top action bar to return width to the canvas.
+
 ## Do's and Don'ts
 
 ### Do:
