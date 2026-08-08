@@ -10,6 +10,44 @@ from advanced_editor.launcher import AdvancedEditorWindow
 
 
 class ExportScopeTest(TestCase):
+    def test_session_switch_does_not_reset_multi_selection(self) -> None:
+        target = Path("target.json")
+        window = SimpleNamespace(
+            session_path=Path("current.json"),
+            session={"regions": []},
+            _switching_session=False,
+            _preview_timer=SimpleNamespace(stop=Mock()),
+            _preview_request_serial=0,
+            canvas=SimpleNamespace(pan_offset=None, setFocus=Mock()),
+            history=[],
+            redo_stack=[],
+            commit_region_form=Mock(),
+            _persist_editor_control_settings=Mock(),
+            _persist_output_settings=Mock(),
+            _load_base_image=Mock(return_value=Image.new("RGBA", (2, 2))),
+            _restore_output_widgets_from_saved_settings=Mock(),
+            reload_display_image=Mock(),
+            refresh_region_list=Mock(),
+            load_selected_region_to_form=Mock(),
+            _refresh_history_menu=Mock(),
+            setWindowTitle=Mock(),
+            _set_session_list_current=Mock(),
+            schedule_exact_preview=Mock(),
+            status_label=SimpleNamespace(setText=Mock()),
+            _session_display_name=Mock(return_value="target"),
+        )
+
+        with (
+            patch("advanced_editor.launcher.save_session"),
+            patch(
+                "advanced_editor.launcher.load_session",
+                return_value={"regions": [], "editor_dirty_region_ids": []},
+            ),
+        ):
+            AdvancedEditorWindow._switch_editor_session(window, target)
+
+        window._set_session_list_current.assert_not_called()
+
     def test_bulk_export_writes_new_files_without_rerendering_work_files(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -52,4 +90,3 @@ class ExportScopeTest(TestCase):
                 targets,
                 [root / "export/chapter/01.png", root / "export/chapter/02.png"],
             )
-

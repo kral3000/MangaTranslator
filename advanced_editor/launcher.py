@@ -2339,7 +2339,6 @@ class AdvancedEditorWindow(QMainWindow):
             self.setWindowTitle(
                 f"MangaTranslator 고급 편집기 - {self.session_path.name}"
             )
-            self._set_session_list_current(self.session_path)
             self.schedule_exact_preview()
             self.status_label.setText(
                 f"편집 이미지를 전환했습니다: {self._session_display_name(target)}"
