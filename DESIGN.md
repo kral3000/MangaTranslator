@@ -231,7 +231,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 ### Tool Rail
 
 - **Character:** Narrow, icon-led, and left aligned.
-- **Shape:** Every rendered action row is 164×38px inside a 180px toolbar and uses a 10px horizontal inset with a 6px radius, keeping icon and text baselines consistent regardless of label length.
+- **Shape:** Every rendered action row uses the same 38px height inside a 204px toolbar. A tighter 6px inset moves icons left and leaves safe breathing room around every full Korean tool name; selected state never changes type weight or geometry.
 - **States:** Default is quiet slate on transparent ink; hover brightens the label and darkens the row; checked state fills with Operational Blue and adds a lighter blue border.
 - **Behavior:** Actions remain mutually legible through checked state, icons, full visible labels, and tooltips; color is not the sole signal. Never shorten `인페인팅 브러시`, `인페인팅 마스크 지우개`, or the restore/paint tools to an ambiguous `지우기`.
 - **Grouping:** Basic, inpainting, painting, and original-restore tools use restrained section labels and one-pixel dividers. Each brush/eraser family has a distinct composite icon instead of repeating the same generic glyph.
@@ -248,7 +248,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **Focus:** The border changes to Operational Blue while native focus and editing behavior remain intact.
 - **Selection:** Text selection uses the soft blue wash.
 - **Resizable Text:** Source and translated text fields start compact at 68px and 82px. Their lower-right diagonal grip adjusts height from 52–360px without changing the inspector width.
-- **Metric Fields:** Position, size, and effect values use a balanced 3×3 grid. Every field reserves the same width for its quiet semantic icon and short label so all value dividers align, then ends with centered stacked increment/decrement controls separated by a subtle rule.
+- **Metric Fields:** Position, size, and effect values use a balanced 3×3 grid. Every field reserves the same width for its quiet semantic icon and short label so all value dividers align, then ends with centered stacked increment/decrement controls separated by a subtle rule. The title, value, and stepper surfaces meet inside one uninterrupted one-pixel perimeter with no uneven white inset.
 - **Inline Options:** Region rendering and vertical writing use compact icon-led toggle chips with an explicit filled selected state instead of unstyled native Windows checkboxes.
 
 ### Tabs

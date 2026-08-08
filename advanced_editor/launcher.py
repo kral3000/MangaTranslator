@@ -1409,7 +1409,7 @@ class AdvancedEditorWindow(QMainWindow):
         tool_toolbar.setAllowedAreas(Qt.ToolBarArea.LeftToolBarArea)
         tool_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         tool_toolbar.setIconSize(QSize(20, 20))
-        tool_toolbar.setFixedWidth(180)
+        tool_toolbar.setFixedWidth(204)
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, tool_toolbar)
         self.tool_toolbar = tool_toolbar
 
@@ -1452,7 +1452,7 @@ class AdvancedEditorWindow(QMainWindow):
                 tool_toolbar.addAction(action)
                 tool_button = tool_toolbar.widgetForAction(action)
                 if isinstance(tool_button, QToolButton):
-                    tool_button.setFixedSize(162, 38)
+                    tool_button.setFixedSize(190, 38)
         self.tool_actions["select"].setChecked(True)
 
         action_toolbar = QToolBar("작업", self)
@@ -1761,19 +1761,19 @@ class AdvancedEditorWindow(QMainWindow):
                 border: 0;
                 border-right: 1px solid #263244;
                 spacing: 3px;
-                padding: 9px 9px;
+                padding: 9px 6px;
             }
             QToolBar#ToolRail QLabel#ToolRailSection {
                 color: #718096;
                 background: transparent;
                 font-size: 10px;
                 font-weight: 700;
-                padding: 4px 10px 2px 10px;
+                padding: 4px 6px 2px 6px;
             }
             QToolBar#ToolRail QFrame#ToolRailDivider {
                 background: #263244;
                 border: 0;
-                margin: 5px 10px 3px 10px;
+                margin: 5px 6px 3px 6px;
             }
             QToolBar#ToolRail QToolButton {
                 color: #cbd5e1;
@@ -1782,8 +1782,7 @@ class AdvancedEditorWindow(QMainWindow):
                 border-radius: 6px;
                 min-height: 36px;
                 max-height: 36px;
-                padding: 0 10px;
-                min-width: 142px;
+                padding: 0 6px;
                 font-size: 12px;
                 font-weight: 600;
                 text-align: left;
@@ -1797,7 +1796,6 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #2563eb;
                 border-color: #60a5fa;
                 color: #ffffff;
-                font-weight: 700;
             }
             QToolBar#ToolRail QToolButton:focus,
             QToolBar#TopBar QToolButton:focus {
@@ -1813,21 +1811,6 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QScrollArea#InspectorScroll {
                 border: 0;
-            }
-            QFrame#InspectorContext {
-                background: #e8f0ff;
-                border: 1px solid #bfdbfe;
-                border-radius: 7px;
-            }
-            QLabel#ContextToolLabel {
-                color: #1d4ed8;
-                font-size: 13px;
-                font-weight: 700;
-            }
-            QLabel#ContextHintLabel {
-                color: #475569;
-                font-size: 11px;
-                font-weight: 400;
             }
             QLabel#CompactSectionLabel {
                 color: #172033;
@@ -2681,20 +2664,6 @@ class AdvancedEditorWindow(QMainWindow):
         layout.setContentsMargins(12, 12, 12, 14)
         layout.setSpacing(8)
 
-        context = QFrame(panel)
-        context.setObjectName("InspectorContext")
-        context_layout = QHBoxLayout(context)
-        context_layout.setContentsMargins(10, 6, 10, 6)
-        context_layout.setSpacing(8)
-        self.context_tool_label = QLabel("선택")
-        self.context_tool_label.setObjectName("ContextToolLabel")
-        context_layout.addWidget(self.context_tool_label)
-        self.context_hint_label = QLabel("영역을 선택하고 텍스트와 배치를 조정합니다.")
-        self.context_hint_label.setObjectName("ContextHintLabel")
-        self.context_hint_label.setWordWrap(True)
-        context_layout.addWidget(self.context_hint_label, 1)
-        layout.addWidget(context)
-
         self.inspector_sections = QTabWidget(panel)
         self.inspector_sections.setObjectName("InspectorSections")
 
@@ -2871,13 +2840,13 @@ class AdvancedEditorWindow(QMainWindow):
                 field = QWidget(row_widget)
                 field.setObjectName("MetricField")
                 field_layout = QHBoxLayout(field)
-                field_layout.setContentsMargins(5, 2, 2, 2)
-                field_layout.setSpacing(3)
+                field_layout.setContentsMargins(1, 1, 1, 1)
+                field_layout.setSpacing(0)
                 lead = QWidget(field)
                 lead.setObjectName("MetricFieldLead")
                 lead.setFixedWidth(50)
                 lead_layout = QHBoxLayout(lead)
-                lead_layout.setContentsMargins(0, 0, 0, 0)
+                lead_layout.setContentsMargins(5, 0, 2, 0)
                 lead_layout.setSpacing(3)
                 icon = QLabel(lead)
                 icon.setObjectName("MetricIcon")
@@ -2894,7 +2863,7 @@ class AdvancedEditorWindow(QMainWindow):
                 field_layout.addWidget(spin, 1)
                 stepper = QWidget(field)
                 stepper.setObjectName("MetricStepper")
-                stepper.setFixedSize(15, 26)
+                stepper.setFixedSize(15, 30)
                 stepper_layout = QVBoxLayout(stepper)
                 stepper_layout.setContentsMargins(0, 0, 0, 0)
                 stepper_layout.setSpacing(0)
@@ -2910,7 +2879,7 @@ class AdvancedEditorWindow(QMainWindow):
                     button = QToolButton(stepper)
                     button.setObjectName("MetricStepButton")
                     button.setProperty("stepRole", role)
-                    button.setFixedSize(15, 13)
+                    button.setFixedSize(15, 15)
                     button.setIcon(_editor_icon(icon_name, "#334155"))
                     button.setIconSize(QSize(10, 10))
                     button.setToolTip(tooltip)
@@ -4113,51 +4082,17 @@ class AdvancedEditorWindow(QMainWindow):
         if not hasattr(self, "inspector_sections"):
             return
         contexts = {
-            "select": ("선택", "영역을 선택하고 텍스트와 배치를 조정합니다.", 0, None),
-            "textbox": ("텍스트 박스", "캔버스에 새 텍스트 영역을 그립니다.", 0, 0),
-            "inpaint_brush": (
-                "인페인팅 브러시",
-                "지울 부분을 칠한 뒤 인페인팅 설정에서 실행합니다.",
-                1,
-                1,
-            ),
-            "inpaint_eraser": (
-                "인페인팅 마스크 지우개",
-                "잘못 칠한 인페인팅 마스크를 지웁니다.",
-                1,
-                1,
-            ),
-            "paint_brush": (
-                "그리기 브러시",
-                "상단의 브러시 크기와 색을 사용해 이미지에 그립니다.",
-                1,
-                3,
-            ),
-            "paint_eraser": (
-                "그리기 지우개",
-                "그리기 브러시로 추가한 부분을 지웁니다.",
-                1,
-                3,
-            ),
-            "restore_brush": (
-                "원본 복구 브러시",
-                "번역 결과 위에 원본 이미지 일부를 복구합니다.",
-                1,
-                3,
-            ),
-            "restore_eraser": (
-                "원본 복구 지우개",
-                "원본 복구 마스크를 지웁니다.",
-                1,
-                3,
-            ),
-            "pan": ("화면 이동", "캔버스를 드래그해 보고 싶은 위치로 이동합니다.", None, None),
+            "select": (0, None),
+            "textbox": (0, 0),
+            "inpaint_brush": (1, 1),
+            "inpaint_eraser": (1, 1),
+            "paint_brush": (1, 3),
+            "paint_eraser": (1, 3),
+            "restore_brush": (1, 3),
+            "restore_eraser": (1, 3),
+            "pan": (None, None),
         }
-        label, hint, section_index, settings_index = contexts.get(
-            tool, (tool, "", None, None)
-        )
-        self.context_tool_label.setText(label)
-        self.context_hint_label.setText(hint)
+        section_index, settings_index = contexts.get(tool, (None, None))
         if section_index is not None:
             self.inspector_sections.setCurrentIndex(section_index)
         if settings_index is not None:
