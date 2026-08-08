@@ -156,6 +156,8 @@ EDITOR_ICON_PATHS = {
     "align_left": '<path d="M4 6h16M4 10h11M4 14h16M4 18h9"/>',
     "align_center": '<path d="M4 6h16M7 10h10M4 14h16M8 18h8"/>',
     "align_right": '<path d="M4 6h16M9 10h11M4 14h16M11 18h9"/>',
+    "render_region": '<path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.5"/>',
+    "vertical_text": '<path d="M5 5h8M9 5v10M6 15h6"/><path d="M18 5v14M15 16l3 3 3-3"/>',
     "inpaint_brush": '<path d="M13 5l6 6-8 8H5v-6zM4 20c2 0 3-1 3-3"/><path d="M18 3v3M16.5 4.5h3"/>',
     "inpaint_eraser": '<path d="M12 5l7 7-7 7H7l-4-4zM9 19h10"/><path d="M18 3v3M16.5 4.5h3"/>',
     "paint_brush": '<path d="M15 4l5 5-9 10H5v-6zM4 20c2 0 3-1 3-3"/><path d="M15 4l-2 2 5 5 2-2"/>',
@@ -1407,8 +1409,7 @@ class AdvancedEditorWindow(QMainWindow):
         tool_toolbar.setAllowedAreas(Qt.ToolBarArea.LeftToolBarArea)
         tool_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         tool_toolbar.setIconSize(QSize(20, 20))
-        tool_toolbar.setMinimumWidth(160)
-        tool_toolbar.setMaximumWidth(180)
+        tool_toolbar.setFixedWidth(180)
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, tool_toolbar)
         self.tool_toolbar = tool_toolbar
 
@@ -1449,6 +1450,9 @@ class AdvancedEditorWindow(QMainWindow):
                 )
                 self.tool_actions[key] = action
                 tool_toolbar.addAction(action)
+                tool_button = tool_toolbar.widgetForAction(action)
+                if isinstance(tool_button, QToolButton):
+                    tool_button.setFixedSize(162, 38)
         self.tool_actions["select"].setChecked(True)
 
         action_toolbar = QToolBar("작업", self)
@@ -1776,9 +1780,12 @@ class AdvancedEditorWindow(QMainWindow):
                 background: transparent;
                 border: 1px solid transparent;
                 border-radius: 6px;
-                min-height: 24px;
-                padding: 7px 10px;
+                min-height: 36px;
+                max-height: 36px;
+                padding: 0 10px;
                 min-width: 142px;
+                font-size: 12px;
+                font-weight: 600;
                 text-align: left;
             }
             QToolBar#ToolRail QToolButton:hover {
@@ -1835,8 +1842,8 @@ class AdvancedEditorWindow(QMainWindow):
                 border: 0;
             }
             QWidget#MetricField {
-                background: #f8fafc;
-                border: 1px solid #d5dde8;
+                background: #ffffff;
+                border: 1px solid #cbd5e1;
                 border-radius: 6px;
             }
             QLabel#MetricIcon {
@@ -1844,13 +1851,15 @@ class AdvancedEditorWindow(QMainWindow):
                 border: 0;
             }
             QWidget#MetricFieldLead {
-                background: transparent;
+                background: #edf2f7;
                 border: 0;
+                border-top-left-radius: 5px;
+                border-bottom-left-radius: 5px;
             }
             QLabel#MetricFieldLabel {
-                color: #475569;
+                color: #334155;
                 font-size: 10px;
-                font-weight: 600;
+                font-weight: 700;
             }
             QWidget#TextLayoutPage QPushButton {
                 min-height: 18px;
@@ -1876,17 +1885,17 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QWidget#MetricField QSpinBox,
             QWidget#MetricField QDoubleSpinBox {
-                background: transparent;
+                background: #ffffff;
                 border: 0;
-                border-left: 1px solid #e2e8f0;
+                border-left: 1px solid #cbd5e1;
                 border-radius: 0;
                 min-height: 20px;
                 padding: 2px 3px;
             }
             QWidget#MetricStepper {
-                background: #edf1f6;
+                background: #e8eef5;
                 border: 0;
-                border-left: 1px solid #d5dde8;
+                border-left: 1px solid #cbd5e1;
             }
             QToolButton#MetricStepButton {
                 background: transparent;
@@ -1900,9 +1909,26 @@ class AdvancedEditorWindow(QMainWindow):
             QToolButton#MetricStepButton[stepRole="up"] {
                 border-bottom: 1px solid #d5dde8;
             }
-            QWidget#TextLayoutPage QCheckBox {
-                min-height: 18px;
-                spacing: 5px;
+            QPushButton#OptionToggle {
+                min-height: 24px;
+                padding: 2px 8px;
+                color: #475569;
+                background: #f8fafc;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton#OptionToggle:hover {
+                color: #1e3a8a;
+                background: #eff6ff;
+                border-color: #93c5fd;
+            }
+            QPushButton#OptionToggle:checked {
+                color: #1d4ed8;
+                background: #dbeafe;
+                border-color: #60a5fa;
+                font-weight: 700;
             }
             QWidget#AlignmentControl {
                 background: #edf1f6;
@@ -2757,10 +2783,20 @@ class AdvancedEditorWindow(QMainWindow):
         self.alignment_buttons["center"].setChecked(True)
         options_row.addWidget(self.alignment_control)
 
-        self.enabled_checkbox = QCheckBox("이 영역 렌더링")
-        self.vertical_checkbox = QCheckBox("세로쓰기")
-        self.enabled_checkbox.stateChanged.connect(self.commit_region_form)
-        self.vertical_checkbox.stateChanged.connect(self.commit_region_form)
+        self.enabled_checkbox = QPushButton(
+            _editor_icon("render_region", "#475569"), "이 영역 렌더링"
+        )
+        self.vertical_checkbox = QPushButton(
+            _editor_icon("vertical_text", "#475569"), "세로쓰기"
+        )
+        for button in (self.enabled_checkbox, self.vertical_checkbox):
+            button.setObjectName("OptionToggle")
+            button.setCheckable(True)
+            button.setIconSize(QSize(15, 15))
+        self.enabled_checkbox.setToolTip("선택한 텍스트 영역을 결과 이미지에 렌더링합니다.")
+        self.vertical_checkbox.setToolTip("선택한 영역의 글자를 세로로 배치합니다.")
+        self.enabled_checkbox.toggled.connect(self.commit_region_form)
+        self.vertical_checkbox.toggled.connect(self.commit_region_form)
         options_row.addWidget(self.enabled_checkbox)
         options_row.addWidget(self.vertical_checkbox)
         region_layout.addLayout(options_row)
