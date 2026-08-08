@@ -63,7 +63,7 @@ typography:
     fontWeight: 700
   canvas-index:
     fontFamily: "Arial"
-    fontSize: "10px"
+    fontSize: "8px"
     fontWeight: 700
 rounded:
   micro: "2px"
@@ -262,7 +262,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 
 - **Zoom Bar:** A dark strip with compact 4px controls, white labels, and explicit pan, zoom, fit, and 100% actions.
 - **Scrollbars:** 18px native bars with 36px minimum handles; handles turn blue on hover.
-- **Region Overlays:** Selected regions use a 2px blue outline and visible resize handles; enabled unselected regions use a 1px translucent amber outline; disabled regions use gray. Every number uses the same compact dark tab fixed to the box's top-left border with a one-pixel overlap, making tab and outline read as one component. Badge placement never moves dynamically.
+- **Region Overlays:** Selected regions use a 2px blue outline; enabled unselected regions use a 1px translucent amber outline; disabled regions use gray. Every number uses the same square-cornered dark tab fixed to the box's top-left border with a one-pixel overlap, making tab and outline read as one component. Badge placement never moves dynamically. Selected resize handles are 7px squares placed two pixels beyond each corner so the box geometry stays visible; their invisible hit targets remain larger for usability.
 
 ### Status and Help
 

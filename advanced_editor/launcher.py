@@ -813,16 +813,19 @@ class EditorCanvas(QWidget):
         bottom_right = self.image_to_view(QPointF(x2, y2))
         return QRectF(top_left, bottom_right).normalized()
 
-    def _handle_rects(self, rect: QRectF) -> dict[str, QRectF]:
-        size = 10.0
-        half = size / 2.0
-        points = {
-            "nw": rect.topLeft(),
-            "ne": rect.topRight(),
-            "sw": rect.bottomLeft(),
-            "se": rect.bottomRight(),
+    @staticmethod
+    def _handle_rects(rect: QRectF) -> dict[str, QRectF]:
+        size = 7.0
+        gap = 2.0
+        positions = {
+            "nw": (rect.left() - gap - size, rect.top() - gap - size),
+            "ne": (rect.right() + gap, rect.top() - gap - size),
+            "sw": (rect.left() - gap - size, rect.bottom() + gap),
+            "se": (rect.right() + gap, rect.bottom() + gap),
         }
-        return {key: QRectF(point.x() - half, point.y() - half, size, size) for key, point in points.items()}
+        return {
+            key: QRectF(x, y, size, size) for key, (x, y) in positions.items()
+        }
 
     def _hit_test(self, pos: QPointF) -> tuple[Optional[int], Optional[str]]:
         selected_index = self.window.selected_index
@@ -831,7 +834,7 @@ class EditorCanvas(QWidget):
             if region is not None:
                 rect = self._region_rect_view(region)
                 for key, handle_rect in self._handle_rects(rect).items():
-                    if handle_rect.contains(pos):
+                    if handle_rect.adjusted(-3, -3, 3, 3).contains(pos):
                         return selected_index, key
 
         for index in reversed(range(len(self.window.session.get("regions", [])))):
@@ -958,7 +961,7 @@ class EditorCanvas(QWidget):
             color, selected = region_styles[index]
             painter.setBrush(QColor(23, 32, 51, 235 if selected else 210))
             painter.setPen(QPen(color, 1))
-            painter.drawRoundedRect(badge_rect, 4, 4)
+            painter.drawRect(badge_rect)
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, label)
 
