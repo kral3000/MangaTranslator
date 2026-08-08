@@ -1601,6 +1601,36 @@ class AdvancedEditorWindow(QMainWindow):
         brush_size_layout.addWidget(brush_size_stepper)
         action_toolbar.addWidget(brush_size_field)
 
+        brush_shape_control = QWidget(self)
+        brush_shape_control.setObjectName("TopBarBrushShape")
+        brush_shape_control.setFixedSize(64, 30)
+        brush_shape_layout = QHBoxLayout(brush_shape_control)
+        brush_shape_layout.setContentsMargins(1, 1, 1, 1)
+        brush_shape_layout.setSpacing(0)
+        self.brush_shape_group = QButtonGroup(self)
+        self.brush_shape_group.setExclusive(True)
+        self.brush_shape_buttons: dict[str, QToolButton] = {}
+        for shape, label, icon_name in (
+            ("circle", "원형 브러시", "brush_circle"),
+            ("square", "사각형 브러시", "brush_square"),
+        ):
+            button = QToolButton(brush_shape_control)
+            button.setObjectName("TopBarBrushShapeButton")
+            button.setCheckable(True)
+            button.setChecked(self.brush_shape == shape)
+            button.setFixedSize(31, 28)
+            button.setIcon(_editor_icon(icon_name, "#cbd5e1"))
+            button.setIconSize(QSize(16, 16))
+            button.setToolTip(label)
+            button.setAccessibleName(label)
+            button.clicked.connect(
+                lambda _checked=False, value=shape: self._set_brush_shape(value)
+            )
+            self.brush_shape_group.addButton(button)
+            self.brush_shape_buttons[shape] = button
+            brush_shape_layout.addWidget(button)
+        action_toolbar.addWidget(brush_shape_control)
+
         self.paint_color_toolbar_button = QToolButton(self)
         self.paint_color_toolbar_button.setText("브러시 색")
         self.paint_color_toolbar_button.setProperty("colorLabel", "브러시 색")
@@ -1793,6 +1823,11 @@ class AdvancedEditorWindow(QMainWindow):
                 spacing: 5px;
                 padding: 6px 12px;
             }
+            QToolBar#TopBar::separator {
+                width: 1px;
+                margin: 8px 7px;
+                background: #1d293b;
+            }
             QToolBar#TopBar QToolButton {
                 color: #e5e7eb;
                 background: transparent;
@@ -1835,6 +1870,27 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #ffffff;
                 border: 1px solid #64748b;
                 border-radius: 6px;
+            }
+            QToolBar#TopBar QWidget#TopBarBrushShape {
+                background: #182338;
+                border: 1px solid #334155;
+                border-radius: 6px;
+            }
+            QToolBar#TopBar QToolButton#TopBarBrushShapeButton {
+                min-width: 0;
+                max-width: 31px;
+                min-height: 0;
+                max-height: 28px;
+                padding: 0;
+                border: 0;
+                border-radius: 5px;
+                background: transparent;
+            }
+            QToolBar#TopBar QToolButton#TopBarBrushShapeButton:hover {
+                background: #273449;
+            }
+            QToolBar#TopBar QToolButton#TopBarBrushShapeButton:checked {
+                background: #2563eb;
             }
             QToolBar#TopBar QSpinBox#TopBarMetricSpin {
                 min-height: 0;
@@ -3602,36 +3658,9 @@ class AdvancedEditorWindow(QMainWindow):
         quick_colors.addWidget(self.custom_paint_color_button, 1)
         layout.addLayout(quick_colors)
 
-        shape_label = QLabel("브러시 모양")
-        shape_label.setObjectName("CompactSectionLabel")
-        layout.addWidget(shape_label)
-        shape_row = QHBoxLayout()
-        shape_row.setSpacing(6)
-        self.brush_shape_group = QButtonGroup(self)
-        self.brush_shape_group.setExclusive(True)
-        self.brush_shape_buttons: dict[str, QPushButton] = {}
-        for shape, label, icon_name in (
-            ("circle", "원형", "brush_circle"),
-            ("square", "사각형", "brush_square"),
-        ):
-            button = QPushButton(label)
-            button.setObjectName("OptionToggle")
-            button.setCheckable(True)
-            button.setChecked(self.brush_shape == shape)
-            button.setProperty("preserveIcon", True)
-            button.setIcon(_editor_icon(icon_name, "#334155"))
-            button.setIconSize(QSize(16, 16))
-            button.clicked.connect(
-                lambda _checked=False, value=shape: self._set_brush_shape(value)
-            )
-            self.brush_shape_group.addButton(button)
-            self.brush_shape_buttons[shape] = button
-            shape_row.addWidget(button)
-        layout.addLayout(shape_row)
-
         layout.addWidget(
             self._help_label(
-                "크기는 상단 도구 막대에서 조절합니다. 사용자 색상은 색 선택 창에서 "
+                "크기와 모양은 상단 도구 막대에서 조절합니다. 사용자 색상은 색 선택 창에서 "
                 "마지막으로 고른 색을 기억합니다. 그리기 브러시는 선택한 색을 별도 레이어에 칠합니다. "
                 "그리기 지우개는 이 레이어만 지우며 원본 이미지는 손상시키지 않습니다."
             )
