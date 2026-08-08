@@ -1601,6 +1601,9 @@ class AdvancedEditorWindow(QMainWindow):
         brush_size_layout.addWidget(brush_size_stepper)
         action_toolbar.addWidget(brush_size_field)
 
+        brush_shape_label = QLabel("브러시 모양", self)
+        brush_shape_label.setObjectName("TopBarSecondaryLabel")
+        action_toolbar.addWidget(brush_shape_label)
         brush_shape_control = QWidget(self)
         brush_shape_control.setObjectName("TopBarBrushShape")
         brush_shape_control.setFixedSize(64, 30)
@@ -1862,6 +1865,13 @@ class AdvancedEditorWindow(QMainWindow):
                 background: transparent;
                 padding-left: 4px;
             }
+            QToolBar#TopBar QLabel#TopBarSecondaryLabel {
+                color: #94a3b8;
+                background: transparent;
+                padding-left: 10px;
+                font-size: 11px;
+                font-weight: 600;
+            }
             QToolBar#TopBar QWidget#TopBarSpacer {
                 background: transparent;
                 border: 0;
@@ -2004,6 +2014,24 @@ class AdvancedEditorWindow(QMainWindow):
                 border-bottom: 1px solid #d5dde8;
             }
             QWidget#MetricRow {
+                background: transparent;
+                border: 0;
+            }
+            QWidget#MetricGroup {
+                background: #f8fafc;
+                border: 1px solid #d5dde8;
+                border-radius: 8px;
+            }
+            QLabel#MetricGroupLabel {
+                color: #172033;
+                font-size: 11px;
+                font-weight: 700;
+                background: transparent;
+                border: 0;
+            }
+            QLabel#MetricGroupHint {
+                color: #7b8a9d;
+                font-size: 10px;
                 background: transparent;
                 border: 0;
             }
@@ -3015,25 +3043,53 @@ class AdvancedEditorWindow(QMainWindow):
         self.line_spacing_spin.setSingleStep(0.1)
         self.padding_spin.setSingleStep(0.5)
         self.stroke_width_spin.setSingleStep(0.5)
-        metric_rows = (
+        metric_groups = (
             (
-                ("X", "metric_x", self.x_spin),
-                ("Y", "metric_y", self.y_spin),
-                ("회전", "metric_rotation", self.rotation_spin),
+                "위치 · 변형",
+                "좌표와 각도",
+                (
+                    ("X", "metric_x", self.x_spin),
+                    ("Y", "metric_y", self.y_spin),
+                    ("회전", "metric_rotation", self.rotation_spin),
+                ),
             ),
             (
-                ("너비", "metric_width", self.w_spin),
-                ("높이", "metric_height", self.h_spin),
-                ("여백", "metric_padding", self.padding_spin),
+                "영역",
+                "박스 크기와 안쪽 여백",
+                (
+                    ("너비", "metric_width", self.w_spin),
+                    ("높이", "metric_height", self.h_spin),
+                    ("여백", "metric_padding", self.padding_spin),
+                ),
             ),
             (
-                ("크기", "metric_type", self.font_size_spin),
-                ("간격", "metric_spacing", self.line_spacing_spin),
-                ("외곽선", "metric_outline", self.stroke_width_spin),
+                "글자 효과",
+                "크기 · 행간 · 외곽선",
+                (
+                    ("크기", "metric_type", self.font_size_spin),
+                    ("간격", "metric_spacing", self.line_spacing_spin),
+                    ("외곽선", "metric_outline", self.stroke_width_spin),
+                ),
             ),
         )
-        for fields in metric_rows:
-            row_widget = QWidget(region_page)
+        for group_label, group_hint, fields in metric_groups:
+            group_widget = QWidget(region_page)
+            group_widget.setObjectName("MetricGroup")
+            group_layout = QVBoxLayout(group_widget)
+            group_layout.setContentsMargins(6, 5, 6, 6)
+            group_layout.setSpacing(4)
+            group_header = QHBoxLayout()
+            group_header.setContentsMargins(2, 0, 2, 0)
+            label = QLabel(group_label, group_widget)
+            label.setObjectName("MetricGroupLabel")
+            group_header.addWidget(label)
+            group_header.addStretch(1)
+            hint = QLabel(group_hint, group_widget)
+            hint.setObjectName("MetricGroupHint")
+            group_header.addWidget(hint)
+            group_layout.addLayout(group_header)
+
+            row_widget = QWidget(group_widget)
             row_widget.setObjectName("MetricRow")
             row_widget.setFixedHeight(32)
             row_layout = QHBoxLayout(row_widget)
@@ -3090,7 +3146,8 @@ class AdvancedEditorWindow(QMainWindow):
                     stepper_layout.addWidget(button)
                 field_layout.addWidget(stepper)
                 row_layout.addWidget(field, 1)
-            metrics_layout.addWidget(row_widget)
+            group_layout.addWidget(row_widget)
+            metrics_layout.addWidget(group_widget)
 
         font_row = QHBoxLayout()
         font_row.addWidget(QLabel("글꼴 가족"))
@@ -3120,7 +3177,7 @@ class AdvancedEditorWindow(QMainWindow):
         region_layout.addLayout(font_style_row)
         self.populate_font_combo()
 
-        metrics_label = QLabel("위치 · 크기 · 효과")
+        metrics_label = QLabel("세부 조정")
         metrics_label.setObjectName("CompactSectionLabel")
         region_layout.addWidget(metrics_label)
         region_layout.addLayout(metrics_layout)
