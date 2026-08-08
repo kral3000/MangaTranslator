@@ -19,6 +19,8 @@ class RegionBadgeLayoutTest(TestCase):
         )
 
         self.assertFalse(badge.intersects(region))
+        self.assertEqual(badge.left(), region.left())
+        self.assertEqual(badge.bottom(), region.top())
 
     def test_badge_avoids_other_regions_and_previously_placed_badges(self) -> None:
         region = QRectF(100, 100, 40, 100)

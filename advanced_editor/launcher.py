@@ -904,6 +904,26 @@ class EditorCanvas(QWidget):
         image_rect: QRectF,
     ) -> QRectF:
         gap = 3.0
+        attached_tab = QRectF(
+            region_rect.left(),
+            region_rect.top() - badge_height,
+            badge_width,
+            badge_height,
+        )
+        if viewport_rect.contains(attached_tab):
+            blocks_region = any(
+                cls._overlap_area(attached_tab, obstacle.adjusted(-1, -1, 1, 1))
+                > 0
+                for obstacle in other_regions
+            )
+            blocks_badge = any(
+                cls._overlap_area(attached_tab, obstacle.adjusted(-2, -2, 2, 2))
+                > 0
+                for obstacle in placed_badges
+            )
+            if not blocks_region and not blocks_badge:
+                return attached_tab
+
         centered_x = region_rect.center().x() - badge_width / 2.0
         centered_y = region_rect.center().y() - badge_height / 2.0
         candidates = (
@@ -1004,10 +1024,10 @@ class EditorCanvas(QWidget):
                 image_rect,
             )
             placed_badges.append(badge_rect)
-            color, selected = region_styles[index]
+            _color, selected = region_styles[index]
             painter.setBrush(QColor(23, 32, 51, 235 if selected else 210))
-            painter.setPen(QPen(color, 1))
-            painter.drawRoundedRect(badge_rect, 3, 3)
+            painter.setPen(QPen(QColor(15, 23, 42), 1))
+            painter.drawRoundedRect(badge_rect, 5, 5)
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, label)
 
