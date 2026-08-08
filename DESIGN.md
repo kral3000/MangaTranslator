@@ -226,6 +226,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **Shape:** Transparent 6px actions with 6px × 9px padding; the filled save action receives 12px horizontal padding.
 - **States:** Hover adds a darker slate fill and visible border; shortcuts and tooltips preserve the full operation meaning.
 - **Content:** Every action pairs a consistent 1.8px line icon with an explicit Korean label. The history menu names each undoable action and can undo back to a selected point. Save uses the only filled blue toolbar treatment; export remains neutral.
+- **Undo/Redo:** Use mirrored, conventional U-turn arrows with an open return path; avoid cursor-like chevrons or boxed arrow shapes that become ambiguous at 18px.
 
 ### Tool Rail
 
@@ -271,7 +272,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **Context:** A compact blue-tinted header names the active tool and gives one sentence of immediate guidance.
 - **Sections:** Text and layout share one compact tab because they are adjusted together; tool settings use the second tab. Position, size, typography, and spacing values use a two-column control grid so the complete text-editing path fits without scrolling at 1200×760. Selecting a tool opens the most relevant tab and nested settings tab without preventing manual navigation.
 - **Alignment:** Horizontal text alignment uses a persistent three-button icon group—left, center, right—with a single checked state and tooltips, matching familiar document-editor controls instead of hiding the choices in a dropdown.
-- **Typography flow:** Font family and weight sit directly below alignment and render/orientation state, followed by a divided position/size grid. Numeric fields are arrowless, keyboard- and wheel-editable, and carry compact inline labels in a 3×3 grid.
+- **Typography flow:** Font family and weight sit directly below alignment and render/orientation state. Arrowless numeric fields are grouped into three full-width semantic rows: region (X/Y/W/H), type (size/spacing/padding), and effects (rotation/outline). Each row distributes only its own controls, avoiding empty grid cells and repeated labels.
 - **Inline emphasis and color:** Bold, italic, and bold-italic actions show a checked state derived from the selected or whole edited text. Text and outline color controls show both the actual swatch surface and the current uppercase HEX value with contrast-safe labels and icons.
 - **Image List:** Multi-image jobs show the current page and selection count, offer select-all and clear-selection actions, and can collapse from the top action bar to return width to the canvas.
 

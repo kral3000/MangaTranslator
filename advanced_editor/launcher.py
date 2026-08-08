@@ -133,8 +133,8 @@ EDITOR_ICON_PATHS = {
     "brush": '<path d="M14 4l6 6-9 9H5v-6z"/><path d="M4 20c2 0 3-1 3-3"/>',
     "eraser": '<path d="M13 4l7 7-8 8H7l-4-4z"/><path d="M9 19h11"/>',
     "restore": '<path d="M4 8V3m0 0h5M4 3l4 4"/><path d="M5 13a8 8 0 1 0 2-7"/>',
-    "undo": '<path d="M9 7H4V2"/><path d="M4 7l4-4"/><path d="M5 7h8a6 6 0 0 1 0 12H9"/>',
-    "redo": '<path d="M15 7h5V2"/><path d="M20 7l-4-4"/><path d="M19 7h-8a6 6 0 0 0 0 12h4"/>',
+    "undo": '<path d="M9 8H4V3"/><path d="M4 8l4-4"/><path d="M4 8h10a7 7 0 0 1 0 14h-4"/>',
+    "redo": '<path d="M15 8h5V3"/><path d="M20 8l-4-4"/><path d="M20 8H10a7 7 0 0 0 0 14h4"/>',
     "history": '<circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/>',
     "save": '<path d="M4 3h13l3 3v15H4z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/>',
     "export": '<path d="M14 3h7v7M21 3l-10 10"/><path d="M18 14v7H3V6h7"/>',
@@ -1815,9 +1815,19 @@ class AdvancedEditorWindow(QMainWindow):
                 color: #172033;
                 font-size: 12px;
                 font-weight: 700;
-                padding-top: 3px;
-                padding-bottom: 2px;
+                padding-top: 2px;
+                padding-bottom: 1px;
                 border-bottom: 1px solid #d5dde8;
+            }
+            QWidget#MetricRow {
+                background: #f8fafc;
+                border: 1px solid #d5dde8;
+                border-radius: 6px;
+            }
+            QLabel#MetricGroupLabel {
+                color: #64748b;
+                font-size: 11px;
+                font-weight: 700;
             }
             QWidget#TextLayoutPage QPushButton {
                 min-height: 18px;
@@ -2598,16 +2608,16 @@ class AdvancedEditorWindow(QMainWindow):
 
         context = QFrame(panel)
         context.setObjectName("InspectorContext")
-        context_layout = QVBoxLayout(context)
-        context_layout.setContentsMargins(10, 7, 10, 7)
-        context_layout.setSpacing(2)
+        context_layout = QHBoxLayout(context)
+        context_layout.setContentsMargins(10, 6, 10, 6)
+        context_layout.setSpacing(8)
         self.context_tool_label = QLabel("선택")
         self.context_tool_label.setObjectName("ContextToolLabel")
         context_layout.addWidget(self.context_tool_label)
         self.context_hint_label = QLabel("영역을 선택하고 텍스트와 배치를 조정합니다.")
         self.context_hint_label.setObjectName("ContextHintLabel")
         self.context_hint_label.setWordWrap(True)
-        context_layout.addWidget(self.context_hint_label)
+        context_layout.addWidget(self.context_hint_label, 1)
         layout.addWidget(context)
 
         self.inspector_sections = QTabWidget(panel)
@@ -2640,7 +2650,7 @@ class AdvancedEditorWindow(QMainWindow):
         region_layout.addWidget(self.source_edit)
 
         region_layout.addWidget(QLabel("편집할 텍스트"))
-        self.translation_edit = ResizableTextEdit(64)
+        self.translation_edit = ResizableTextEdit(60)
         self.translation_edit.textChanged.connect(self._on_translation_text_changed)
         region_layout.addWidget(self.translation_edit)
 
@@ -2709,9 +2719,8 @@ class AdvancedEditorWindow(QMainWindow):
         font_label = QLabel("글꼴")
         font_label.setObjectName("CompactSectionLabel")
         region_layout.addWidget(font_label)
-        metrics_grid = QGridLayout()
-        metrics_grid.setHorizontalSpacing(5)
-        metrics_grid.setVerticalSpacing(5)
+        metrics_layout = QVBoxLayout()
+        metrics_layout.setSpacing(4)
         self.x_spin = self._spin(0, 99999)
         self.y_spin = self._spin(0, 99999)
         self.w_spin = self._spin(1, 99999)
@@ -2745,23 +2754,51 @@ class AdvancedEditorWindow(QMainWindow):
         self.line_spacing_spin.setSingleStep(0.1)
         self.padding_spin.setSingleStep(0.5)
         self.stroke_width_spin.setSingleStep(0.5)
-        metrics = (
-            ("X", self.x_spin),
-            ("Y", self.y_spin),
-            ("너비", self.w_spin),
-            ("높이", self.h_spin),
-            ("크기", self.font_size_spin),
-            ("회전", self.rotation_spin),
-            ("간격", self.line_spacing_spin),
-            ("여백", self.padding_spin),
-            ("외곽선", self.stroke_width_spin),
+        metric_groups = (
+            (
+                "영역",
+                (
+                    ("X", self.x_spin),
+                    ("Y", self.y_spin),
+                    ("W", self.w_spin),
+                    ("H", self.h_spin),
+                ),
+            ),
+            (
+                "글자",
+                (
+                    ("크기", self.font_size_spin),
+                    ("간격", self.line_spacing_spin),
+                    ("여백", self.padding_spin),
+                ),
+            ),
+            (
+                "효과",
+                (("회전", self.rotation_spin), ("외곽선", self.stroke_width_spin)),
+            ),
         )
-        for index, (label, spin) in enumerate(metrics):
-            spin.setPrefix(f"{label}  ")
-            spin.setAccessibleName(label)
-            metrics_grid.addWidget(spin, index // 3, index % 3)
-        for column in range(3):
-            metrics_grid.setColumnStretch(column, 1)
+        accessible_names = {
+            "X": "X 위치",
+            "Y": "Y 위치",
+            "W": "너비",
+            "H": "높이",
+        }
+        for group_label, fields in metric_groups:
+            row_widget = QWidget(region_page)
+            row_widget.setObjectName("MetricRow")
+            row_widget.setFixedHeight(32)
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(6, 2, 4, 2)
+            row_layout.setSpacing(4)
+            label = QLabel(group_label)
+            label.setObjectName("MetricGroupLabel")
+            label.setFixedWidth(34)
+            row_layout.addWidget(label)
+            for field_label, spin in fields:
+                spin.setPrefix(f"{field_label} ")
+                spin.setAccessibleName(accessible_names.get(field_label, field_label))
+                row_layout.addWidget(spin, 1)
+            metrics_layout.addWidget(row_widget)
 
         font_row = QHBoxLayout()
         font_row.addWidget(QLabel("글꼴 가족"))
@@ -2791,10 +2828,10 @@ class AdvancedEditorWindow(QMainWindow):
         region_layout.addLayout(font_style_row)
         self.populate_font_combo()
 
-        metrics_label = QLabel("위치 · 크기")
+        metrics_label = QLabel("위치 · 크기 · 효과")
         metrics_label.setObjectName("CompactSectionLabel")
         region_layout.addWidget(metrics_label)
-        region_layout.addLayout(metrics_grid)
+        region_layout.addLayout(metrics_layout)
 
         color_label = QLabel("색상")
         color_label.setObjectName("CompactSectionLabel")
