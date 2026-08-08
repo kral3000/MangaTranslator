@@ -160,8 +160,8 @@ EDITOR_ICON_PATHS = {
     "inpaint_eraser": '<path d="M12 5l7 7-7 7H7l-4-4zM9 19h10"/><path d="M18 3v3M16.5 4.5h3"/>',
     "paint_brush": '<path d="M15 4l5 5-9 10H5v-6zM4 20c2 0 3-1 3-3"/><path d="M15 4l-2 2 5 5 2-2"/>',
     "paint_eraser": '<path d="M13 4l7 7-8 8H7l-4-4zM9 19h11"/>',
-    "restore_brush": '<path d="M14 4l6 6-9 9H5v-6zM4 20c2 0 3-1 3-3"/>',
-    "restore_eraser": '<path d="M13 4l7 7-8 8H7l-4-4zM9 19h11"/><path d="M10 12h6"/>',
+    "restore_brush": '<path d="M12 10l7-7 3 3-7 7z"/><path d="M12 10l3 3-5 6H5v-5zM4 21c3 0 4-1 4-3"/><path d="M5 2v4M3 4h4"/><circle cx="9" cy="3" r=".8" fill="currentColor" stroke="none"/>',
+    "restore_eraser": '<path d="M13 7l7 7-6 6H8l-5-5 8-8zM9 20h11"/><path d="M6 2v4M4 4h4"/><circle cx="10" cy="3" r=".8" fill="currentColor" stroke="none"/>',
     "metric_x": '<path d="M4 12h16M4 12l3-3M4 12l3 3M20 12l-3-3M20 12l-3 3"/>',
     "metric_y": '<path d="M12 4v16M12 4l-3 3M12 4l3 3M12 20l-3-3M12 20l3-3"/>',
     "metric_width": '<path d="M4 7v10M20 7v10M4 12h16M7 9l-3 3 3 3M17 9l3 3-3 3"/>',
@@ -2839,7 +2839,7 @@ class AdvancedEditorWindow(QMainWindow):
                 field_layout.setSpacing(3)
                 lead = QWidget(field)
                 lead.setObjectName("MetricFieldLead")
-                lead.setFixedWidth(44)
+                lead.setFixedWidth(50)
                 lead_layout = QHBoxLayout(lead)
                 lead_layout.setContentsMargins(0, 0, 0, 0)
                 lead_layout.setSpacing(3)
