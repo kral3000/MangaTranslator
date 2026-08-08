@@ -174,7 +174,7 @@ def main() -> int:
         return 1
 
     root = _app_root()
-    icon_path = root / "assets" / "alya-kujo-app-icon-v2.ico"
+    icon_path = root / "assets" / "alya-kujo-app-icon-v3.ico"
     backend = BackendProcess(root)
     window_closed = threading.Event()
     port = _find_available_port()

@@ -8,7 +8,7 @@ runtime\python.exe -m PyInstaller ^
   --onefile ^
   --windowed ^
   --name MangaTranslatorKo ^
-  --icon "%CD%\assets\alya-kujo-app-icon-v2.ico" ^
+  --icon "%CD%\assets\alya-kujo-app-icon-v3.ico" ^
   --distpath "." ^
   --workpath "build\desktop" ^
   --specpath "build\desktop" ^
