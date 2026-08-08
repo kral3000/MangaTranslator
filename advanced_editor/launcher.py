@@ -73,7 +73,6 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QToolBar,
     QToolButton,
-    QToolBox,
     QVBoxLayout,
     QWidget,
 )
@@ -1772,29 +1771,6 @@ class AdvancedEditorWindow(QMainWindow):
                 font-size: 11px;
                 font-weight: 400;
             }
-            QToolBox#InspectorSections {
-                background: transparent;
-            }
-            QToolBox#InspectorSections::tab {
-                background: #edf1f6;
-                color: #475569;
-                border: 1px solid #d5dde8;
-                border-radius: 6px;
-                margin-top: 3px;
-                padding: 8px 10px;
-                font-weight: 600;
-            }
-            QToolBox#InspectorSections::tab:hover {
-                background: #eff6ff;
-                color: #1d4ed8;
-                border-color: #93c5fd;
-            }
-            QToolBox#InspectorSections::tab:selected {
-                background: #ffffff;
-                color: #1d4ed8;
-                border-color: #60a5fa;
-                font-weight: 700;
-            }
             QWidget#CanvasPanel {
                 background: #1c222b;
             }
@@ -2523,7 +2499,7 @@ class AdvancedEditorWindow(QMainWindow):
         context_layout.addWidget(self.context_hint_label)
         layout.addWidget(context)
 
-        self.inspector_sections = QToolBox(panel)
+        self.inspector_sections = QTabWidget(panel)
         self.inspector_sections.setObjectName("InspectorSections")
 
         region_page = QWidget()
@@ -2586,7 +2562,7 @@ class AdvancedEditorWindow(QMainWindow):
         region_layout.addWidget(self.enabled_checkbox)
         region_layout.addWidget(self.vertical_checkbox)
         region_layout.addStretch(1)
-        self.inspector_sections.addItem(region_page, "영역 · 텍스트")
+        self.inspector_sections.addTab(region_page, "영역·텍스트")
 
         style_page = QWidget()
         style_layout = QVBoxLayout(style_page)
@@ -2652,7 +2628,7 @@ class AdvancedEditorWindow(QMainWindow):
         color_row.addWidget(self.paint_color_button)
         style_layout.addLayout(color_row)
         style_layout.addStretch(1)
-        self.inspector_sections.addItem(style_page, "글자 모양 · 배치")
+        self.inspector_sections.addTab(style_page, "글자·배치")
 
         settings_page = QWidget()
         settings_layout = QVBoxLayout(settings_page)
@@ -2664,7 +2640,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.settings_tabs.addTab(self._build_translation_tab(), "번역")
         self.settings_tabs.addTab(self._build_editor_settings_tab(), "편집기 설정")
         settings_layout.addWidget(self.settings_tabs)
-        self.inspector_sections.addItem(settings_page, "도구 설정")
+        self.inspector_sections.addTab(settings_page, "도구 설정")
         layout.addWidget(self.inspector_sections, 1)
 
         self.status_label = AutoHideStatusLabel("")
