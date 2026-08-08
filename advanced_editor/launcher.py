@@ -2207,6 +2207,50 @@ class AdvancedEditorWindow(QMainWindow):
             }
             """
         )
+        combo_arrow_path = (
+            Path(__file__).with_name("combo_chevron_down.svg").resolve().as_posix()
+        )
+        self.setStyleSheet(
+            self.styleSheet()
+            + """
+            QComboBox {
+                padding: 6px 34px 6px 8px;
+            }
+            QComboBox:hover {
+                border-color: #94a3b8;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: 28px;
+                background: #edf2f7;
+                border: 0;
+                border-left: 1px solid #cbd5e1;
+                border-top-right-radius: 5px;
+                border-bottom-right-radius: 5px;
+            }
+            QComboBox::drop-down:hover,
+            QComboBox::drop-down:on {
+                background: #dbeafe;
+            }
+            QComboBox::down-arrow {
+                image: url("%s");
+                width: 12px;
+                height: 12px;
+            }
+            QComboBox QAbstractItemView {
+                background: #ffffff;
+                color: #172033;
+                border: 1px solid #94a3b8;
+                border-radius: 6px;
+                outline: 0;
+                padding: 4px;
+                selection-background-color: #dbeafe;
+                selection-color: #1d4ed8;
+            }
+            """
+            % combo_arrow_path
+        )
 
     def _help_label(self, text: str) -> QLabel:
         label = QLabel(text)

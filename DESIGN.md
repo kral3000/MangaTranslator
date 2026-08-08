@@ -250,6 +250,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **Resizable Text:** Source and translated text fields start compact at 68px and 82px. Their lower-right diagonal grip adjusts height from 52–360px without changing the inspector width.
 - **Metric Fields:** Position, size, and effect values use a balanced 3×3 grid. Every field reserves the same width for its quiet semantic icon and short label so all value dividers align, then ends with centered stacked increment/decrement controls separated by a subtle rule. The title, value, and stepper surfaces meet inside one uninterrupted one-pixel perimeter with no uneven white inset.
 - **Brush Size:** The top-bar brush value uses the same explicit value-and-stacked-stepper language as inspector metrics instead of the native Windows spinbox arrows.
+- **Dropdowns:** Every combo box uses a 28px cool-gray expansion surface with a centered 12px line chevron, a subtle left divider, matching rounded right corners, and blue hover/open feedback. Native Windows dropdown buttons are not exposed.
 - **Inline Options:** Region rendering and vertical writing use compact icon-led toggle chips with an explicit filled selected state instead of unstyled native Windows checkboxes.
 
 ### Tabs
