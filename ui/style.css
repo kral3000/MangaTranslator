@@ -223,8 +223,13 @@
     gap: 12px !important;
 }
 
+.tag-style-font-row > .form {
+    align-items: flex-end !important;
+}
+
 .tag-style-font-row .block.padded {
     padding-bottom: 0 !important;
+    margin-bottom: 0 !important;
 }
 
 .tag-style-font-row>* {
@@ -356,6 +361,11 @@
 #advanced-editor-tab .editor-folder-picker-row > .block {
     min-width: 0 !important;
     margin-bottom: 0 !important;
+}
+
+#advanced-editor-tab .editor-session-picker-row > .form > .block.padded,
+#advanced-editor-tab .editor-folder-picker-row > .form > .block.padded {
+    padding-bottom: 0 !important;
 }
 
 #advanced-editor-tab .editor-inline-action {
