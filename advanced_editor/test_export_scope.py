@@ -10,6 +10,35 @@ from advanced_editor.launcher import AdvancedEditorWindow
 
 
 class ExportScopeTest(TestCase):
+    def test_save_updates_the_translation_session_output(self) -> None:
+        output = Path("output/run/01_translated.png").resolve()
+        window = SimpleNamespace(
+            session={
+                "translated_image_path": str(output),
+                "edited_image_path": str(Path("editor_sessions/work.png").resolve()),
+            },
+            session_path=Path("editor_sessions/01_edit_session.json").resolve(),
+        )
+
+        target = AdvancedEditorWindow._session_save_target(window)
+
+        self.assertEqual(target, output)
+
+    def test_standalone_session_keeps_its_editor_work_file(self) -> None:
+        work_file = Path("editor_imports/01_edit_session_edited.png").resolve()
+        window = SimpleNamespace(
+            session={
+                "standalone_image_session": True,
+                "translated_image_path": str(Path("source.png").resolve()),
+                "edited_image_path": str(work_file),
+            },
+            session_path=Path("editor_imports/01_edit_session.json").resolve(),
+        )
+
+        target = AdvancedEditorWindow._session_save_target(window)
+
+        self.assertEqual(target, work_file)
+
     def test_session_switch_does_not_reset_multi_selection(self) -> None:
         target = Path("target.json")
         window = SimpleNamespace(

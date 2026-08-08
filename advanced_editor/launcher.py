@@ -1579,7 +1579,7 @@ class AdvancedEditorWindow(QMainWindow):
 
         self.render_action = QAction(_editor_icon("save"), "저장  Ctrl+S", self)
         self.render_action.setShortcut(QKeySequence("Ctrl+S"))
-        self.render_action.setToolTip("편집 세션과 결과 저장 (Ctrl+S)")
+        self.render_action.setToolTip("현재 세션의 번역 결과 갱신 (Ctrl+S)")
         self.render_action.triggered.connect(self.render_and_save)
         action_toolbar.addAction(self.render_action)
 
@@ -6030,6 +6030,18 @@ class AdvancedEditorWindow(QMainWindow):
         stem = session_path.stem.removesuffix("_edit_session") or "image"
         return Path(f"{stem}.png")
 
+    def _session_save_target(self) -> Path:
+        if not self.session.get("standalone_image_session"):
+            translated_path = str(
+                self.session.get("translated_image_path") or ""
+            ).strip()
+            if translated_path:
+                return Path(translated_path).expanduser().resolve()
+        return Path(
+            self.session.get("edited_image_path")
+            or self.session_path.with_name(f"{self.session_path.stem}_edited.png")
+        ).expanduser().resolve()
+
     @staticmethod
     def _unique_export_target(target: Path, used: set[Path]) -> Path:
         candidate = target
@@ -6125,10 +6137,7 @@ class AdvancedEditorWindow(QMainWindow):
         self._persist_output_settings()
         save_session(self.session_path, self.session)
         try:
-            output_path = Path(
-                self.session.get("edited_image_path")
-                or self.session_path.with_name(f"{self.session_path.stem}_edited.png")
-            ).resolve()
+            output_path = self._session_save_target()
             self.session["edited_image_path"] = str(output_path)
             save_session(self.session_path, self.session)
             image, output_path, render_errors = rerender_session(self.session_path)
