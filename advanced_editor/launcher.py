@@ -1481,7 +1481,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.undo_action.triggered.connect(self.undo)
         action_toolbar.addAction(self.undo_action)
         self.redo_action = QAction(_editor_icon("redo"), "다시 실행", self)
-        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self.redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
         self.redo_action.triggered.connect(self.redo)
         action_toolbar.addAction(self.redo_action)
 
@@ -6249,7 +6249,7 @@ class AdvancedEditorWindow(QMainWindow):
             else "실행 취소할 작업이 없습니다"
         )
         self.redo_action.setToolTip(
-            f"다시 실행: {redo_label} (Ctrl+Y)"
+            f"다시 실행: {redo_label} (Ctrl+Shift+Z)"
             if redo_label
             else "다시 실행할 작업이 없습니다"
         )

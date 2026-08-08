@@ -227,6 +227,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **States:** Hover adds a darker slate fill and visible border; shortcuts and tooltips preserve the full operation meaning.
 - **Content:** Every action pairs a consistent 1.8px line icon with an explicit Korean label. The history menu names each undoable action and can undo back to a selected point. Save uses the only filled blue toolbar treatment; export remains neutral.
 - **Undo/Redo:** Use mirrored near-circular return arrows with a heavier arc and a filled triangular head, matching familiar desktop editor controls at 18px.
+- **Shortcuts:** Undo is `Ctrl+Z`; redo is explicitly `Ctrl+Shift+Z` on every platform and in every tooltip.
 
 ### Tool Rail
 
