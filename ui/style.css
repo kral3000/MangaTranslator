@@ -272,3 +272,156 @@
     resize: vertical;
     min-height: 12em;
 }
+
+/* --- ADVANCED EDITOR LAUNCHER --- */
+#advanced-editor-tab {
+    --editor-radius: 6px;
+    --editor-gap-tight: 8px;
+    --editor-gap: 16px;
+    --editor-card-padding: 20px;
+}
+
+#advanced-editor-tab .editor-launch-intro {
+    margin-bottom: 18px;
+}
+
+#advanced-editor-tab .editor-launch-intro h2 {
+    margin-bottom: 6px;
+}
+
+#advanced-editor-tab .editor-launch-intro p {
+    margin: 0;
+}
+
+#advanced-editor-tab .editor-launch-grid {
+    gap: var(--editor-gap) !important;
+    align-items: stretch !important;
+}
+
+#advanced-editor-tab .editor-launch-grid > .column {
+    min-width: 0 !important;
+}
+
+#advanced-editor-tab .editor-launch-card {
+    padding: var(--editor-card-padding) !important;
+    border: 1px solid var(--border-color-primary) !important;
+    border-radius: var(--editor-radius) !important;
+    background: var(--block-background-fill) !important;
+    box-shadow: none !important;
+}
+
+#advanced-editor-tab .editor-launch-card > .styler {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: var(--editor-gap) !important;
+    height: 100%;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+#advanced-editor-tab .editor-launch-card > .styler > .block,
+#advanced-editor-tab .editor-launch-card > .styler > .row,
+#advanced-editor-tab .editor-launch-card > .styler > .form {
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+#advanced-editor-tab .editor-card-heading {
+    margin-bottom: 2px;
+}
+
+#advanced-editor-tab .editor-card-heading h3 {
+    margin-bottom: 6px;
+}
+
+#advanced-editor-tab .editor-card-heading p {
+    margin: 0;
+    max-width: 66ch;
+}
+
+#advanced-editor-tab .editor-session-picker-row,
+#advanced-editor-tab .editor-folder-picker-row {
+    align-items: flex-end !important;
+    gap: var(--editor-gap-tight) !important;
+}
+
+#advanced-editor-tab .editor-session-picker-row > .block,
+#advanced-editor-tab .editor-folder-picker-row > .block {
+    min-width: 0 !important;
+    margin-bottom: 0 !important;
+}
+
+#advanced-editor-tab .editor-inline-action {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 112px !important;
+}
+
+#advanced-editor-tab .editor-card-actions {
+    justify-content: flex-end !important;
+    align-items: center !important;
+    gap: var(--editor-gap-tight) !important;
+    margin-top: auto !important;
+}
+
+#advanced-editor-tab .editor-launch-card button {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    border-radius: var(--editor-radius) !important;
+    white-space: nowrap !important;
+}
+
+#advanced-editor-tab .editor-session-picker-row .md p,
+#advanced-editor-tab .editor-folder-picker-row .md p {
+    color: var(--body-text-color) !important;
+    opacity: 0.76;
+}
+
+#advanced-editor-tab .editor-status-callout {
+    margin-top: var(--editor-gap) !important;
+    padding: 10px 12px !important;
+    border: 1px solid var(--border-color-primary) !important;
+    border-radius: var(--editor-radius) !important;
+    background: color-mix(
+        in srgb,
+        var(--primary-500) 7%,
+        var(--block-background-fill)
+    ) !important;
+    box-shadow: none !important;
+}
+
+#advanced-editor-tab .editor-status-callout label > span {
+    color: var(--body-text-color) !important;
+    font-weight: 600 !important;
+}
+
+#advanced-editor-tab .editor-status-callout textarea {
+    min-height: 2.25em !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    color: var(--body-text-color) !important;
+    line-height: 1.5 !important;
+    resize: none !important;
+}
+
+#advanced-editor-tab .editor-status-callout .wrap-inner {
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+#advanced-editor-tab button:focus-visible,
+#advanced-editor-tab input:focus-visible,
+#advanced-editor-tab textarea:focus-visible {
+    outline: 2px solid var(--primary-500) !important;
+    outline-offset: 2px !important;
+}

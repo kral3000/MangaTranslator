@@ -98,6 +98,13 @@ PADDLE_OCR_VL_LANGUAGES = [
 
 js_credits = """
 function() {
+    const editorStatus = document.getElementById('image_editor_status_message');
+    if (editorStatus) {
+        editorStatus.setAttribute('role', 'status');
+        editorStatus.setAttribute('aria-live', 'polite');
+        editorStatus.setAttribute('aria-atomic', 'true');
+    }
+
     const footer = document.querySelector('footer');
     if (footer) {
         // Check if credits already exist
@@ -557,55 +564,73 @@ def create_layout(
                                 "고급 편집기 열기", visible=False
                             )
 
-            with gr.TabItem("고급 이미지 편집기"):
+            with gr.TabItem("고급 이미지 편집기", elem_id="advanced-editor-tab"):
                 gr.Markdown(
                     "## 편집 작업 열기\n"
-                    "이전에 번역한 작업을 이어서 열거나, 일반 이미지 폴더로 새 작업을 시작할 수 있습니다."
+                    "이전에 번역한 작업을 이어서 열거나, 일반 이미지 폴더로 새 작업을 시작할 수 있습니다.",
+                    elem_classes=["editor-launch-intro"],
                 )
-                with gr.Row(equal_height=False):
+                with gr.Row(equal_height=False, elem_classes=["editor-launch-grid"]):
                     with gr.Column(scale=1):
-                        with gr.Group():
+                        with gr.Group(elem_classes=["editor-launch-card"]):
                             gr.Markdown(
                                 "### 기존 작업 계속하기\n"
-                                "번역기를 다시 켠 뒤에도 저장된 작업을 찾습니다. 일괄 번역은 여러 장을 한 묶음으로 엽니다."
+                                "번역기를 다시 켠 뒤에도 저장된 작업을 찾습니다. 일괄 번역은 여러 장을 한 묶음으로 엽니다.",
+                                elem_classes=["editor-card-heading"],
                             )
-                            existing_editor_refresh_button = gr.Button(
-                                "저장된 세션 새로고침", variant="secondary"
-                            )
-                            existing_editor_session_select = gr.Dropdown(
-                                choices=[],
-                                label="저장된 편집 작업",
-                                info="‘묶음 N장’ 작업을 열면 편집기 왼쪽 목록에서 모든 이미지를 이동할 수 있습니다.",
-                                visible=True,
-                                interactive=False,
-                                filterable=True,
-                            )
-                            existing_editor_open_button = gr.Button(
-                                "선택한 작업 계속하기",
-                                variant="primary",
-                                visible=False,
-                            )
+                            with gr.Row(elem_classes=["editor-session-picker-row"]):
+                                existing_editor_session_select = gr.Dropdown(
+                                    choices=[],
+                                    label="저장된 편집 작업",
+                                    info="‘묶음 N장’ 작업을 열면 편집기 이미지 목록에서 모든 이미지를 이동할 수 있습니다.",
+                                    visible=True,
+                                    interactive=False,
+                                    filterable=True,
+                                    scale=1,
+                                )
+                                existing_editor_refresh_button = gr.Button(
+                                    "세션 새로고침",
+                                    variant="secondary",
+                                    scale=0,
+                                    min_width=138,
+                                    elem_classes=["editor-inline-action"],
+                                )
+                            with gr.Row(elem_classes=["editor-card-actions"]):
+                                existing_editor_open_button = gr.Button(
+                                    "선택한 작업 계속하기",
+                                    variant="primary",
+                                    visible=False,
+                                    scale=0,
+                                    min_width=210,
+                                )
                     with gr.Column(scale=1):
-                        with gr.Group():
+                        with gr.Group(elem_classes=["editor-launch-card"]):
                             gr.Markdown(
                                 "### 새 이미지 가져오기\n"
-                                "기존 세션이 없는 이미지 폴더를 새 편집 작업으로 가져옵니다."
+                                "기존 세션이 없는 이미지 폴더를 새 편집 작업으로 가져옵니다.",
+                                elem_classes=["editor-card-heading"],
                             )
-                            image_editor_folder_path = gr.Textbox(
-                                label="이미지 폴더",
-                                value=saved_settings.get(
-                                    "image_editor_source_path", ""
-                                ),
-                                placeholder=r"C:\새로 편집할 이미지 폴더",
-                                info=(
-                                    "하위 폴더의 이미지도 함께 불러옵니다. "
-                                    "원본 덮어쓰기를 켜면 이 폴더의 실제 파일이 변경될 수 있습니다."
-                                ),
-                                interactive=False,
-                            )
-                            image_editor_folder_button = gr.Button(
-                                "Explorer에서 폴더 선택", variant="secondary"
-                            )
+                            with gr.Row(elem_classes=["editor-folder-picker-row"]):
+                                image_editor_folder_path = gr.Textbox(
+                                    label="이미지 폴더",
+                                    value=saved_settings.get(
+                                        "image_editor_source_path", ""
+                                    ),
+                                    placeholder=r"C:\새로 편집할 이미지 폴더",
+                                    info=(
+                                        "하위 폴더의 이미지도 함께 불러옵니다. "
+                                        "원본 덮어쓰기를 켜면 이 폴더의 실제 파일이 변경될 수 있습니다."
+                                    ),
+                                    interactive=False,
+                                    scale=1,
+                                )
+                                image_editor_folder_button = gr.Button(
+                                    "폴더 선택",
+                                    variant="secondary",
+                                    scale=0,
+                                    min_width=112,
+                                    elem_classes=["editor-inline-action"],
+                                )
                             image_editor_font_dropdown = gr.Dropdown(
                                 choices=font_choices,
                                 label="추가 텍스트 기본 글꼴",
@@ -613,11 +638,19 @@ def create_layout(
                                 filterable=False,
                                 visible=True,
                             )
-                            with gr.Row():
+                            with gr.Row(elem_classes=["editor-card-actions"]):
                                 image_editor_create_button = gr.Button(
-                                    "이미지로 새 작업 만들기", variant="secondary"
+                                    "이미지로 새 작업 만들기",
+                                    variant="primary",
+                                    scale=0,
+                                    min_width=210,
                                 )
-                                image_editor_clear_button = gr.Button("가져오기 초기화")
+                                image_editor_clear_button = gr.Button(
+                                    "가져오기 초기화",
+                                    variant="secondary",
+                                    scale=0,
+                                    min_width=138,
+                                )
                             image_editor_session_select = gr.Dropdown(
                                 choices=[],
                                 label="가져온 이미지",
@@ -633,6 +666,7 @@ def create_layout(
                     label="상태",
                     interactive=False,
                     elem_id="image_editor_status_message",
+                    elem_classes=["editor-status-callout"],
                 )
 
             with gr.TabItem("Batch"):
