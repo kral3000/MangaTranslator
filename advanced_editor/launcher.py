@@ -150,6 +150,7 @@ EDITOR_ICON_PATHS = {
     "brush_square": '<rect x="5" y="5" width="14" height="14" rx="1"/>',
     "bold": '<path d="M7 4h6a4 4 0 0 1 0 8H7zM7 12h7a4 4 0 0 1 0 8H7z"/>',
     "italic": '<path d="M10 4h8M6 20h8M14 4L10 20"/>',
+    "bold_italic": '<path d="M3 5h5a3 3 0 0 1 0 6H3zM3 11h5.5a3 3 0 0 1 0 6H3z"/><path d="M16 5h5M13 19h5M19 5l-3 14"/>',
     "hand": '<path d="M7 12V7a2 2 0 0 1 4 0v3-5a2 2 0 0 1 4 0v5-3a2 2 0 0 1 4 0v7c0 5-3 7-7 7-3 0-5-2-7-5l-2-3a2 2 0 0 1 4-2z"/>',
     "fit": '<path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/>',
     "reset": '<path d="M4 8V3m0 0h5M4 3l4 4"/><path d="M5 13a8 8 0 1 0 2-7"/>',
@@ -2931,14 +2932,22 @@ class AdvancedEditorWindow(QMainWindow):
 
         style_row = QHBoxLayout()
         self.text_style_buttons: dict[str, QPushButton] = {}
-        for marker, label, tooltip in (
-            ("**", "굵게", "선택한 텍스트를 굵게 표시합니다."),
-            ("*", "기울임", "선택한 텍스트를 기울임으로 표시합니다."),
-            ("***", "굵게+기울임", "선택한 텍스트를 굵게+기울임으로 표시합니다."),
+        for marker, label, tooltip, icon_name in (
+            ("**", "굵게", "선택한 텍스트를 굵게 표시합니다.", "bold"),
+            ("*", "기울임", "선택한 텍스트를 기울임으로 표시합니다.", "italic"),
+            (
+                "***",
+                "굵게+기울임",
+                "선택한 텍스트를 굵게+기울임으로 표시합니다.",
+                "bold_italic",
+            ),
         ):
             button = QPushButton(label)
             button.setCheckable(True)
             button.setProperty("formatRole", "toggle")
+            button.setProperty("preserveIcon", True)
+            button.setIcon(_editor_icon(icon_name, "#334155"))
+            button.setIconSize(QSize(16, 16))
             button.setToolTip(tooltip)
             button.clicked.connect(
                 lambda checked=False, value=marker: self.wrap_translation_selection(
@@ -2954,7 +2963,7 @@ class AdvancedEditorWindow(QMainWindow):
         )
 
         options_row = QHBoxLayout()
-        options_row.setSpacing(8)
+        options_row.setSpacing(5)
         options_row.addWidget(QLabel("정렬"))
         self.alignment_control = QWidget(region_page)
         self.alignment_control.setObjectName("AlignmentControl")
@@ -2984,7 +2993,7 @@ class AdvancedEditorWindow(QMainWindow):
         options_row.addWidget(self.alignment_control)
 
         self.enabled_checkbox = QPushButton(
-            _editor_icon("render_region", "#475569"), "이 영역 렌더링"
+            _editor_icon("render_region", "#475569"), "영역 렌더링"
         )
         self.vertical_checkbox = QPushButton(
             _editor_icon("vertical_text", "#475569"), "세로쓰기"
@@ -2992,13 +3001,20 @@ class AdvancedEditorWindow(QMainWindow):
         for button in (self.enabled_checkbox, self.vertical_checkbox):
             button.setObjectName("OptionToggle")
             button.setCheckable(True)
+            button.setProperty("preserveIcon", True)
             button.setIconSize(QSize(15, 15))
+        option_width = max(
+            self.enabled_checkbox.sizeHint().width(),
+            self.vertical_checkbox.sizeHint().width(),
+        )
+        self.enabled_checkbox.setFixedWidth(option_width)
+        self.vertical_checkbox.setFixedWidth(option_width)
         self.enabled_checkbox.setToolTip("선택한 텍스트 영역을 결과 이미지에 렌더링합니다.")
         self.vertical_checkbox.setToolTip("선택한 영역의 글자를 세로로 배치합니다.")
         self.enabled_checkbox.toggled.connect(self.commit_region_form)
         self.vertical_checkbox.toggled.connect(self.commit_region_form)
-        options_row.addWidget(self.enabled_checkbox)
-        options_row.addWidget(self.vertical_checkbox)
+        options_row.addWidget(self.enabled_checkbox, 1)
+        options_row.addWidget(self.vertical_checkbox, 1)
         region_layout.addLayout(options_row)
 
         font_label = QLabel("글꼴")
@@ -3045,6 +3061,15 @@ class AdvancedEditorWindow(QMainWindow):
         self.stroke_width_spin.setSingleStep(0.5)
         metric_groups = (
             (
+                "글자 효과",
+                "크기 · 행간 · 외곽선",
+                (
+                    ("크기", "metric_type", self.font_size_spin),
+                    ("간격", "metric_spacing", self.line_spacing_spin),
+                    ("외곽선", "metric_outline", self.stroke_width_spin),
+                ),
+            ),
+            (
                 "위치 · 변형",
                 "좌표와 각도",
                 (
@@ -3060,15 +3085,6 @@ class AdvancedEditorWindow(QMainWindow):
                     ("너비", "metric_width", self.w_spin),
                     ("높이", "metric_height", self.h_spin),
                     ("여백", "metric_padding", self.padding_spin),
-                ),
-            ),
-            (
-                "글자 효과",
-                "크기 · 행간 · 외곽선",
-                (
-                    ("크기", "metric_type", self.font_size_spin),
-                    ("간격", "metric_spacing", self.line_spacing_spin),
-                    ("외곽선", "metric_outline", self.stroke_width_spin),
                 ),
             ),
         )
