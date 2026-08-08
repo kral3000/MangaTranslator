@@ -133,8 +133,8 @@ EDITOR_ICON_PATHS = {
     "brush": '<path d="M14 4l6 6-9 9H5v-6z"/><path d="M4 20c2 0 3-1 3-3"/>',
     "eraser": '<path d="M13 4l7 7-8 8H7l-4-4z"/><path d="M9 19h11"/>',
     "restore": '<path d="M4 8V3m0 0h5M4 3l4 4"/><path d="M5 13a8 8 0 1 0 2-7"/>',
-    "undo": '<path d="M8 5a8 8 0 1 1-4 7" stroke-width="2.4"/><path d="M8.5 1.5L2 7.5l6.5 6z" fill="currentColor" stroke="none"/>',
-    "redo": '<path d="M16 5a8 8 0 1 0 4 7" stroke-width="2.4"/><path d="M15.5 1.5L22 7.5l-6.5 6z" fill="currentColor" stroke="none"/>',
+    "undo": '<path d="M8.2 8A8 8 0 1 1 4 15.5" stroke-width="2.4"/><path d="M8.5 2L2 8l6.5 6z" fill="currentColor" stroke="none"/>',
+    "redo": '<path d="M15.8 8A8 8 0 1 0 20 15.5" stroke-width="2.4"/><path d="M15.5 2L22 8l-6.5 6z" fill="currentColor" stroke="none"/>',
     "history": '<circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/>',
     "save": '<path d="M4 3h13l3 3v15H4z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/>',
     "export": '<path d="M14 3h7v7M21 3l-10 10"/><path d="M18 14v7H3V6h7"/>',
@@ -160,8 +160,8 @@ EDITOR_ICON_PATHS = {
     "inpaint_eraser": '<path d="M12 5l7 7-7 7H7l-4-4zM9 19h10"/><path d="M18 3v3M16.5 4.5h3"/>',
     "paint_brush": '<path d="M15 4l5 5-9 10H5v-6zM4 20c2 0 3-1 3-3"/><path d="M15 4l-2 2 5 5 2-2"/>',
     "paint_eraser": '<path d="M13 4l7 7-8 8H7l-4-4zM9 19h11"/>',
-    "restore_brush": '<path d="M4 7V3h4M4 3l4 4M6 12a7 7 0 1 0 2-6"/><path d="M14 11l4 4-5 5H9v-4z"/>',
-    "restore_eraser": '<path d="M4 7V3h4M4 3l4 4M6 12a7 7 0 1 0 2-6"/><path d="M14 12l5 5-3 3h-5l-2-2z"/>',
+    "restore_brush": '<path d="M14 4l6 6-9 9H5v-6zM4 20c2 0 3-1 3-3"/>',
+    "restore_eraser": '<path d="M13 4l7 7-8 8H7l-4-4zM9 19h11"/><path d="M10 12h6"/>',
     "metric_x": '<path d="M4 12h16M4 12l3-3M4 12l3 3M20 12l-3-3M20 12l-3 3"/>',
     "metric_y": '<path d="M12 4v16M12 4l-3 3M12 4l3 3M12 20l-3-3M12 20l3-3"/>',
     "metric_width": '<path d="M4 7v10M20 7v10M4 12h16M7 9l-3 3 3 3M17 9l3 3-3 3"/>',
@@ -1843,6 +1843,10 @@ class AdvancedEditorWindow(QMainWindow):
                 background: transparent;
                 border: 0;
             }
+            QWidget#MetricFieldLead {
+                background: transparent;
+                border: 0;
+            }
             QLabel#MetricFieldLabel {
                 color: #475569;
                 font-size: 10px;
@@ -1892,6 +1896,9 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QToolButton#MetricStepButton:hover {
                 background: #dbeafe;
+            }
+            QToolButton#MetricStepButton[stepRole="up"] {
+                border-bottom: 1px solid #d5dde8;
             }
             QWidget#TextLayoutPage QCheckBox {
                 min-height: 18px;
@@ -2830,31 +2837,46 @@ class AdvancedEditorWindow(QMainWindow):
                 field_layout = QHBoxLayout(field)
                 field_layout.setContentsMargins(5, 2, 2, 2)
                 field_layout.setSpacing(3)
-                icon = QLabel(field)
+                lead = QWidget(field)
+                lead.setObjectName("MetricFieldLead")
+                lead.setFixedWidth(44)
+                lead_layout = QHBoxLayout(lead)
+                lead_layout.setContentsMargins(0, 0, 0, 0)
+                lead_layout.setSpacing(3)
+                icon = QLabel(lead)
                 icon.setObjectName("MetricIcon")
                 icon.setPixmap(_editor_icon(icon_name, "#94a3b8").pixmap(13, 13))
-                field_layout.addWidget(icon)
-                label = QLabel(field_label, field)
+                lead_layout.addWidget(icon)
+                label = QLabel(field_label, lead)
                 label.setObjectName("MetricFieldLabel")
-                field_layout.addWidget(label)
+                lead_layout.addWidget(label)
+                lead_layout.addStretch(1)
+                field_layout.addWidget(lead)
                 spin.setPrefix("")
                 spin.setAccessibleName(field_label)
                 spin.setToolTip(field_label)
                 field_layout.addWidget(spin, 1)
                 stepper = QWidget(field)
                 stepper.setObjectName("MetricStepper")
-                stepper.setFixedWidth(15)
+                stepper.setFixedSize(15, 26)
                 stepper_layout = QVBoxLayout(stepper)
                 stepper_layout.setContentsMargins(0, 0, 0, 0)
                 stepper_layout.setSpacing(0)
-                for icon_name, tooltip, callback in (
-                    ("chevron_up", f"{field_label} 증가", spin.stepUp),
-                    ("chevron_down", f"{field_label} 감소", spin.stepDown),
+                for icon_name, role, tooltip, callback in (
+                    ("chevron_up", "up", f"{field_label} 증가", spin.stepUp),
+                    (
+                        "chevron_down",
+                        "down",
+                        f"{field_label} 감소",
+                        spin.stepDown,
+                    ),
                 ):
                     button = QToolButton(stepper)
                     button.setObjectName("MetricStepButton")
-                    button.setIcon(_editor_icon(icon_name, "#64748b"))
-                    button.setIconSize(QSize(8, 8))
+                    button.setProperty("stepRole", role)
+                    button.setFixedSize(15, 13)
+                    button.setIcon(_editor_icon(icon_name, "#334155"))
+                    button.setIconSize(QSize(10, 10))
                     button.setToolTip(tooltip)
                     button.clicked.connect(callback)
                     stepper_layout.addWidget(button)

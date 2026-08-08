@@ -248,7 +248,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **Focus:** The border changes to Operational Blue while native focus and editing behavior remain intact.
 - **Selection:** Text selection uses the soft blue wash.
 - **Resizable Text:** Source and translated text fields start compact at 68px and 82px. Their lower-right diagonal grip adjusts height from 52–360px without changing the inspector width.
-- **Metric Fields:** Position, size, and effect values use a balanced 3×3 grid. Every field reads left-to-right as a quiet semantic icon, a short label, the value, then explicit stacked increment/decrement controls.
+- **Metric Fields:** Position, size, and effect values use a balanced 3×3 grid. Every field reserves the same width for its quiet semantic icon and short label so all value dividers align, then ends with centered stacked increment/decrement controls separated by a subtle rule.
 
 ### Tabs
 
