@@ -47,6 +47,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QAbstractSpinBox,
     QApplication,
     QButtonGroup,
     QCheckBox,
@@ -155,6 +156,12 @@ EDITOR_ICON_PATHS = {
     "align_left": '<path d="M4 6h16M4 10h11M4 14h16M4 18h9"/>',
     "align_center": '<path d="M4 6h16M7 10h10M4 14h16M8 18h8"/>',
     "align_right": '<path d="M4 6h16M9 10h11M4 14h16M11 18h9"/>',
+    "inpaint_brush": '<path d="M13 5l6 6-8 8H5v-6zM4 20c2 0 3-1 3-3"/><path d="M18 3v3M16.5 4.5h3"/>',
+    "inpaint_eraser": '<path d="M12 5l7 7-7 7H7l-4-4zM9 19h10"/><path d="M18 3v3M16.5 4.5h3"/>',
+    "paint_brush": '<path d="M15 4l5 5-9 10H5v-6zM4 20c2 0 3-1 3-3"/><path d="M15 4l-2 2 5 5 2-2"/>',
+    "paint_eraser": '<path d="M13 4l7 7-8 8H7l-4-4zM9 19h11"/>',
+    "restore_brush": '<path d="M4 7V3h4M4 3l4 4M6 12a7 7 0 1 0 2-6"/><path d="M14 11l4 4-5 5H9v-4z"/>',
+    "restore_eraser": '<path d="M4 7V3h4M4 3l4 4M6 12a7 7 0 1 0 2-6"/><path d="M14 12l5 5-3 3h-5l-2-2z"/>',
     "action": '<path d="M5 12h14M14 6l6 6-6 6"/>',
 }
 
@@ -1398,22 +1405,39 @@ class AdvancedEditorWindow(QMainWindow):
         tool_icons = {
             "select": "select",
             "textbox": "textbox",
-            "inpaint_brush": "brush",
-            "inpaint_eraser": "eraser",
-            "paint_brush": "brush",
-            "paint_eraser": "eraser",
-            "restore_brush": "restore",
-            "restore_eraser": "eraser",
+            "inpaint_brush": "inpaint_brush",
+            "inpaint_eraser": "inpaint_eraser",
+            "paint_brush": "paint_brush",
+            "paint_eraser": "paint_eraser",
+            "restore_brush": "restore_brush",
+            "restore_eraser": "restore_eraser",
         }
-        for key, label in TOOLS.items():
-            action = QAction(
-                _editor_icon(tool_icons[key]), TOOL_RAIL_LABELS[key], self
-            )
-            action.setToolTip(label)
-            action.setCheckable(True)
-            action.triggered.connect(lambda checked=False, tool=key: self.set_tool(tool))
-            self.tool_actions[key] = action
-            tool_toolbar.addAction(action)
+        tool_groups = (
+            ("기본", ("select", "textbox")),
+            ("인페인팅", ("inpaint_brush", "inpaint_eraser")),
+            ("그리기", ("paint_brush", "paint_eraser")),
+            ("원본 복구", ("restore_brush", "restore_eraser")),
+        )
+        for group_index, (group_label, tool_keys) in enumerate(tool_groups):
+            if group_index:
+                divider = QFrame(tool_toolbar)
+                divider.setObjectName("ToolRailDivider")
+                divider.setFixedHeight(1)
+                tool_toolbar.addWidget(divider)
+            section_label = QLabel(group_label, tool_toolbar)
+            section_label.setObjectName("ToolRailSection")
+            tool_toolbar.addWidget(section_label)
+            for key in tool_keys:
+                action = QAction(
+                    _editor_icon(tool_icons[key]), TOOL_RAIL_LABELS[key], self
+                )
+                action.setToolTip(TOOLS[key])
+                action.setCheckable(True)
+                action.triggered.connect(
+                    lambda checked=False, tool=key: self.set_tool(tool)
+                )
+                self.tool_actions[key] = action
+                tool_toolbar.addAction(action)
         self.tool_actions["select"].setChecked(True)
 
         action_toolbar = QToolBar("작업", self)
@@ -1721,16 +1745,28 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #111827;
                 border: 0;
                 border-right: 1px solid #263244;
-                spacing: 4px;
-                padding: 12px 9px;
+                spacing: 3px;
+                padding: 9px 9px;
+            }
+            QToolBar#ToolRail QLabel#ToolRailSection {
+                color: #718096;
+                background: transparent;
+                font-size: 10px;
+                font-weight: 700;
+                padding: 4px 10px 2px 10px;
+            }
+            QToolBar#ToolRail QFrame#ToolRailDivider {
+                background: #263244;
+                border: 0;
+                margin: 5px 10px 3px 10px;
             }
             QToolBar#ToolRail QToolButton {
                 color: #cbd5e1;
                 background: transparent;
                 border: 1px solid transparent;
                 border-radius: 6px;
-                min-height: 26px;
-                padding: 8px 10px;
+                min-height: 24px;
+                padding: 7px 10px;
                 min-width: 142px;
                 text-align: left;
             }
@@ -1787,11 +1823,23 @@ class AdvancedEditorWindow(QMainWindow):
                 min-height: 18px;
                 padding: 5px 7px;
             }
+            QWidget#TextLayoutPage QPushButton[formatRole="toggle"]:checked {
+                background: #dbeafe;
+                color: #1d4ed8;
+                border-color: #60a5fa;
+                font-weight: 700;
+            }
             QWidget#TextLayoutPage QComboBox,
             QWidget#TextLayoutPage QSpinBox,
             QWidget#TextLayoutPage QDoubleSpinBox {
                 min-height: 18px;
                 padding: 4px 6px;
+            }
+            QWidget#TextLayoutPage QSpinBox,
+            QWidget#TextLayoutPage QDoubleSpinBox {
+                background: #f8fafc;
+                padding-left: 8px;
+                padding-right: 8px;
             }
             QWidget#TextLayoutPage QCheckBox {
                 min-height: 18px;
@@ -2206,6 +2254,9 @@ class AdvancedEditorWindow(QMainWindow):
     def _set_color_button(button: QPushButton, value: str) -> None:
         color = QColor(value)
         foreground = "#ffffff" if color.lightness() < 140 else "#172033"
+        label = str(button.property("colorLabel") or button.text())
+        button.setText(f"{label}  {color.name().upper()}")
+        button.setAccessibleName(f"{label}, 현재 색상 {color.name().upper()}")
         button.setStyleSheet(
             f"background: {color.name()}; color: {foreground}; "
             f"border-color: {foreground};"
@@ -2594,19 +2645,28 @@ class AdvancedEditorWindow(QMainWindow):
         region_layout.addWidget(self.translation_edit)
 
         style_row = QHBoxLayout()
-        bold_button = QPushButton("굵게")
-        bold_button.setToolTip("선택한 텍스트를 굵게 표시합니다.")
-        bold_button.clicked.connect(lambda: self.wrap_translation_selection("**"))
-        italic_button = QPushButton("기울임")
-        italic_button.setToolTip("선택한 텍스트를 기울임으로 표시합니다.")
-        italic_button.clicked.connect(lambda: self.wrap_translation_selection("*"))
-        bold_italic_button = QPushButton("굵게+기울임")
-        bold_italic_button.setToolTip("선택한 텍스트를 굵게+기울임으로 표시합니다.")
-        bold_italic_button.clicked.connect(lambda: self.wrap_translation_selection("***"))
-        style_row.addWidget(bold_button)
-        style_row.addWidget(italic_button)
-        style_row.addWidget(bold_italic_button)
+        self.text_style_buttons: dict[str, QPushButton] = {}
+        for marker, label, tooltip in (
+            ("**", "굵게", "선택한 텍스트를 굵게 표시합니다."),
+            ("*", "기울임", "선택한 텍스트를 기울임으로 표시합니다."),
+            ("***", "굵게+기울임", "선택한 텍스트를 굵게+기울임으로 표시합니다."),
+        ):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setProperty("formatRole", "toggle")
+            button.setToolTip(tooltip)
+            button.clicked.connect(
+                lambda checked=False, value=marker: self.wrap_translation_selection(
+                    value
+                )
+            )
+            self.text_style_buttons[marker] = button
+            style_row.addWidget(button)
         region_layout.addLayout(style_row)
+        self.translation_edit.textChanged.connect(self._sync_text_style_buttons)
+        self.translation_edit.selectionChanged.connect(
+            self._sync_text_style_buttons
+        )
 
         options_row = QHBoxLayout()
         options_row.setSpacing(8)
@@ -2646,11 +2706,11 @@ class AdvancedEditorWindow(QMainWindow):
         options_row.addWidget(self.vertical_checkbox)
         region_layout.addLayout(options_row)
 
-        metrics_label = QLabel("위치 · 글자 모양")
-        metrics_label.setObjectName("CompactSectionLabel")
-        region_layout.addWidget(metrics_label)
+        font_label = QLabel("글꼴")
+        font_label.setObjectName("CompactSectionLabel")
+        region_layout.addWidget(font_label)
         metrics_grid = QGridLayout()
-        metrics_grid.setHorizontalSpacing(7)
+        metrics_grid.setHorizontalSpacing(5)
         metrics_grid.setVerticalSpacing(5)
         self.x_spin = self._spin(0, 99999)
         self.y_spin = self._spin(0, 99999)
@@ -2666,22 +2726,42 @@ class AdvancedEditorWindow(QMainWindow):
         self.line_spacing_spin = self._double_spin(0.2, 4.0)
         self.padding_spin = self._double_spin(0.0, 80.0)
         self.stroke_width_spin = self._double_spin(0.0, 20.0)
+        for spin in (
+            self.x_spin,
+            self.y_spin,
+            self.w_spin,
+            self.h_spin,
+            self.font_size_spin,
+            self.rotation_spin,
+            self.line_spacing_spin,
+            self.padding_spin,
+            self.stroke_width_spin,
+        ):
+            spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+            spin.setAlignment(Qt.AlignmentFlag.AlignRight)
+            spin.setKeyboardTracking(False)
+        self.rotation_spin.setSuffix("°")
+        self.rotation_spin.setSingleStep(1.0)
+        self.line_spacing_spin.setSingleStep(0.1)
+        self.padding_spin.setSingleStep(0.5)
+        self.stroke_width_spin.setSingleStep(0.5)
         metrics = (
-            ("X", self.x_spin, "Y", self.y_spin),
-            ("너비", self.w_spin, "높이", self.h_spin),
-            ("글자 크기", self.font_size_spin, "회전", self.rotation_spin),
-            ("줄/글자 간격", self.line_spacing_spin, "여백", self.padding_spin),
-            ("외곽선", self.stroke_width_spin, "", None),
+            ("X", self.x_spin),
+            ("Y", self.y_spin),
+            ("너비", self.w_spin),
+            ("높이", self.h_spin),
+            ("크기", self.font_size_spin),
+            ("회전", self.rotation_spin),
+            ("간격", self.line_spacing_spin),
+            ("여백", self.padding_spin),
+            ("외곽선", self.stroke_width_spin),
         )
-        for row, (left_label, left_spin, right_label, right_spin) in enumerate(metrics):
-            metrics_grid.addWidget(QLabel(left_label), row, 0)
-            metrics_grid.addWidget(left_spin, row, 1)
-            if right_spin is not None:
-                metrics_grid.addWidget(QLabel(right_label), row, 2)
-                metrics_grid.addWidget(right_spin, row, 3)
-        metrics_grid.setColumnStretch(1, 1)
-        metrics_grid.setColumnStretch(3, 1)
-        region_layout.addLayout(metrics_grid)
+        for index, (label, spin) in enumerate(metrics):
+            spin.setPrefix(f"{label}  ")
+            spin.setAccessibleName(label)
+            metrics_grid.addWidget(spin, index // 3, index % 3)
+        for column in range(3):
+            metrics_grid.setColumnStretch(column, 1)
 
         font_row = QHBoxLayout()
         font_row.addWidget(QLabel("글꼴 가족"))
@@ -2711,10 +2791,20 @@ class AdvancedEditorWindow(QMainWindow):
         region_layout.addLayout(font_style_row)
         self.populate_font_combo()
 
+        metrics_label = QLabel("위치 · 크기")
+        metrics_label.setObjectName("CompactSectionLabel")
+        region_layout.addWidget(metrics_label)
+        region_layout.addLayout(metrics_grid)
+
+        color_label = QLabel("색상")
+        color_label.setObjectName("CompactSectionLabel")
+        region_layout.addWidget(color_label)
         color_row = QHBoxLayout()
         self.font_color_button = QPushButton("글자 색")
+        self.font_color_button.setProperty("colorLabel", "글자 색")
         self.font_color_button.clicked.connect(self.choose_font_color)
         self.stroke_color_button = QPushButton("외곽선 색")
+        self.stroke_color_button.setProperty("colorLabel", "외곽선 색")
         self.stroke_color_button.clicked.connect(self.choose_stroke_color)
         color_row.addWidget(self.font_color_button)
         color_row.addWidget(self.stroke_color_button)
@@ -4209,6 +4299,7 @@ class AdvancedEditorWindow(QMainWindow):
                 self.font_family_combo,
                 self.font_style_combo,
                 self.alignment_control,
+                *self.text_style_buttons.values(),
             ):
                 widget.setEnabled(enabled)
             if region is None:
@@ -4666,6 +4757,7 @@ class AdvancedEditorWindow(QMainWindow):
         self._push_history("텍스트 강조 변경")
         cursor = self.translation_edit.textCursor()
         if cursor.hasSelection():
+            selection_start = cursor.selectionStart()
             selected = cursor.selectedText().replace("\u2029", "\n")
             if (
                 len(selected) >= len(marker) * 2
@@ -4676,7 +4768,13 @@ class AdvancedEditorWindow(QMainWindow):
             else:
                 replacement = f"{marker}{selected}{marker}"
             cursor.insertText(replacement)
+            cursor.setPosition(selection_start)
+            cursor.setPosition(
+                selection_start + len(replacement),
+                QTextCursor.MoveMode.KeepAnchor,
+            )
             self.translation_edit.setTextCursor(cursor)
+            self._sync_text_style_buttons()
             return
         text = self.translation_edit.toPlainText()
         if text.strip():
@@ -4697,6 +4795,33 @@ class AdvancedEditorWindow(QMainWindow):
             len(marker),
         )
         self.translation_edit.setTextCursor(cursor)
+
+    @staticmethod
+    def _text_style_marker(text: str) -> str:
+        value = str(text or "").strip()
+        for marker in ("***", "**", "*"):
+            if (
+                len(value) > len(marker) * 2
+                and value.startswith(marker)
+                and value.endswith(marker)
+            ):
+                return marker
+        return ""
+
+    def _sync_text_style_buttons(self) -> None:
+        if not hasattr(self, "text_style_buttons"):
+            return
+        cursor = self.translation_edit.textCursor()
+        target = (
+            cursor.selectedText().replace("\u2029", "\n")
+            if cursor.hasSelection()
+            else self.translation_edit.toPlainText()
+        )
+        active_marker = self._text_style_marker(target)
+        for marker, button in self.text_style_buttons.items():
+            button.blockSignals(True)
+            button.setChecked(marker == active_marker)
+            button.blockSignals(False)
 
     def choose_paint_color(self) -> None:
         color = QColorDialog.getColor(QColor(self.paint_color), self, "브러시 색 선택")

@@ -233,6 +233,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **Shape:** 142px minimum action width inside a 160–180px fixed toolbar; each action uses 8px × 10px padding and a 6px radius.
 - **States:** Default is quiet slate on transparent ink; hover brightens the label and darkens the row; checked state fills with Operational Blue and adds a lighter blue border.
 - **Behavior:** Actions remain mutually legible through checked state, icons, full visible labels, and tooltips; color is not the sole signal. Never shorten `인페인팅 브러시`, `인페인팅 마스크 지우개`, or the restore/paint tools to an ambiguous `지우기`.
+- **Grouping:** Basic, inpainting, painting, and original-restore tools use restrained section labels and one-pixel dividers. Each brush/eraser family has a distinct composite icon instead of repeating the same generic glyph.
 
 ### Buttons
 
@@ -270,6 +271,8 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 - **Context:** A compact blue-tinted header names the active tool and gives one sentence of immediate guidance.
 - **Sections:** Text and layout share one compact tab because they are adjusted together; tool settings use the second tab. Position, size, typography, and spacing values use a two-column control grid so the complete text-editing path fits without scrolling at 1200×760. Selecting a tool opens the most relevant tab and nested settings tab without preventing manual navigation.
 - **Alignment:** Horizontal text alignment uses a persistent three-button icon group—left, center, right—with a single checked state and tooltips, matching familiar document-editor controls instead of hiding the choices in a dropdown.
+- **Typography flow:** Font family and weight sit directly below alignment and render/orientation state, followed by a divided position/size grid. Numeric fields are arrowless, keyboard- and wheel-editable, and carry compact inline labels in a 3×3 grid.
+- **Inline emphasis and color:** Bold, italic, and bold-italic actions show a checked state derived from the selected or whole edited text. Text and outline color controls show both the actual swatch surface and the current uppercase HEX value with contrast-safe labels and icons.
 - **Image List:** Multi-image jobs show the current page and selection count, offer select-all and clear-selection actions, and can collapse from the top action bar to return width to the canvas.
 
 ## Do's and Don'ts

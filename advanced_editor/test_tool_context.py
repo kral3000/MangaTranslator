@@ -6,6 +6,14 @@ from advanced_editor.launcher import AdvancedEditorWindow
 
 
 class ToolContextTest(TestCase):
+    def test_text_style_marker_drives_pressed_button_feedback(self) -> None:
+        self.assertEqual(AdvancedEditorWindow._text_style_marker("**굵게**"), "**")
+        self.assertEqual(AdvancedEditorWindow._text_style_marker("*기울임*"), "*")
+        self.assertEqual(
+            AdvancedEditorWindow._text_style_marker("***둘 다***"), "***"
+        )
+        self.assertEqual(AdvancedEditorWindow._text_style_marker("일반"), "")
+
     def test_alignment_buttons_keep_the_existing_session_values(self) -> None:
         window = SimpleNamespace(
             alignment_buttons={
