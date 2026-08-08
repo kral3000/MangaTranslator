@@ -190,7 +190,7 @@ The palette uses dark ink for application chrome, cool paper neutrals for editab
 - **Body** (400, 12px): Field values, tabs, toolbar actions, and supporting copy.
 - **Label** (600, 12px): Inspector labels and compact section identifiers.
 - **Action** (700, 12px): Push buttons and the zoom readout.
-- **Canvas Index** (700, 10px): Small numbered region badges drawn directly over the image.
+- **Canvas Index** (700, 8px): Small numbered region tabs attached to each box's top-left border.
 
 ### Named Rules
 
@@ -262,7 +262,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 
 - **Zoom Bar:** A dark strip with compact 4px controls, white labels, and explicit pan, zoom, fit, and 100% actions.
 - **Scrollbars:** 18px native bars with 36px minimum handles; handles turn blue on hover.
-- **Region Overlays:** Selected regions use a 2px blue outline and visible resize handles; enabled unselected regions use a 1px translucent amber outline; disabled regions use gray. Each number uses a compact dark tab attached directly above the region's top-left corner. When that tab would leave the viewport or collide with another region or badge, the layout scores positions above, below, left, and right, prefers page-exterior canvas space, and uses the least-obstructive visible fallback.
+- **Region Overlays:** Selected regions use a 2px blue outline and visible resize handles; enabled unselected regions use a 1px translucent amber outline; disabled regions use gray. Every number uses the same compact dark tab fixed to the box's top-left border with a one-pixel overlap, making tab and outline read as one component. Badge placement never moves dynamically.
 
 ### Status and Help
 
