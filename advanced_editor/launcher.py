@@ -41,6 +41,7 @@ from PyQt6.QtGui import (
     QKeySequence,
     QMouseEvent,
     QPainter,
+    QPainterPath,
     QPen,
     QPixmap,
     QTextCursor,
@@ -257,6 +258,108 @@ class ResizableTextEdit(QTextEdit):
         bottom = self.viewport().height() - 4
         for offset in (4, 8, 12):
             painter.drawLine(right - offset, bottom, right, bottom - offset)
+
+
+class ModernComboBox(QComboBox):
+    """Platform-independent combo field with a centered line chevron."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._popup_open = False
+        self.setMinimumHeight(34)
+
+    def showPopup(self) -> None:
+        self._popup_open = True
+        self.update()
+        super().showPopup()
+
+    def hidePopup(self) -> None:
+        super().hidePopup()
+        self._popup_open = False
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        outer = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = 6.0
+        path = QPainterPath()
+        path.addRoundedRect(outer, radius, radius)
+
+        if not self.isEnabled():
+            field_color = QColor("#f1f5f9")
+            button_color = QColor("#e2e8f0")
+            text_color = QColor("#94a3b8")
+            border_color = QColor("#d5dde8")
+        else:
+            field_color = QColor("#ffffff")
+            button_color = QColor(
+                "#dbeafe" if self._popup_open or self.underMouse() else "#edf2f7"
+            )
+            text_color = QColor("#172033")
+            border_color = QColor(
+                "#2563eb"
+                if self.hasFocus() or self._popup_open
+                else "#94a3b8"
+                if self.underMouse()
+                else "#c4cfdd"
+            )
+
+        painter.fillPath(path, field_color)
+        button_left = outer.right() - 28.0
+        painter.save()
+        painter.setClipPath(path)
+        painter.fillRect(
+            QRectF(button_left, outer.top(), 28.5, outer.height()), button_color
+        )
+        painter.restore()
+        painter.setPen(QPen(border_color, 1))
+        painter.drawPath(path)
+        painter.setPen(QPen(QColor("#cbd5e1"), 1))
+        painter.drawLine(
+            QPointF(button_left, outer.top() + 1),
+            QPointF(button_left, outer.bottom() - 1),
+        )
+
+        text_rect = QRectF(
+            outer.left() + 8,
+            outer.top(),
+            max(0.0, button_left - outer.left() - 16),
+            outer.height(),
+        )
+        text = self.fontMetrics().elidedText(
+            self.currentText(),
+            Qt.TextElideMode.ElideRight,
+            max(0, int(text_rect.width())),
+        )
+        painter.setPen(text_color)
+        painter.drawText(
+            text_rect,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            text,
+        )
+
+        center_x = button_left + 14.0
+        center_y = outer.center().y()
+        direction = -1.0 if self._popup_open else 1.0
+        painter.setPen(
+            QPen(
+                QColor("#475569" if self.isEnabled() else "#94a3b8"),
+                1.8,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin,
+            )
+        )
+        painter.drawLine(
+            QPointF(center_x - 4, center_y - 2 * direction),
+            QPointF(center_x, center_y + 2 * direction),
+        )
+        painter.drawLine(
+            QPointF(center_x, center_y + 2 * direction),
+            QPointF(center_x + 4, center_y - 2 * direction),
+        )
 
 
 class AutoHideStatusLabel(QLabel):
@@ -2207,37 +2310,9 @@ class AdvancedEditorWindow(QMainWindow):
             }
             """
         )
-        combo_arrow_path = (
-            Path(__file__).with_name("combo_chevron_down.svg").resolve().as_posix()
-        )
         self.setStyleSheet(
             self.styleSheet()
             + """
-            QComboBox {
-                padding: 6px 34px 6px 8px;
-            }
-            QComboBox:hover {
-                border-color: #94a3b8;
-            }
-            QComboBox::drop-down {
-                subcontrol-origin: border;
-                subcontrol-position: top right;
-                width: 28px;
-                background: #edf2f7;
-                border: 0;
-                border-left: 1px solid #cbd5e1;
-                border-top-right-radius: 5px;
-                border-bottom-right-radius: 5px;
-            }
-            QComboBox::drop-down:hover,
-            QComboBox::drop-down:on {
-                background: #dbeafe;
-            }
-            QComboBox::down-arrow {
-                image: url("%s");
-                width: 12px;
-                height: 12px;
-            }
             QComboBox QAbstractItemView {
                 background: #ffffff;
                 color: #172033;
@@ -2249,7 +2324,6 @@ class AdvancedEditorWindow(QMainWindow):
                 selection-color: #1d4ed8;
             }
             """
-            % combo_arrow_path
         )
 
     def _help_label(self, text: str) -> QLabel:
@@ -2688,7 +2762,7 @@ class AdvancedEditorWindow(QMainWindow):
         region_layout.addWidget(QLabel("텍스트 영역"))
         region_selector_row = QHBoxLayout()
         region_selector_row.setSpacing(6)
-        self.region_combo = QComboBox()
+        self.region_combo = ModernComboBox()
         self.region_combo.currentIndexChanged.connect(self._on_region_combo_changed)
         region_selector_row.addWidget(self.region_combo, 1)
         add_button = QPushButton("추가")
@@ -2904,7 +2978,7 @@ class AdvancedEditorWindow(QMainWindow):
 
         font_row = QHBoxLayout()
         font_row.addWidget(QLabel("글꼴 가족"))
-        self.font_family_combo = QComboBox()
+        self.font_family_combo = ModernComboBox()
         self.font_family_combo.setMinimumContentsLength(18)
         self.font_family_combo.setToolTip(
             "fonts 폴더와 모든 하위 폴더의 글꼴을 이름이 같은 가족끼리 묶어서 표시합니다."
@@ -2920,7 +2994,7 @@ class AdvancedEditorWindow(QMainWindow):
 
         font_style_row = QHBoxLayout()
         font_style_row.addWidget(QLabel("굵기/스타일"))
-        self.font_style_combo = QComboBox()
+        self.font_style_combo = ModernComboBox()
         self.font_style_combo.setMinimumContentsLength(18)
         self.font_style_combo.setToolTip(
             "선택한 글꼴 가족에서 Regular, Light, Bold, Italic 등의 파일을 고릅니다."
@@ -3006,7 +3080,7 @@ class AdvancedEditorWindow(QMainWindow):
         layout.addWidget(self.auto_ocr_checkbox)
 
         layout.addWidget(QLabel("박스 검출 방식"))
-        self.detector_combo = QComboBox()
+        self.detector_combo = ModernComboBox()
         self.detector_combo.addItem("기본값 - DBNet+ResNet34", "default")
         self.detector_combo.addItem("YOLO 1 말풍선 (내장)", "yolo_1")
         self.detector_combo.addItem("YOLO 2 말풍선 (내장)", "yolo_2")
@@ -3051,7 +3125,7 @@ class AdvancedEditorWindow(QMainWindow):
         ))
 
         layout.addWidget(QLabel("OCR 모델"))
-        self.ocr_model_combo = QComboBox()
+        self.ocr_model_combo = ModernComboBox()
         self.ocr_model_combo.addItem("MOCR", "manga_ocr")
         self.ocr_model_combo.addItem("48px OCR", "48px")
         self.ocr_model_combo.addItem("LLM OCR", "llm_ocr")
@@ -3129,7 +3203,7 @@ class AdvancedEditorWindow(QMainWindow):
             return widget
 
         layout.addWidget(QLabel("인페인팅 방식"))
-        self.inpaint_method_combo = QComboBox()
+        self.inpaint_method_combo = ModernComboBox()
         self.inpaint_method_combo.addItem("OpenCV", "opencv")
         self.inpaint_method_combo.addItem("LAMA Large", "lama_large")
         self.inpaint_method_combo.addItem("Flux.2 Klein 4B", "flux_klein_4b")
@@ -3145,7 +3219,7 @@ class AdvancedEditorWindow(QMainWindow):
             "방식입니다. 고사양 그래픽카드가 필요합니다."
         ))
 
-        self.inpaint_device_combo = QComboBox()
+        self.inpaint_device_combo = ModernComboBox()
         self.inpaint_device_combo.addItem("자동", "auto")
         self.inpaint_device_combo.addItem("CPU", "cpu")
         self.inpaint_device_combo.addItem("CUDA", "cuda")
@@ -3219,13 +3293,13 @@ class AdvancedEditorWindow(QMainWindow):
         option_widget("flux_klein", self.upscale_crop_checkbox)
         option_widget("lama", self.force_torch_checkbox)
 
-        self.lama_precision_combo = QComboBox()
+        self.lama_precision_combo = ModernComboBox()
         self.lama_precision_combo.addItem("BF16", "bf16")
         self.lama_precision_combo.addItem("FP16", "fp16")
         self.lama_precision_combo.addItem("FP32", "fp32")
         option_row("lama", "LAMA 정밀도", self.lama_precision_combo)
 
-        self.kontext_backend_combo = QComboBox()
+        self.kontext_backend_combo = ModernComboBox()
         self.kontext_backend_combo.addItem("SDNQ", "sdnq")
         self.kontext_backend_combo.addItem("Nunchaku", "nunchaku")
         option_row("flux_kontext", "Flux Kontext 백엔드", self.kontext_backend_combo)
@@ -3246,7 +3320,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.opencv_radius_spin.setRange(1.0, 30.0)
         self.opencv_radius_spin.setValue(float(saved.get("opencv_radius", 3.0)))
         option_row("opencv", "OpenCV 반경", self.opencv_radius_spin)
-        self.opencv_algorithm_combo = QComboBox()
+        self.opencv_algorithm_combo = ModernComboBox()
         self.opencv_algorithm_combo.addItem("Telea", "telea")
         self.opencv_algorithm_combo.addItem("Navier-Stokes", "ns")
         option_row("opencv", "OpenCV 알고리즘", self.opencv_algorithm_combo)
@@ -3342,7 +3416,7 @@ class AdvancedEditorWindow(QMainWindow):
         summary.setWordWrap(True)
         layout.addWidget(summary)
 
-        self.editor_translation_source_combo = QComboBox()
+        self.editor_translation_source_combo = ModernComboBox()
         self.editor_translation_source_combo.addItem("원문 사용", "source")
         self.editor_translation_source_combo.addItem("현재 편집 텍스트 사용", "translation")
         source_row = QHBoxLayout()

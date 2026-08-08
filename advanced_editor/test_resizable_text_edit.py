@@ -7,10 +7,31 @@ from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
-from advanced_editor.launcher import AutoHideStatusLabel, ResizableTextEdit
+from advanced_editor.launcher import (
+    AutoHideStatusLabel,
+    ModernComboBox,
+    ResizableTextEdit,
+)
 
 
 class ResizableTextEditTest(TestCase):
+    def test_modern_combo_paints_its_own_expansion_surface(self) -> None:
+        app = QApplication.instance() or QApplication([])
+        combo = ModernComboBox()
+        combo.addItems(["첫 번째", "두 번째"])
+        combo.resize(180, 34)
+        combo.show()
+        app.processEvents()
+
+        image = combo.grab().toImage()
+        self.assertNotEqual(image.pixelColor(10, 17), image.pixelColor(166, 5))
+        combo.showPopup()
+        app.processEvents()
+        self.assertTrue(combo._popup_open)
+        combo.hidePopup()
+        self.assertFalse(combo._popup_open)
+        combo.close()
+
     def test_dragging_the_corner_changes_the_height(self) -> None:
         app = QApplication.instance() or QApplication([])
         edit = ResizableTextEdit(68)
