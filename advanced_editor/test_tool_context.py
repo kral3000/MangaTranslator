@@ -17,8 +17,7 @@ class ToolContextTest(TestCase):
 
         AdvancedEditorWindow._sync_tool_context(window, "inpaint_brush")
 
-        window.inspector_sections.setCurrentIndex.assert_called_once_with(2)
+        window.inspector_sections.setCurrentIndex.assert_called_once_with(1)
         window.settings_tabs.setCurrentIndex.assert_called_once_with(1)
         window.context_tool_label.setText.assert_called_once_with("인페인팅 브러시")
         window.paint_color_toolbar_button.setVisible.assert_called_once_with(False)
-

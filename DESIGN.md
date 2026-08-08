@@ -268,7 +268,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 ### Contextual Inspector
 
 - **Context:** A compact blue-tinted header names the active tool and gives one sentence of immediate guidance.
-- **Sections:** Region/text, typography/layout, and tool settings live in three stable top tabs instead of one continuous settings wall. Selecting a tool opens the most relevant tab and nested settings tab without preventing manual navigation.
+- **Sections:** Text and layout share one compact tab because they are adjusted together; tool settings use the second tab. Position, size, typography, and spacing values use a two-column control grid so the complete text-editing path fits without scrolling at 1200×760. Selecting a tool opens the most relevant tab and nested settings tab without preventing manual navigation.
 - **Image List:** Multi-image jobs show the current page and selection count, offer select-all and clear-selection actions, and can collapse from the top action bar to return width to the canvas.
 
 ## Do's and Don'ts

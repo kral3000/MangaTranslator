@@ -1771,6 +1771,28 @@ class AdvancedEditorWindow(QMainWindow):
                 font-size: 11px;
                 font-weight: 400;
             }
+            QLabel#CompactSectionLabel {
+                color: #172033;
+                font-size: 12px;
+                font-weight: 700;
+                padding-top: 3px;
+                padding-bottom: 2px;
+                border-bottom: 1px solid #d5dde8;
+            }
+            QWidget#TextLayoutPage QPushButton {
+                min-height: 18px;
+                padding: 5px 7px;
+            }
+            QWidget#TextLayoutPage QComboBox,
+            QWidget#TextLayoutPage QSpinBox,
+            QWidget#TextLayoutPage QDoubleSpinBox {
+                min-height: 18px;
+                padding: 4px 6px;
+            }
+            QWidget#TextLayoutPage QCheckBox {
+                min-height: 18px;
+                spacing: 5px;
+            }
             QWidget#CanvasPanel {
                 background: #1c222b;
             }
@@ -2152,6 +2174,16 @@ class AdvancedEditorWindow(QMainWindow):
             button.setIcon(_editor_icon(self._button_icon_name(button.text()), color))
             button.setIconSize(QSize(17, 17))
 
+    @staticmethod
+    def _set_color_button(button: QPushButton, value: str) -> None:
+        color = QColor(value)
+        foreground = "#ffffff" if color.lightness() < 140 else "#172033"
+        button.setStyleSheet(
+            f"background: {color.name()}; color: {foreground}; "
+            f"border-color: {foreground};"
+        )
+        button.setIcon(_editor_icon("palette", foreground))
+
     def _apply_help_visibility(self) -> None:
         visible = bool(
             not hasattr(self, "show_help_checkbox")
@@ -2482,13 +2514,13 @@ class AdvancedEditorWindow(QMainWindow):
         panel.setMinimumWidth(340)
         panel.setMaximumWidth(450)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(16, 16, 16, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 12, 12, 14)
+        layout.setSpacing(8)
 
         context = QFrame(panel)
         context.setObjectName("InspectorContext")
         context_layout = QVBoxLayout(context)
-        context_layout.setContentsMargins(11, 9, 11, 9)
+        context_layout.setContentsMargins(10, 7, 10, 7)
         context_layout.setSpacing(2)
         self.context_tool_label = QLabel("선택")
         self.context_tool_label.setObjectName("ContextToolLabel")
@@ -2503,30 +2535,33 @@ class AdvancedEditorWindow(QMainWindow):
         self.inspector_sections.setObjectName("InspectorSections")
 
         region_page = QWidget()
+        region_page.setObjectName("TextLayoutPage")
         region_layout = QVBoxLayout(region_page)
-        region_layout.setContentsMargins(10, 12, 10, 14)
-        region_layout.setSpacing(9)
+        region_layout.setContentsMargins(9, 9, 9, 10)
+        region_layout.setSpacing(6)
         region_layout.addWidget(QLabel("텍스트 영역"))
+        region_selector_row = QHBoxLayout()
+        region_selector_row.setSpacing(6)
         self.region_combo = QComboBox()
         self.region_combo.currentIndexChanged.connect(self._on_region_combo_changed)
-        region_layout.addWidget(self.region_combo)
-
-        button_row = QHBoxLayout()
+        region_selector_row.addWidget(self.region_combo, 1)
         add_button = QPushButton("추가")
         add_button.clicked.connect(self.add_text_region)
         delete_button = QPushButton("삭제")
         delete_button.clicked.connect(self.delete_selected_region)
-        button_row.addWidget(add_button)
-        button_row.addWidget(delete_button)
-        region_layout.addLayout(button_row)
+        add_button.setFixedWidth(76)
+        delete_button.setFixedWidth(76)
+        region_selector_row.addWidget(add_button)
+        region_selector_row.addWidget(delete_button)
+        region_layout.addLayout(region_selector_row)
 
-        self.source_edit = ResizableTextEdit(68)
+        self.source_edit = ResizableTextEdit(52)
         self.source_edit.setReadOnly(True)
         region_layout.addWidget(QLabel("원문"))
         region_layout.addWidget(self.source_edit)
 
         region_layout.addWidget(QLabel("편집할 텍스트"))
-        self.translation_edit = ResizableTextEdit(82)
+        self.translation_edit = ResizableTextEdit(64)
         self.translation_edit.textChanged.connect(self._on_translation_text_changed)
         region_layout.addWidget(self.translation_edit)
 
@@ -2545,48 +2580,60 @@ class AdvancedEditorWindow(QMainWindow):
         style_row.addWidget(bold_italic_button)
         region_layout.addLayout(style_row)
 
-        align_row = QHBoxLayout()
-        align_row.addWidget(QLabel("정렬"))
+        options_row = QHBoxLayout()
+        options_row.setSpacing(8)
+        options_row.addWidget(QLabel("정렬"))
         self.alignment_combo = QComboBox()
         self.alignment_combo.addItem("왼쪽", "left")
         self.alignment_combo.addItem("가운데", "center")
         self.alignment_combo.addItem("오른쪽", "right")
         self.alignment_combo.currentIndexChanged.connect(self.commit_region_form)
-        align_row.addWidget(self.alignment_combo, 1)
-        region_layout.addLayout(align_row)
+        options_row.addWidget(self.alignment_combo, 1)
 
         self.enabled_checkbox = QCheckBox("이 영역 렌더링")
         self.vertical_checkbox = QCheckBox("세로쓰기")
         self.enabled_checkbox.stateChanged.connect(self.commit_region_form)
         self.vertical_checkbox.stateChanged.connect(self.commit_region_form)
-        region_layout.addWidget(self.enabled_checkbox)
-        region_layout.addWidget(self.vertical_checkbox)
-        region_layout.addStretch(1)
-        self.inspector_sections.addTab(region_page, "영역·텍스트")
+        options_row.addWidget(self.enabled_checkbox)
+        options_row.addWidget(self.vertical_checkbox)
+        region_layout.addLayout(options_row)
 
-        style_page = QWidget()
-        style_layout = QVBoxLayout(style_page)
-        style_layout.setContentsMargins(10, 12, 10, 14)
-        style_layout.setSpacing(9)
-
-        self.x_spin = self._spin("X", style_layout, 0, 99999)
-        self.y_spin = self._spin("Y", style_layout, 0, 99999)
-        self.w_spin = self._spin("너비", style_layout, 1, 99999)
-        self.h_spin = self._spin("높이", style_layout, 1, 99999)
-        self.font_size_spin = self._spin("글자 크기(px)", style_layout, 1, 999)
+        metrics_label = QLabel("위치 · 글자 모양")
+        metrics_label.setObjectName("CompactSectionLabel")
+        region_layout.addWidget(metrics_label)
+        metrics_grid = QGridLayout()
+        metrics_grid.setHorizontalSpacing(7)
+        metrics_grid.setVerticalSpacing(5)
+        self.x_spin = self._spin(0, 99999)
+        self.y_spin = self._spin(0, 99999)
+        self.w_spin = self._spin(1, 99999)
+        self.h_spin = self._spin(1, 99999)
+        self.font_size_spin = self._spin(1, 999)
         self.font_size_spin.setToolTip(
             "번역 결과에 실제 사용된 글자 크기를 유지합니다. "
             "값을 변경하면 자동 맞춤 없이 지정한 크기로 렌더링하며, "
             "박스에 들어가지 않는 큰 글자는 박스 바깥까지 표시합니다."
         )
-        self.rotation_spin = self._double_spin("회전", style_layout, -180.0, 180.0)
-        self.line_spacing_spin = self._double_spin(
-            "줄/글자 간격", style_layout, 0.2, 4.0
+        self.rotation_spin = self._double_spin(-180.0, 180.0)
+        self.line_spacing_spin = self._double_spin(0.2, 4.0)
+        self.padding_spin = self._double_spin(0.0, 80.0)
+        self.stroke_width_spin = self._double_spin(0.0, 20.0)
+        metrics = (
+            ("X", self.x_spin, "Y", self.y_spin),
+            ("너비", self.w_spin, "높이", self.h_spin),
+            ("글자 크기", self.font_size_spin, "회전", self.rotation_spin),
+            ("줄/글자 간격", self.line_spacing_spin, "여백", self.padding_spin),
+            ("외곽선", self.stroke_width_spin, "", None),
         )
-        self.padding_spin = self._double_spin("여백", style_layout, 0.0, 80.0)
-        self.stroke_width_spin = self._double_spin(
-            "외곽선 굵기", style_layout, 0.0, 20.0
-        )
+        for row, (left_label, left_spin, right_label, right_spin) in enumerate(metrics):
+            metrics_grid.addWidget(QLabel(left_label), row, 0)
+            metrics_grid.addWidget(left_spin, row, 1)
+            if right_spin is not None:
+                metrics_grid.addWidget(QLabel(right_label), row, 2)
+                metrics_grid.addWidget(right_spin, row, 3)
+        metrics_grid.setColumnStretch(1, 1)
+        metrics_grid.setColumnStretch(3, 1)
+        region_layout.addLayout(metrics_grid)
 
         font_row = QHBoxLayout()
         font_row.addWidget(QLabel("글꼴 가족"))
@@ -2602,7 +2649,7 @@ class AdvancedEditorWindow(QMainWindow):
         refresh_fonts_button = QPushButton("새로고침")
         refresh_fonts_button.clicked.connect(self.populate_font_combo)
         font_row.addWidget(refresh_fonts_button)
-        style_layout.addLayout(font_row)
+        region_layout.addLayout(font_row)
 
         font_style_row = QHBoxLayout()
         font_style_row.addWidget(QLabel("굵기/스타일"))
@@ -2613,7 +2660,7 @@ class AdvancedEditorWindow(QMainWindow):
         )
         self.font_style_combo.currentIndexChanged.connect(self._on_font_style_changed)
         font_style_row.addWidget(self.font_style_combo, 1)
-        style_layout.addLayout(font_style_row)
+        region_layout.addLayout(font_style_row)
         self.populate_font_combo()
 
         color_row = QHBoxLayout()
@@ -2621,14 +2668,11 @@ class AdvancedEditorWindow(QMainWindow):
         self.font_color_button.clicked.connect(self.choose_font_color)
         self.stroke_color_button = QPushButton("외곽선 색")
         self.stroke_color_button.clicked.connect(self.choose_stroke_color)
-        self.paint_color_button = QPushButton("브러시 색")
-        self.paint_color_button.clicked.connect(self.choose_paint_color)
         color_row.addWidget(self.font_color_button)
         color_row.addWidget(self.stroke_color_button)
-        color_row.addWidget(self.paint_color_button)
-        style_layout.addLayout(color_row)
-        style_layout.addStretch(1)
-        self.inspector_sections.addTab(style_page, "글자·배치")
+        region_layout.addLayout(color_row)
+        region_layout.addStretch(1)
+        self.inspector_sections.addTab(region_page, "텍스트 · 배치")
 
         settings_page = QWidget()
         settings_layout = QVBoxLayout(settings_page)
@@ -2641,13 +2685,16 @@ class AdvancedEditorWindow(QMainWindow):
         self.settings_tabs.addTab(self._build_editor_settings_tab(), "편집기 설정")
         settings_layout.addWidget(self.settings_tabs)
         self.inspector_sections.addTab(settings_page, "도구 설정")
+        self.inspector_sections.currentChanged.connect(
+            self._sync_inspector_page_size
+        )
         layout.addWidget(self.inspector_sections, 1)
+        self._sync_inspector_page_size(0)
 
         self.status_label = AutoHideStatusLabel("")
         self.status_label.setObjectName("StatusLabel")
         self.status_label.setWordWrap(True)
         self.status_label.setVisible(False)
-        layout.addStretch(1)
 
         scroll = QScrollArea()
         scroll.setObjectName("InspectorScroll")
@@ -3513,25 +3560,17 @@ class AdvancedEditorWindow(QMainWindow):
                 pass
         return self._default_font_choice()
 
-    def _spin(self, label: str, layout: QVBoxLayout, minimum: int, maximum: int) -> QSpinBox:
-        row = QHBoxLayout()
-        row.addWidget(QLabel(label))
+    def _spin(self, minimum: int, maximum: int) -> QSpinBox:
         spin = QSpinBox()
         spin.setRange(minimum, maximum)
         spin.valueChanged.connect(self.commit_region_form)
-        row.addWidget(spin)
-        layout.addLayout(row)
         return spin
 
-    def _double_spin(self, label: str, layout: QVBoxLayout, minimum: float, maximum: float) -> QDoubleSpinBox:
-        row = QHBoxLayout()
-        row.addWidget(QLabel(label))
+    def _double_spin(self, minimum: float, maximum: float) -> QDoubleSpinBox:
         spin = QDoubleSpinBox()
         spin.setRange(minimum, maximum)
         spin.setDecimals(1)
         spin.valueChanged.connect(self.commit_region_form)
-        row.addWidget(spin)
-        layout.addLayout(row)
         return spin
 
     def _register_font_descriptor(self, descriptor: dict[str, str]) -> None:
@@ -3784,37 +3823,37 @@ class AdvancedEditorWindow(QMainWindow):
             "inpaint_brush": (
                 "인페인팅 브러시",
                 "지울 부분을 칠한 뒤 인페인팅 설정에서 실행합니다.",
-                2,
+                1,
                 1,
             ),
             "inpaint_eraser": (
                 "인페인팅 마스크 지우개",
                 "잘못 칠한 인페인팅 마스크를 지웁니다.",
-                2,
+                1,
                 1,
             ),
             "paint_brush": (
                 "그리기 브러시",
                 "상단의 브러시 크기와 색을 사용해 이미지에 그립니다.",
-                2,
+                1,
                 3,
             ),
             "paint_eraser": (
                 "그리기 지우개",
                 "그리기 브러시로 추가한 부분을 지웁니다.",
-                2,
+                1,
                 3,
             ),
             "restore_brush": (
                 "원본 복구 브러시",
                 "번역 결과 위에 원본 이미지 일부를 복구합니다.",
-                2,
+                1,
                 3,
             ),
             "restore_eraser": (
                 "원본 복구 지우개",
                 "원본 복구 마스크를 지웁니다.",
-                2,
+                1,
                 3,
             ),
             "pan": ("화면 이동", "캔버스를 드래그해 보고 싶은 위치로 이동합니다.", None, None),
@@ -3829,6 +3868,17 @@ class AdvancedEditorWindow(QMainWindow):
         if settings_index is not None:
             self.settings_tabs.setCurrentIndex(settings_index)
         self.paint_color_toolbar_button.setVisible(tool == "paint_brush")
+
+    def _sync_inspector_page_size(self, index: int) -> None:
+        policy = (
+            QSizePolicy.Policy.Ignored
+            if index == 0
+            else QSizePolicy.Policy.Preferred
+        )
+        self.inspector_sections.setSizePolicy(
+            QSizePolicy.Policy.Preferred, policy
+        )
+        self.inspector_sections.updateGeometry()
 
     def set_tool(self, tool: str) -> None:
         for key, action in self.tool_actions.items():
@@ -4142,13 +4192,15 @@ class AdvancedEditorWindow(QMainWindow):
             self.line_spacing_spin.setValue(float(spacing_value or 1.0))
             self.padding_spin.setValue(float(render.get("padding_pixels") or 5.0))
             self.stroke_width_spin.setValue(float(render.get("outline_width") or 0.0))
-            self.font_color_button.setStyleSheet(f"background: {region.get('font_color') or '#000000'};")
+            self._set_color_button(
+                self.font_color_button, region.get("font_color") or "#000000"
+            )
             outline_rgb = render.get("outline_color_rgb")
             if isinstance(outline_rgb, (list, tuple)) and len(outline_rgb) >= 3:
                 outline_hex = f"#{int(outline_rgb[0]):02x}{int(outline_rgb[1]):02x}{int(outline_rgb[2]):02x}"
             else:
                 outline_hex = "#ffffff"
-            self.stroke_color_button.setStyleSheet(f"background: {outline_hex};")
+            self._set_color_button(self.stroke_color_button, outline_hex)
             font_target = self._font_combo_target(render.get("font_dir") or "")
             self._select_font_target(font_target)
             self._set_combo_data(self.alignment_combo, render.get("text_alignment") or "center")
@@ -4515,7 +4567,7 @@ class AdvancedEditorWindow(QMainWindow):
         region["font_color"] = value
         region["text_color_rgb"] = list(_rgb_from_hex(value))
         self._mark_region_dirty(region)
-        self.font_color_button.setStyleSheet(f"background: {value};")
+        self._set_color_button(self.font_color_button, value)
         self.schedule_exact_preview()
 
     def choose_stroke_color(self) -> None:
@@ -4542,7 +4594,7 @@ class AdvancedEditorWindow(QMainWindow):
             render["outline_width"] = 1.0
             self.stroke_width_spin.setValue(1.0)
         self._mark_region_dirty(region)
-        self.stroke_color_button.setStyleSheet(f"background: {value};")
+        self._set_color_button(self.stroke_color_button, value)
         self.schedule_exact_preview()
 
     def wrap_translation_selection(self, marker: str) -> None:
@@ -4592,7 +4644,6 @@ class AdvancedEditorWindow(QMainWindow):
         if not color.isValid():
             return
         self.paint_color = _hex_from_qcolor(color)
-        self.paint_color_button.setStyleSheet(f"background: {self.paint_color};")
         self.paint_color_toolbar_button.setStyleSheet(
             f"border-bottom: 3px solid {self.paint_color};"
         )
