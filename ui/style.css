@@ -376,20 +376,19 @@
 
 /* --- CHARACTER NAME PROFILES --- */
 .character-profile-card {
-    margin: 10px 0 14px !important;
-    padding: 14px !important;
+    --profile-gap-tight: 8px;
+    --profile-gap: 12px;
+    --profile-radius: 6px;
+    margin: 12px 0 16px !important;
+    padding: 16px !important;
     border: 1px solid var(--border-color-primary) !important;
     border-radius: 8px !important;
-    background: color-mix(
-        in srgb,
-        var(--primary-500) 5%,
-        var(--block-background-fill)
-    ) !important;
+    background: var(--block-background-fill) !important;
     box-shadow: none !important;
 }
 
 .character-profile-card > .styler {
-    gap: 10px !important;
+    gap: var(--profile-gap) !important;
     padding: 0 !important;
     border: 0 !important;
     background: transparent !important;
@@ -419,7 +418,7 @@
 
 .character-profile-picker {
     align-items: flex-end !important;
-    gap: 8px !important;
+    gap: var(--profile-gap-tight) !important;
 }
 
 .character-profile-picker > .block,
@@ -428,16 +427,17 @@
     margin: 0 !important;
 }
 
-.character-profile-new {
-    flex: 0 0 auto !important;
-    width: auto !important;
-    min-width: 104px !important;
-    white-space: nowrap !important;
+/* Gradio adds padding-bottom to each .block, which would leave the dropdown
+   sitting above the button on this flex-end row. Drop it inside this row only
+   so the control and the button share one baseline. */
+.character-profile-picker .block.padded {
+    padding-bottom: 0 !important;
+    margin-bottom: 0 !important;
 }
 
 .character-profile-editor {
-    margin-top: 2px !important;
-    padding: 12px 0 0 !important;
+    margin-top: 0 !important;
+    padding: var(--profile-gap) 0 0 !important;
     border: 0 !important;
     border-top: 1px solid var(--border-color-primary) !important;
     border-radius: 0 !important;
@@ -446,23 +446,34 @@
 }
 
 .character-profile-editor > .styler {
-    gap: 9px !important;
+    gap: var(--profile-gap) !important;
     padding: 0 !important;
     border: 0 !important;
     background: transparent !important;
     box-shadow: none !important;
 }
 
-.character-profile-actions {
-    justify-content: flex-end !important;
-    gap: 8px !important;
+.character-profile-editor textarea {
+    line-height: 1.6 !important;
 }
 
+.character-profile-actions {
+    justify-content: flex-end !important;
+    gap: var(--profile-gap-tight) !important;
+}
+
+/* Match the shared toolbar button shape (see #runtime-log-toolbar button). */
+.character-profile-new,
 .character-profile-actions button {
     flex: 0 0 auto !important;
     width: auto !important;
     min-width: 104px !important;
-    border-radius: 6px !important;
+    padding: 8px 16px !important;
+    border-radius: var(--profile-radius) !important;
+    white-space: nowrap !important;
+    transition:
+        background-color 0.2s ease,
+        color 0.2s ease !important;
 }
 
 .character-profile-card button:focus-visible,
