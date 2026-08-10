@@ -131,6 +131,43 @@ function() {
 }
 """
 
+theme_preference_head = """
+<script>
+(() => {
+    const storageKey = 'mangatranslator.theme-preference';
+    const modes = ['light', 'dark', 'system'];
+    const url = new URL(window.location.href);
+
+    try {
+        const requested = url.searchParams.get('__theme');
+        if (modes.includes(requested)) {
+            localStorage.setItem(storageKey, requested);
+        } else {
+            const saved = localStorage.getItem(storageKey);
+            if (modes.includes(saved) && saved !== 'system') {
+                url.searchParams.set('__theme', saved);
+                window.location.replace(url.toString());
+                return;
+            }
+        }
+
+        document.addEventListener('click', (event) => {
+            const button = event.target instanceof Element
+                ? event.target.closest('.theme-buttons .theme-button')
+                : null;
+            const buttons = button?.closest('.theme-buttons')?.querySelectorAll('.theme-button');
+            const index = buttons ? [...buttons].indexOf(button) : -1;
+            if (index >= 0) {
+                localStorage.setItem(storageKey, modes[index]);
+            }
+        }, true);
+    } catch (_) {
+        // The built-in Gradio "system" default remains available if storage is blocked.
+    }
+})();
+</script>
+"""
+
 js_folder_upload = r"""
 function() {
     const uploadElementIds = ['batch_folder_upload'];
@@ -513,7 +550,10 @@ def create_layout(
         }
 
     with gr.Blocks(
-        title="MangaTranslator", js=js_credits, css_paths=str(css_path)
+        title="MangaTranslator",
+        js=js_credits,
+        head=theme_preference_head,
+        css_paths=str(css_path),
     ) as app:
 
         runtime_log_open_state = gr.State(False)
