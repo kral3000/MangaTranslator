@@ -131,19 +131,43 @@ function() {
 }
 """
 
-theme_preference_head = """
+startup_preference_head = """
 <script>
 (() => {
-    const storageKey = 'mangatranslator.theme-preference';
+    const themeStorageKey = 'mangatranslator.theme-preference';
+    const languageStorageKey = 'mangatranslator.language-preference';
     const modes = ['light', 'dark', 'system'];
     const url = new URL(window.location.href);
 
     try {
+        const savedLanguage = localStorage.getItem(languageStorageKey);
+        if (/^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/.test(savedLanguage || '')) {
+            Object.defineProperties(navigator, {
+                language: { configurable: true, get: () => savedLanguage },
+                languages: { configurable: true, get: () => [savedLanguage] },
+            });
+        }
+        new MutationObserver(() => {
+            const language = document.documentElement.lang;
+            if (language) {
+                try {
+                    localStorage.setItem(languageStorageKey, language);
+                } catch (_) {}
+            }
+        }).observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ['lang'],
+        });
+    } catch (_) {
+        // Gradio falls back to the browser language if storage is blocked.
+    }
+
+    try {
         const requested = url.searchParams.get('__theme');
         if (modes.includes(requested)) {
-            localStorage.setItem(storageKey, requested);
+            localStorage.setItem(themeStorageKey, requested);
         } else {
-            const saved = localStorage.getItem(storageKey);
+            const saved = localStorage.getItem(themeStorageKey);
             if (modes.includes(saved) && saved !== 'system') {
                 url.searchParams.set('__theme', saved);
                 window.location.replace(url.toString());
@@ -158,11 +182,11 @@ theme_preference_head = """
             const buttons = button?.closest('.theme-buttons')?.querySelectorAll('.theme-button');
             const index = buttons ? [...buttons].indexOf(button) : -1;
             if (index >= 0) {
-                localStorage.setItem(storageKey, modes[index]);
+                localStorage.setItem(themeStorageKey, modes[index]);
             }
         }, true);
     } catch (_) {
-        // The built-in Gradio "system" default remains available if storage is blocked.
+        // Gradio falls back to the system theme if storage is blocked.
     }
 })();
 </script>
@@ -552,7 +576,7 @@ def create_layout(
     with gr.Blocks(
         title="MangaTranslator",
         js=js_credits,
-        head=theme_preference_head,
+        head=startup_preference_head,
         css_paths=str(css_path),
     ) as app:
 
