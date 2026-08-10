@@ -6,10 +6,16 @@ from unittest.mock import Mock, patch
 
 from PIL import Image
 
-from advanced_editor.launcher import AdvancedEditorWindow
+from advanced_editor.launcher import AdvancedEditorWindow, DEFAULT_EXPORT_DIRECTORY
 
 
 class ExportScopeTest(TestCase):
+    def test_export_dialogs_start_in_mana_folder(self) -> None:
+        self.assertEqual(
+            DEFAULT_EXPORT_DIRECTORY,
+            Path(r"C:\Users\dongw\Documents\Mana"),
+        )
+
     def test_save_updates_the_translation_session_output(self) -> None:
         output = Path("output/run/01_translated.png").resolve()
         window = SimpleNamespace(

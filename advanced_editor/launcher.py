@@ -106,6 +106,8 @@ from core.editor_session import (
 from core.text.text_processing import extract_translation_tag
 
 
+DEFAULT_EXPORT_DIRECTORY = Path(r"C:\Users\dongw\Documents\Mana")
+
 TOOLS = {
     "select": "선택/이동",
     "textbox": "텍스트 박스",
@@ -6369,10 +6371,7 @@ class AdvancedEditorWindow(QMainWindow):
         suggested = self._session_export_relative_path(
             self.session_path, self.session
         ).name
-        start = (
-            Path(self.session.get("edited_image_path") or self.session_path).parent
-            / suggested
-        )
+        start = DEFAULT_EXPORT_DIRECTORY / suggested
         selected, _ = QFileDialog.getSaveFileName(
             self,
             "현재 이미지 내보내기",
@@ -6392,9 +6391,10 @@ class AdvancedEditorWindow(QMainWindow):
         if not session_paths:
             return
         self._prepare_current_session_for_export()
-        start = Path(self.session.get("edited_image_path") or self.session_path).parent
         selected = QFileDialog.getExistingDirectory(
-            self, f"{len(session_paths)}개 이미지 내보낼 폴더 선택", str(start)
+            self,
+            f"{len(session_paths)}개 이미지 내보낼 폴더 선택",
+            str(DEFAULT_EXPORT_DIRECTORY),
         )
         if selected:
             self._export_sessions(session_paths, Path(selected), single_file=False)
