@@ -40,6 +40,22 @@ class ToolContextTest(TestCase):
         window.settings_tabs.setCurrentIndex.assert_called_once_with(1)
         window.paint_color_toolbar_button.setVisible.assert_called_once_with(False)
 
+    def test_inpaint_help_only_describes_the_selected_method(self) -> None:
+        window = SimpleNamespace(
+            inpaint_method_combo=SimpleNamespace(
+                currentData=Mock(return_value="lama_large")
+            ),
+            inpaint_method_help=Mock(),
+            _inpaint_option_widgets={},
+        )
+
+        AdvancedEditorWindow._update_inpaint_option_visibility(window)
+
+        description = window.inpaint_method_help.setText.call_args.args[0]
+        self.assertIn("중간 수준", description)
+        self.assertNotIn("OpenCV", description)
+        self.assertNotIn("Flux", description)
+
     def test_paint_brush_opens_color_settings_and_toolbar_swatch(self) -> None:
         window = SimpleNamespace(
             inspector_sections=SimpleNamespace(setCurrentIndex=Mock()),

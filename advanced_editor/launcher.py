@@ -3434,14 +3434,8 @@ class AdvancedEditorWindow(QMainWindow):
         self.inpaint_method_combo.addItem("Flux.2 Klein 9B", "flux_klein_9b")
         self.inpaint_method_combo.addItem("Flux.1 Kontext (12B)", "flux_kontext")
         layout.addWidget(self.inpaint_method_combo)
-        layout.addWidget(hint(
-            "OpenCV는 빠른 기본 복원 방식입니다. 하얀색 또는 검은색처럼 단순한 단일 배경일 때만 "
-            "사용하는 것을 권장합니다.\n"
-            "LAMA Large는 중간 수준의 인페인팅 방식으로, 가볍고 빠르지만 Flux보다 품질이 "
-            "떨어질 수 있습니다.\n"
-            "Flux 계열은 WebUI의 외부 텍스트 제거 설정과 동일한 방식으로 작동하는 고품질 복원 "
-            "방식입니다. 고사양 그래픽카드가 필요합니다."
-        ))
+        self.inpaint_method_help = hint("")
+        layout.addWidget(self.inpaint_method_help)
 
         self.inpaint_device_combo = ModernComboBox()
         self.inpaint_device_combo.addItem("자동", "auto")
@@ -3626,6 +3620,29 @@ class AdvancedEditorWindow(QMainWindow):
 
     def _update_inpaint_option_visibility(self, *_args) -> None:
         method = str(self.inpaint_method_combo.currentData() or "opencv")
+        method_help = {
+            "opencv": (
+                "빠른 기본 복원 방식입니다. 하얀색이나 검은색처럼 단순한 단일 배경에 "
+                "사용하는 것을 권장합니다."
+            ),
+            "lama_large": (
+                "가볍고 빠른 중간 수준의 복원 방식입니다. 복잡한 배경에서는 세부 묘사 "
+                "품질이 떨어질 수 있습니다."
+            ),
+            "flux_klein_4b": (
+                "고품질 생성형 복원 방식입니다. Flux 계열 중 비교적 가볍지만 고사양 "
+                "그래픽카드를 권장합니다."
+            ),
+            "flux_klein_9b": (
+                "Klein 4B보다 큰 고품질 생성형 복원 모델입니다. 더 많은 VRAM과 처리 시간이 "
+                "필요합니다."
+            ),
+            "flux_kontext": (
+                "가장 큰 Flux 생성형 복원 방식입니다. 복잡한 배경 복원에 적합하며 고사양 "
+                "그래픽카드가 필요합니다."
+            ),
+        }
+        self.inpaint_method_help.setText(method_help.get(method, ""))
         visible_groups = {"opencv"}
         if method == "lama_large":
             visible_groups = {"lama", "model_device", "model_size"}
