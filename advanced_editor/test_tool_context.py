@@ -77,3 +77,24 @@ class ToolContextTest(TestCase):
 
         self.assertEqual(mask[10, 10], 0)
         self.assertEqual(mask[15, 15], 255)
+
+    def test_inpainting_progress_exposes_running_and_complete_states(self) -> None:
+        state_label = Mock()
+        window = SimpleNamespace(
+            inpaint_progress_bar=Mock(),
+            inpaint_progress_state=state_label,
+            inpaint_progress_detail=Mock(),
+            inpaint_run_button=Mock(),
+            inpaint_progress_timer=Mock(),
+            _inpainting_elapsed_seconds=99,
+        )
+
+        AdvancedEditorWindow._set_inpainting_progress(window, "running", "처리 중")
+        window.inpaint_progress_bar.setRange.assert_called_with(0, 0)
+        window.inpaint_run_button.setEnabled.assert_called_with(False)
+        window.inpaint_progress_timer.start.assert_called_once()
+
+        AdvancedEditorWindow._set_inpainting_progress(window, "complete", "완료")
+        window.inpaint_progress_bar.setValue.assert_called_with(100)
+        window.inpaint_run_button.setEnabled.assert_called_with(True)
+        window.inpaint_progress_timer.stop.assert_called_once()

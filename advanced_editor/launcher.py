@@ -65,6 +65,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QScrollBar,
@@ -1358,6 +1359,7 @@ class AdvancedEditorWindow(QMainWindow):
         self._task_signals: list[TaskSignals] = []
         self._background_job_count = 0
         self._inpainting_running = False
+        self._inpainting_elapsed_seconds = 0
         self._preview_request_serial = 0
         self._preview_running = False
         self._preview_pending = False
@@ -2326,6 +2328,36 @@ class AdvancedEditorWindow(QMainWindow):
                 margin: 8px 10px 10px 10px;
                 padding: 9px 10px;
                 font-weight: 500;
+            }
+            QFrame#InpaintProgressPanel {
+                background: #f8fafc;
+                border: 1px solid #d5dde8;
+                border-radius: 7px;
+            }
+            QFrame#InpaintProgressPanel QLabel {
+                background: transparent;
+                border: 0;
+            }
+            QLabel#InpaintProgressState {
+                color: #1d4ed8;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QLabel#InpaintProgressDetail {
+                color: #64748b;
+                font-size: 11px;
+                font-weight: 400;
+            }
+            QProgressBar#InpaintProgressBar {
+                background: #e2e8f0;
+                border: 0;
+                border-radius: 3px;
+                min-height: 6px;
+                max-height: 6px;
+            }
+            QProgressBar#InpaintProgressBar::chunk {
+                background: #2563eb;
+                border-radius: 3px;
             }
             QLabel#HelpLabel {
                 background: #ffffff;
@@ -3525,13 +3557,43 @@ class AdvancedEditorWindow(QMainWindow):
             "마스크 지우개를 사용할 때는 자동 실행하지 않습니다."
         ))
 
-        run_button = QPushButton("브러시 마스크 인페인팅 실행")
-        run_button.clicked.connect(self.run_inpainting_task)
+        progress_panel = QFrame()
+        progress_panel.setObjectName("InpaintProgressPanel")
+        progress_layout = QVBoxLayout(progress_panel)
+        progress_layout.setContentsMargins(10, 9, 10, 9)
+        progress_layout.setSpacing(6)
+        progress_header = QHBoxLayout()
+        progress_header.addWidget(QLabel("진행 상황"))
+        progress_header.addStretch(1)
+        self.inpaint_progress_state = QLabel("대기 중")
+        self.inpaint_progress_state.setObjectName("InpaintProgressState")
+        progress_header.addWidget(self.inpaint_progress_state)
+        progress_layout.addLayout(progress_header)
+        self.inpaint_progress_bar = QProgressBar()
+        self.inpaint_progress_bar.setObjectName("InpaintProgressBar")
+        self.inpaint_progress_bar.setRange(0, 100)
+        self.inpaint_progress_bar.setValue(0)
+        self.inpaint_progress_bar.setTextVisible(False)
+        progress_layout.addWidget(self.inpaint_progress_bar)
+        self.inpaint_progress_detail = QLabel(
+            "마스크를 칠한 뒤 실행하면 여기에 처리 상태가 표시됩니다."
+        )
+        self.inpaint_progress_detail.setObjectName("InpaintProgressDetail")
+        self.inpaint_progress_detail.setWordWrap(True)
+        progress_layout.addWidget(self.inpaint_progress_detail)
+        layout.addWidget(progress_panel)
+
+        self.inpaint_progress_timer = QTimer(self)
+        self.inpaint_progress_timer.setInterval(1000)
+        self.inpaint_progress_timer.timeout.connect(self._update_inpainting_elapsed)
+
+        self.inpaint_run_button = QPushButton("브러시 마스크 인페인팅 실행")
+        self.inpaint_run_button.clicked.connect(self.run_inpainting_task)
         clear_mask_button = QPushButton("브러시 마스크 지우기")
         clear_mask_button.clicked.connect(self.clear_inpaint_mask)
         reset_button = QPushButton("인페인팅 결과 초기화")
         reset_button.clicked.connect(self.reset_inpainting_result)
-        layout.addWidget(run_button)
+        layout.addWidget(self.inpaint_run_button)
         layout.addWidget(clear_mask_button)
         layout.addWidget(reset_button)
         layout.addStretch(1)
@@ -5477,6 +5539,38 @@ class AdvancedEditorWindow(QMainWindow):
         if not self._syncing:
             self._inpaint_settings()
 
+    def _set_inpainting_progress(self, state: str, detail: str) -> None:
+        labels = {
+            "running": "처리 중",
+            "complete": "완료",
+            "failed": "실패",
+        }
+        if state == "running":
+            self.inpaint_progress_bar.setRange(0, 0)
+        else:
+            self.inpaint_progress_bar.setRange(0, 100)
+            self.inpaint_progress_bar.setValue(100 if state == "complete" else 0)
+        self.inpaint_progress_state.setText(labels[state])
+        self.inpaint_progress_detail.setText(detail)
+        self.inpaint_run_button.setEnabled(state != "running")
+        if state == "running":
+            self._inpainting_elapsed_seconds = 0
+            self.inpaint_progress_timer.start()
+        else:
+            self.inpaint_progress_timer.stop()
+
+    def _update_inpainting_elapsed(self) -> None:
+        self._inpainting_elapsed_seconds += 1
+        self.inpaint_progress_detail.setText(
+            f"모델 준비 및 이미지 복원 중 · {self._inpainting_elapsed_seconds}초 경과"
+        )
+
+    def _inpainting_failed(self, _message: str) -> None:
+        self._inpainting_running = False
+        self._set_inpainting_progress(
+            "failed", "처리를 완료하지 못했습니다. 오류 내용을 확인한 뒤 다시 실행하세요."
+        )
+
     def run_inpainting_task(self) -> None:
         if self._inpainting_running:
             self.status_label.setText("인페인팅이 이미 실행 중입니다.")
@@ -5496,6 +5590,9 @@ class AdvancedEditorWindow(QMainWindow):
         settings = self._inpaint_settings()
         image = self._inpainting_source_image()
         self._inpainting_running = True
+        self._set_inpainting_progress(
+            "running", "모델 준비 및 이미지 복원 중 · 0초 경과"
+        )
 
         def _task():
             return run_inpainting(image, mask, settings)
@@ -5522,6 +5619,9 @@ class AdvancedEditorWindow(QMainWindow):
                 self.status_label.setText(
                     f"인페인팅을 완료했습니다: {output_path.name}"
                 )
+                self._set_inpainting_progress(
+                    "complete", f"복원 결과 적용 완료 · {output_path.name}"
+                )
             finally:
                 self._inpainting_running = False
 
@@ -5529,7 +5629,7 @@ class AdvancedEditorWindow(QMainWindow):
             _task,
             _success,
             working_message="인페인팅을 실행 중입니다. 최초 모델 다운로드 중에는 시간이 걸릴 수 있습니다.",
-            on_failure=lambda _message: setattr(self, "_inpainting_running", False),
+            on_failure=self._inpainting_failed,
         )
 
     def clear_inpaint_mask(self) -> None:
