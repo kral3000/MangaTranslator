@@ -678,6 +678,9 @@ class EditorCanvas(QWidget):
         self.hover_image_pos: Optional[QPointF] = None
         self.textbox_start: Optional[QPointF] = None
         self.textbox_current: Optional[QPointF] = None
+        self._mask_overlay_cache: dict[
+            tuple[int, ...], tuple[tuple[Any, ...], Optional[QImage]]
+        ] = {}
 
     def sizeHint(self) -> QSize:
         return QSize(900, 900)
@@ -1011,21 +1014,52 @@ class EditorCanvas(QWidget):
         mask_path: Any,
         color_rgba: list[int],
     ) -> None:
-        if not mask_path:
+        overlay = self._mask_overlay_qimage(mask_path, color_rgba)
+        if overlay is None:
             return
-        mask = _load_mask(mask_path, self.window.image_size)
-        if not np.any(mask):
-            return
-        rgba = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
-        rgba[mask > 0] = color_rgba
-        overlay = Image.fromarray(rgba, mode="RGBA")
+
         target = QRectF(
             self.offset.x(),
             self.offset.y(),
-            overlay.width * self.scale,
-            overlay.height * self.scale,
+            overlay.width() * self.scale,
+            overlay.height() * self.scale,
         )
-        painter.drawImage(target, _pil_to_qimage(overlay))
+        painter.drawImage(target, overlay)
+
+    def _mask_overlay_qimage(
+        self, mask_path: Any, color_rgba: list[int]
+    ) -> Optional[QImage]:
+        if not mask_path:
+            return
+        path = Path(mask_path)
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+
+        color_key = tuple(int(value) for value in color_rgba)
+        token = (
+            str(path.resolve()),
+            stat.st_mtime_ns,
+            stat.st_size,
+            self.window.image_size,
+        )
+        cached = self._mask_overlay_cache.get(color_key)
+        if cached is not None and cached[0] == token:
+            return cached[1]
+
+        mask = _load_mask(path, self.window.image_size)
+        if not np.any(mask):
+            self._mask_overlay_cache[color_key] = (token, None)
+            return None
+        rgba = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
+        rgba[mask > 0] = color_rgba
+        overlay = _pil_to_qimage(Image.fromarray(rgba))
+        self._mask_overlay_cache[color_key] = (token, overlay)
+        return overlay
+
+    def clear_mask_overlay_cache(self) -> None:
+        self._mask_overlay_cache.clear()
 
     @staticmethod
     def _region_badge_rect(
@@ -1249,7 +1283,15 @@ class EditorCanvas(QWidget):
                 self.stroke_points.append(point)
                 self.update()
             return
-        self.update()
+        if self.tool in {
+            "inpaint_brush",
+            "inpaint_eraser",
+            "paint_brush",
+            "paint_eraser",
+            "restore_brush",
+            "restore_eraser",
+        }:
+            self.update()
 
     def leaveEvent(self, event) -> None:
         self.hover_image_pos = None
@@ -5660,6 +5702,7 @@ class AdvancedEditorWindow(QMainWindow):
             _save_mask(path, np.zeros((self.image_size[1], self.image_size[0]), dtype=np.uint8))
         self.session["inpaint_mask_path"] = str(path.resolve())
         save_session(self.session_path, self.session)
+        self.canvas.clear_mask_overlay_cache()
         self.canvas.update()
         self.status_label.setText("인페인팅 브러시 마스크를 비웠습니다.")
 
@@ -6114,6 +6157,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.display_image = image
         self.display_qimage = _pil_to_qimage(image)
         self.image_size = image.size
+        self.canvas.clear_mask_overlay_cache()
         self.canvas.update()
 
     def save_current_session(self, *, push_history: bool = True) -> None:
@@ -6597,25 +6641,23 @@ class AdvancedEditorWindow(QMainWindow):
             QMessageBox.critical(self, "렌더링 실패", str(exc))
 
     def _capture_state(self) -> dict[str, Any]:
-        masks: dict[str, np.ndarray] = {}
+        masks: dict[str, bytes] = {}
         for region in self.session.get("regions", []):
             path = region.get("mask_path")
             if path and Path(path).exists():
-                masks[str(path)] = _load_mask(path, self.image_size)
+                masks[str(path)] = Path(path).read_bytes()
         inpaint_mask_path = self.session.get("inpaint_mask_path")
         if inpaint_mask_path and Path(inpaint_mask_path).exists():
-            masks[str(inpaint_mask_path)] = _load_mask(
-                inpaint_mask_path, self.image_size
-            )
+            masks[str(inpaint_mask_path)] = Path(inpaint_mask_path).read_bytes()
         restore_mask_path = self.session.get("restore_mask_path")
         if restore_mask_path and Path(restore_mask_path).exists():
-            masks[str(restore_mask_path)] = _load_mask(
-                restore_mask_path, self.image_size
-            )
+            masks[str(restore_mask_path)] = Path(restore_mask_path).read_bytes()
         overlay_path = self.session.get("paint_overlay_path")
-        overlay = None
-        if overlay_path and Path(overlay_path).exists():
-            overlay = _overlay_to_array(overlay_path, self.image_size)
+        overlay = (
+            Path(overlay_path).read_bytes()
+            if overlay_path and Path(overlay_path).exists()
+            else None
+        )
         return {
             "session": copy.deepcopy(self.session),
             "masks": masks,
@@ -6632,12 +6674,21 @@ class AdvancedEditorWindow(QMainWindow):
             if str(region_id)
         }
         for path, mask in state.get("masks", {}).items():
-            _save_mask(Path(path), mask)
+            target = Path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(mask, (bytes, bytearray)):
+                target.write_bytes(mask)
+            else:
+                _save_mask(target, mask)
         overlay_path = state.get("overlay_path")
         overlay = state.get("overlay")
         if overlay_path and overlay is not None:
-            Path(overlay_path).parent.mkdir(parents=True, exist_ok=True)
-            _array_to_overlay_image(overlay).save(overlay_path)
+            target = Path(overlay_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(overlay, (bytes, bytearray)):
+                target.write_bytes(overlay)
+            else:
+                _array_to_overlay_image(overlay).save(target)
         self.selected_index = state.get("selected_index")
         save_session(self.session_path, self.session)
         self.reload_display_image()
