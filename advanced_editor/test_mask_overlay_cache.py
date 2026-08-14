@@ -6,12 +6,41 @@ from unittest import TestCase
 from unittest.mock import Mock, patch
 
 from PIL import Image
-from PyQt6.QtCore import QPointF
+from PyQt6.QtCore import QPointF, QRectF
+from PyQt6.QtGui import QColor, QImage, QPainter
 
 from advanced_editor.launcher import EditorCanvas
 
 
 class MaskOverlayCacheTest(TestCase):
+    def test_fast_preview_replaces_the_stale_region_before_drawing_text(self) -> None:
+        region = {"id": "r1", "enabled": True}
+        clean_image = QImage(10, 10, QImage.Format.Format_RGBA8888)
+        clean_image.fill(QColor("white"))
+        target_image = QImage(10, 10, QImage.Format.Format_RGBA8888)
+        target_image.fill(QColor("black"))
+        window = SimpleNamespace(
+            image_size=(10, 10),
+            fast_preview_regions=Mock(return_value=[region]),
+            fast_preview_clean_qimage=Mock(return_value=clean_image),
+            _fast_erase_bbox=Mock(return_value=(2, 2, 6, 6)),
+            draw_region_fast_text=Mock(),
+        )
+        canvas = SimpleNamespace(
+            window=window,
+            offset=QPointF(0, 0),
+            scale=1.0,
+            _region_rect_view=Mock(return_value=QRectF(2, 2, 4, 4)),
+        )
+
+        painter = QPainter(target_image)
+        EditorCanvas._draw_fast_text_preview(canvas, painter)
+        painter.end()
+
+        self.assertEqual(target_image.pixelColor(3, 3), QColor("white"))
+        self.assertEqual(target_image.pixelColor(0, 0), QColor("black"))
+        window.draw_region_fast_text.assert_called_once()
+
     def test_idle_pointer_does_not_repaint_the_canvas(self) -> None:
         canvas = SimpleNamespace(
             pan_drag_start=None,

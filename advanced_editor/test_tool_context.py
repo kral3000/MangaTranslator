@@ -8,6 +8,24 @@ from advanced_editor.launcher import AdvancedEditorWindow
 
 
 class ToolContextTest(TestCase):
+    def test_dirty_region_enters_the_immediate_preview_until_exact_render(self) -> None:
+        region = {"id": "r1"}
+        window = SimpleNamespace(
+            _dirty_region_ids=set(),
+            _fast_preview_region_ids=set(),
+            session={"regions": [region]},
+            canvas=SimpleNamespace(update=Mock()),
+        )
+
+        AdvancedEditorWindow._mark_region_dirty(window, region)
+
+        self.assertEqual(window._dirty_region_ids, {"r1"})
+        self.assertEqual(
+            AdvancedEditorWindow.fast_preview_regions(window),
+            [region],
+        )
+        window.canvas.update.assert_called_once_with()
+
     def test_text_style_marker_drives_pressed_button_feedback(self) -> None:
         self.assertEqual(AdvancedEditorWindow._text_style_marker("**굵게**"), "**")
         self.assertEqual(AdvancedEditorWindow._text_style_marker("*기울임*"), "*")
