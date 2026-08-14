@@ -1043,13 +1043,13 @@ def create_layout(
                             batch_process_button = gr.Button(
                                 "Start Batch Translating", variant="primary"
                             )
-                            batch_clear_button = gr.Button("Clear")
                             batch_cancel_button = gr.Button(
                                 "Cancel", variant="stop", visible=False
                             )
                             batch_advanced_editor_button = gr.Button(
                                 "고급 편집기 열기", visible=False
                             )
+                            batch_clear_button = gr.Button("Clear", variant="stop")
 
             with gr.TabItem("Config", elem_id="settings-tab-container"):
                 config_initial_provider = initial_provider
