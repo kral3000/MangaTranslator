@@ -1712,6 +1712,23 @@ class AdvancedEditorWindow(QMainWindow):
         )
         action_toolbar.addWidget(toolbar_spacer)
 
+        self.render_status_widget = QWidget(self)
+        self.render_status_widget.setObjectName("RenderStatus")
+        self.render_status_widget.setFixedHeight(30)
+        self.render_status_widget.setMinimumWidth(112)
+        render_status_layout = QHBoxLayout(self.render_status_widget)
+        render_status_layout.setContentsMargins(10, 0, 10, 0)
+        render_status_layout.setSpacing(7)
+        self.render_status_dot = QFrame(self.render_status_widget)
+        self.render_status_dot.setObjectName("RenderStatusDot")
+        self.render_status_dot.setFixedSize(8, 8)
+        render_status_layout.addWidget(self.render_status_dot)
+        self.render_status_label = QLabel("", self.render_status_widget)
+        self.render_status_label.setObjectName("RenderStatusLabel")
+        render_status_layout.addWidget(self.render_status_label)
+        action_toolbar.addWidget(self.render_status_widget)
+        self._set_render_status("ready")
+
         self.render_action = QAction(_editor_icon("save"), "저장  Ctrl+S", self)
         self.render_action.setShortcut(QKeySequence("Ctrl+S"))
         self.render_action.setToolTip("현재 세션의 번역 결과 갱신 (Ctrl+S)")
@@ -1922,6 +1939,32 @@ class AdvancedEditorWindow(QMainWindow):
             QToolBar#TopBar QWidget#TopBarSpacer {
                 background: transparent;
                 border: 0;
+            }
+            QToolBar#TopBar QWidget#RenderStatus {
+                background: #182338;
+                border: 1px solid #334155;
+                border-radius: 6px;
+            }
+            QToolBar#TopBar QLabel#RenderStatusLabel {
+                color: #cbd5e1;
+                background: transparent;
+                border: 0;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QToolBar#TopBar QFrame#RenderStatusDot {
+                background: #22c55e;
+                border: 0;
+                border-radius: 4px;
+            }
+            QToolBar#TopBar QFrame#RenderStatusDot[renderState="pending"] {
+                background: #f59e0b;
+            }
+            QToolBar#TopBar QFrame#RenderStatusDot[renderState="running"] {
+                background: #60a5fa;
+            }
+            QToolBar#TopBar QFrame#RenderStatusDot[renderState="error"] {
+                background: #f87171;
             }
             QToolBar#TopBar QWidget#TopBarMetricField {
                 background: #ffffff;
@@ -4577,8 +4620,23 @@ class AdvancedEditorWindow(QMainWindow):
         else:
             self.status_label.setText(f"선택한 도구: {tool_label}")
 
+    def _set_render_status(self, state: str) -> None:
+        label, tooltip = {
+            "pending": ("렌더 대기", "변경 사항이 정밀 미리보기에 반영되기를 기다리고 있습니다."),
+            "running": ("렌더링 중", "현재 변경 사항을 실제 출력과 같은 방식으로 렌더링하고 있습니다."),
+            "error": ("렌더 실패", "정밀 미리보기에 실패했습니다. 아래 상태 메시지를 확인하세요."),
+            "ready": ("렌더 최신", "현재 화면에 최신 정밀 렌더링 결과가 반영되었습니다."),
+        }.get(state, ("렌더 상태", "정밀 미리보기 상태입니다."))
+        self.render_status_label.setText(label)
+        self.render_status_widget.setToolTip(tooltip)
+        self.render_status_dot.setProperty("renderState", state)
+        self.render_status_dot.style().unpolish(self.render_status_dot)
+        self.render_status_dot.style().polish(self.render_status_dot)
+        self.render_status_dot.update()
+
     def schedule_exact_preview(self) -> None:
         self._preview_request_serial += 1
+        self._set_render_status("pending")
         if self._preview_running:
             self._preview_pending = True
         self._preview_timer.start()
@@ -4593,6 +4651,7 @@ class AdvancedEditorWindow(QMainWindow):
         self._task_signals.append(signals)
         self._preview_running = True
         self._preview_pending = False
+        self._set_render_status("running")
 
         def _finish_preview() -> None:
             self._preview_running = False
@@ -4600,6 +4659,7 @@ class AdvancedEditorWindow(QMainWindow):
                 self._task_signals.remove(signals)
             if self._preview_pending or request_serial != self._preview_request_serial:
                 self._preview_pending = False
+                self._set_render_status("pending")
                 self._preview_timer.start(40)
 
         def _success(result: object) -> None:
@@ -4612,6 +4672,7 @@ class AdvancedEditorWindow(QMainWindow):
                 self.display_qimage = _pil_to_qimage(self.display_image)
                 self.image_size = self.display_image.size
                 self.canvas.update()
+                self._set_render_status("ready")
                 if errors:
                     self.status_label.setText(
                         "일부 영역 미리보기 렌더링 경고:\n"
@@ -4623,6 +4684,7 @@ class AdvancedEditorWindow(QMainWindow):
         def _failure(message: str) -> None:
             try:
                 if request_serial == self._preview_request_serial:
+                    self._set_render_status("error")
                     self.status_label.setText(
                         "미리보기 렌더링 실패:\n" + message.splitlines()[-1]
                     )
