@@ -969,7 +969,6 @@ class EditorCanvas(QWidget):
             return
 
         self._draw_display_image(painter, image)
-        self._draw_fast_text_preview(painter)
 
         if self.window.show_inpaint_mask_checkbox.isChecked():
             self._draw_inpaint_mask(painter)
@@ -991,26 +990,7 @@ class EditorCanvas(QWidget):
         return text.replace("\\n", "\n")
 
     def _draw_fast_text_preview(self, painter: QPainter) -> None:
-        regions = self.window.fast_preview_regions()
-        if not regions:
-            return
-        clean_image = self.window.fast_preview_clean_qimage()
-        if clean_image is not None:
-            for region in regions:
-                left, top, right, bottom = self.window._fast_erase_bbox(
-                    region, self.window.image_size
-                )
-                source = QRectF(left, top, right - left, bottom - top)
-                target = QRectF(
-                    self.offset.x() + left * self.scale,
-                    self.offset.y() + top * self.scale,
-                    (right - left) * self.scale,
-                    (bottom - top) * self.scale,
-                )
-                painter.drawImage(target, clean_image, source)
-        for region in regions:
-            if region.get("enabled", True) is False:
-                continue
+        for region in self.window.fast_preview_regions():
             rect = self._region_rect_view(region)
             self.window.draw_region_fast_text(painter, region, rect, self.scale)
 
@@ -1375,8 +1355,6 @@ class AdvancedEditorWindow(QMainWindow):
             if str(region_id)
         }
         self.session["editor_dirty_region_ids"] = sorted(self._dirty_region_ids)
-        self._fast_preview_region_ids: set[str] = set()
-        self._fast_preview_clean_qimage: Optional[QImage] = None
         self.startup_warnings: list[str] = []
         self.base_image = self._load_base_image()
         self.display_image = self.base_image.copy()
@@ -2759,10 +2737,7 @@ class AdvancedEditorWindow(QMainWindow):
         if not region_id:
             return
         self._dirty_region_ids.add(region_id)
-        self._fast_preview_region_ids.add(region_id)
         self.session["editor_dirty_region_ids"] = sorted(self._dirty_region_ids)
-        if hasattr(self, "canvas"):
-            self.canvas.update()
 
     def _session_display_name(
         self, path: Path, collection_root: Optional[Path] = None
@@ -2936,7 +2911,6 @@ class AdvancedEditorWindow(QMainWindow):
                 if str(region_id)
             }
             self.session["editor_dirty_region_ids"] = sorted(self._dirty_region_ids)
-            self._fast_preview_region_ids = set()
             self.startup_warnings = []
             self.base_image = self._load_base_image()
             self.display_image = self.base_image.copy()
@@ -2971,7 +2945,6 @@ class AdvancedEditorWindow(QMainWindow):
                     for region_id in self.session.get("editor_dirty_region_ids", []) or []
                     if str(region_id)
                 }
-                self._fast_preview_region_ids = set()
                 self.startup_warnings = []
                 self.base_image = self._load_base_image()
                 self.display_image = self.base_image.copy()
@@ -4638,7 +4611,6 @@ class AdvancedEditorWindow(QMainWindow):
                 self.display_image = image.convert("RGBA")
                 self.display_qimage = _pil_to_qimage(self.display_image)
                 self.image_size = self.display_image.size
-                self._fast_preview_region_ids.clear()
                 self.canvas.update()
                 if errors:
                     self.status_label.setText(
@@ -5747,33 +5719,7 @@ class AdvancedEditorWindow(QMainWindow):
         return str(region.get("id") or "") in self._dirty_region_ids
 
     def fast_preview_regions(self) -> list[dict[str, Any]]:
-        active = self._fast_preview_region_ids
-        return [
-            region
-            for region in self.session.get("regions", [])
-            if str(region.get("id") or "") in active
-        ]
-
-    def fast_preview_clean_qimage(self) -> Optional[QImage]:
-        if self._fast_preview_clean_qimage is not None:
-            return self._fast_preview_clean_qimage
-        try:
-            inpainted_path = Path(self.session.get("inpainted_image_path") or "")
-            if (
-                self.session.get("inpainted_background_text_free")
-                and inpainted_path.is_file()
-            ):
-                image = Image.open(inpainted_path).convert("RGBA")
-            else:
-                image = self._clean_base_image().convert("RGBA")
-            if image.size != self.image_size:
-                image = image.resize(self.image_size, Image.Resampling.LANCZOS)
-            self._fast_preview_clean_qimage = _pil_to_qimage(
-                self._apply_paint_overlay_to(image)
-            )
-        except Exception:
-            self._fast_preview_clean_qimage = None
-        return self._fast_preview_clean_qimage
+        return []
 
     def _editor_background_source(self) -> tuple[Optional[Path], str]:
         candidates = (
@@ -5873,7 +5819,6 @@ class AdvancedEditorWindow(QMainWindow):
                 baseline_path = baseline_path.resolve()
         self.session["rendered_snapshot_path"] = str(baseline_path)
         self._dirty_region_ids.clear()
-        self._fast_preview_region_ids.clear()
         self.session["editor_dirty_region_ids"] = []
         self.session["deleted_region_bboxes"] = []
         self.session["paint_overlay_path"] = ""
@@ -6212,7 +6157,6 @@ class AdvancedEditorWindow(QMainWindow):
         self.display_image = image
         self.display_qimage = _pil_to_qimage(image)
         self.image_size = image.size
-        self._fast_preview_clean_qimage = None
         self.canvas.clear_mask_overlay_cache()
         self.canvas.update()
 
@@ -6729,7 +6673,6 @@ class AdvancedEditorWindow(QMainWindow):
             for region_id in self.session.get("editor_dirty_region_ids", [])
             if str(region_id)
         }
-        self._fast_preview_region_ids = set(self._dirty_region_ids)
         for path, mask in state.get("masks", {}).items():
             target = Path(path)
             target.parent.mkdir(parents=True, exist_ok=True)
