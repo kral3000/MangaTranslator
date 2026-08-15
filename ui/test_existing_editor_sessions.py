@@ -55,6 +55,16 @@ class ExistingEditorSessionDiscoveryTest(TestCase):
 
         self.assertEqual(_batch_source_folder_name([upload]), "Chapter 55")
 
+    def test_keeps_zip_file_name_for_session_context(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            archive = Path(temp_dir) / "아르테미스 125-126화.zip"
+            archive.touch()
+
+            self.assertEqual(
+                _batch_source_folder_name(str(archive)),
+                "아르테미스 125-126화.zip",
+            )
+
     def test_restores_a_group_after_the_repository_folder_was_renamed(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

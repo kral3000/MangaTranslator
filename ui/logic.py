@@ -167,7 +167,7 @@ def _batch_source_folder_name(value: Any) -> str:
     if path.is_dir():
         return path.name
     if path.is_file() and path.suffix.lower() == ".zip":
-        return path.stem
+        return path.name
     return ""
 
 
