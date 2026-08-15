@@ -195,6 +195,10 @@ startup_preference_head = """
 js_folder_upload = r"""
 function() {
     const uploadElementIds = ['batch_folder_upload'];
+    const nativePickerTriggers = {
+        batch_folder_upload: 'batch_native_folder_trigger',
+        batch_zip_upload: 'batch_native_zip_trigger',
+    };
     const encodedPathPrefix = '__MT_RELATIVE_PATH__';
     const supportedImage = /\.(?:jpe?g|png|webp|bmp|tiff?)$/i;
 
@@ -362,6 +366,27 @@ function() {
 
         return true;
     };
+
+    if (document.body.dataset.mtNativeBatchPickerReady !== '1') {
+        document.body.dataset.mtNativeBatchPickerReady = '1';
+        document.addEventListener('click', (event) => {
+            const input = event.target;
+            if (!(input instanceof HTMLInputElement) || input.type !== 'file') {
+                return;
+            }
+            const root = input.closest('#batch_folder_upload, #batch_zip_upload');
+            const triggerElementId = nativePickerTriggers[root?.id];
+            const trigger = triggerElementId
+                ? document.getElementById(triggerElementId)?.querySelector('button')
+                : null;
+            if (!trigger) {
+                return;
+            }
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            trigger.click();
+        }, true);
+    }
 
     const setupAllFolderUploads = () => {
         let foundAny = false;
@@ -876,47 +901,30 @@ def create_layout(
                     elem_classes=["editor-status-callout"],
                 )
 
-            with gr.TabItem("Batch", elem_id="batch-tab"):
+            with gr.TabItem("Batch"):
                 with gr.Row():
                     with gr.Column(scale=1):
-                        with gr.Row(elem_classes=["batch-native-picker-row"]):
-                            batch_native_folder_path = gr.Textbox(
-                                label="탐색기에서 선택한 폴더",
-                                placeholder=r"C:\Users\dongw\Documents\Mana",
-                                interactive=False,
-                                scale=1,
-                            )
-                            batch_native_folder_button = gr.Button(
-                                "폴더 선택",
-                                variant="secondary",
-                                scale=0,
-                                min_width=112,
-                            )
                         input_files = gr.File(
-                            label="또는 폴더를 끌어다 놓기",
+                            label="Upload Entire Folder",
                             file_count="directory",
                             file_types=["image"],
                             type="filepath",
                             elem_id="batch_folder_upload",
                         )
-                        with gr.Row(elem_classes=["batch-native-picker-row"]):
-                            batch_native_zip_path = gr.Textbox(
-                                label="탐색기에서 선택한 ZIP",
-                                placeholder=r"C:\Users\dongw\Documents\Mana",
-                                interactive=False,
-                                scale=1,
-                            )
-                            batch_native_zip_button = gr.Button(
-                                "ZIP 선택",
-                                variant="secondary",
-                                scale=0,
-                                min_width=112,
-                            )
                         input_zip = gr.File(
-                            label="또는 ZIP을 끌어다 놓기 (폴더 구조 유지)",
+                            label="Upload ZIP Archive (preserves directory structure)",
                             file_count="single",
                             file_types=[".zip"],
                             type="filepath",
+                            elem_id="batch_zip_upload",
+                        )
+                        batch_native_folder_path = gr.Textbox(visible=False)
+                        batch_native_zip_path = gr.Textbox(visible=False)
+                        batch_native_folder_button = gr.Button(
+                            "", visible=False, elem_id="batch_native_folder_trigger"
+                        )
+                        batch_native_zip_button = gr.Button(
+                            "", visible=False, elem_id="batch_native_zip_trigger"
                         )
                         batch_font_dropdown = gr.Dropdown(
                             choices=font_choices,
@@ -4651,19 +4659,27 @@ def create_layout(
             show_progress="hidden",
         )
         input_files.upload(
-            fn=lambda: "",
-            outputs=[batch_native_folder_path],
+            fn=lambda: ("", gr.update(label=ko("Upload Entire Folder"))),
+            outputs=[batch_native_folder_path, input_files],
             queue=False,
         )
         input_zip.upload(
-            fn=lambda: "",
-            outputs=[batch_native_zip_path],
+            fn=lambda: (
+                "",
+                gr.update(
+                    label=ko("Upload ZIP Archive (preserves directory structure)")
+                ),
+            ),
+            outputs=[batch_native_zip_path, input_zip],
             queue=False,
         )
         batch_clear_button.click(
             fn=lambda: (
-                None,
-                None,
+                gr.update(value=None, label=ko("Upload Entire Folder")),
+                gr.update(
+                    value=None,
+                    label=ko("Upload ZIP Archive (preserves directory structure)"),
+                ),
                 "",
                 "",
                 None,

@@ -273,7 +273,10 @@ def handle_browse_batch_folder() -> tuple[gr.update, gr.update]:
             DEFAULT_MANA_DIRECTORY, "번역할 만화 폴더 선택"
         )
         if selected:
-            return gr.update(value=selected), gr.update(value=None)
+            return (
+                gr.update(value=selected),
+                gr.update(value=None, label=f"선택한 폴더: {Path(selected).name}"),
+            )
     except Exception as exc:
         gr.Warning(f"폴더 선택 창을 열 수 없습니다: {exc}")
     return gr.update(), gr.update()
@@ -285,7 +288,10 @@ def handle_browse_batch_zip() -> tuple[gr.update, gr.update]:
             DEFAULT_MANA_DIRECTORY, "번역할 ZIP 압축파일 선택", "zip"
         )
         if selected:
-            return gr.update(value=selected), gr.update(value=None)
+            return (
+                gr.update(value=selected),
+                gr.update(value=None, label=f"선택한 ZIP: {Path(selected).name}"),
+            )
     except Exception as exc:
         gr.Warning(f"ZIP 선택 창을 열 수 없습니다: {exc}")
     return gr.update(), gr.update()
