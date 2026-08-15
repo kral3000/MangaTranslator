@@ -921,10 +921,14 @@ def create_layout(
                         batch_native_folder_path = gr.Textbox(visible=False)
                         batch_native_zip_path = gr.Textbox(visible=False)
                         batch_native_folder_button = gr.Button(
-                            "", visible=False, elem_id="batch_native_folder_trigger"
+                            "",
+                            elem_id="batch_native_folder_trigger",
+                            elem_classes=["batch-native-trigger"],
                         )
                         batch_native_zip_button = gr.Button(
-                            "", visible=False, elem_id="batch_native_zip_trigger"
+                            "",
+                            elem_id="batch_native_zip_trigger",
+                            elem_classes=["batch-native-trigger"],
                         )
                         batch_font_dropdown = gr.Dropdown(
                             choices=font_choices,
@@ -4659,7 +4663,7 @@ def create_layout(
             show_progress="hidden",
         )
         input_files.upload(
-            fn=lambda: ("", gr.update(label=ko("Upload Entire Folder"))),
+            fn=lambda: ("", gr.update(label=korean.ko("Upload Entire Folder"))),
             outputs=[batch_native_folder_path, input_files],
             queue=False,
         )
@@ -4667,7 +4671,9 @@ def create_layout(
             fn=lambda: (
                 "",
                 gr.update(
-                    label=ko("Upload ZIP Archive (preserves directory structure)")
+                    label=korean.ko(
+                        "Upload ZIP Archive (preserves directory structure)"
+                    )
                 ),
             ),
             outputs=[batch_native_zip_path, input_zip],
@@ -4675,10 +4681,12 @@ def create_layout(
         )
         batch_clear_button.click(
             fn=lambda: (
-                gr.update(value=None, label=ko("Upload Entire Folder")),
+                gr.update(value=None, label=korean.ko("Upload Entire Folder")),
                 gr.update(
                     value=None,
-                    label=ko("Upload ZIP Archive (preserves directory structure)"),
+                    label=korean.ko(
+                        "Upload ZIP Archive (preserves directory structure)"
+                    ),
                 ),
                 "",
                 "",

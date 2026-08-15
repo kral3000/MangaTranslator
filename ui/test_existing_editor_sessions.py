@@ -4,16 +4,33 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
+from unittest.mock import patch
 
 from core.editor_session import related_edit_session_paths
 from ui.callbacks import (
+    DEFAULT_MANA_DIRECTORY,
     _discover_existing_editor_sessions,
     _resolve_native_batch_inputs,
+    handle_browse_batch_folder,
 )
 from ui.logic import _batch_source_folder_name
 
 
 class ExistingEditorSessionDiscoveryTest(TestCase):
+    def test_batch_folder_picker_always_starts_from_mana(self) -> None:
+        selected = DEFAULT_MANA_DIRECTORY / "테스트 만화"
+        with patch(
+            "ui.callbacks._select_folder_with_explorer",
+            return_value=str(selected),
+        ) as picker:
+            path_update, _file_update = handle_browse_batch_folder()
+
+        picker.assert_called_once_with(
+            DEFAULT_MANA_DIRECTORY,
+            "번역할 만화 폴더 선택",
+        )
+        self.assertEqual(path_update["value"], str(selected))
+
     def test_lists_valid_sessions_recent_first_and_skips_invalid_json(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

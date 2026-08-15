@@ -483,6 +483,10 @@
     outline-offset: 2px !important;
 }
 
+.batch-native-trigger {
+    display: none !important;
+}
+
 /* --- ADVANCED EDITOR LAUNCHER --- */
 #advanced-editor-tab {
     --editor-radius: 6px;
