@@ -734,6 +734,17 @@ def create_layout(
                             filterable=False,
                             visible=False,
                         )
+                        translator_character_profile = build_character_profile_panel(
+                            "translator"
+                        )
+                        special_instructions = gr.Textbox(
+                            label="Special Instructions",
+                            placeholder="Give the LLM optional context, formatting instructions, etc.",
+                            value=saved_settings.get("special_instructions", ""),
+                            lines=8,
+                            max_lines=20,
+                            elem_id="translator_special_instructions",
+                        )
                         with gr.Accordion("Translation Settings", open=True):
                             # Hidden state to store original language selection before manga-ocr forces Japanese
                             original_language_state = gr.State(
@@ -751,17 +762,6 @@ def create_layout(
                                 value=saved_settings.get("output_language", "English"),
                                 allow_custom_value=True,
                             )
-                        translator_character_profile = build_character_profile_panel(
-                            "translator"
-                        )
-                        special_instructions = gr.Textbox(
-                            label="Special Instructions",
-                            placeholder="Give the LLM optional context, formatting instructions, etc.",
-                            value=saved_settings.get("special_instructions", ""),
-                            lines=8,
-                            max_lines=20,
-                            elem_id="translator_special_instructions",
-                        )
                     with gr.Column(scale=1):
                         output_image = gr.Image(
                             type="pil",
