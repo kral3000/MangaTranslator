@@ -328,6 +328,21 @@ def _editor_session_sort_text(
     return path.name
 
 
+def editor_session_context_label(session: Dict[str, Any]) -> str:
+    profile = str(session.get("editor_character_profile_name") or "").strip()
+    folder = str(session.get("editor_source_folder_name") or "").strip()
+    if not folder:
+        display_path = (
+            str(session.get("source_display_path") or "")
+            .replace("\\", "/")
+            .strip("/")
+        )
+        display_parent = PurePosixPath(display_path).parent
+        if display_path and str(display_parent) not in {"", "."}:
+            folder = display_parent.name
+    return " · ".join(dict.fromkeys(value for value in (profile, folder) if value))
+
+
 def _normalize_session_paths(
     session_path: Path,
     session: Dict[str, Any],
@@ -1372,6 +1387,8 @@ def save_pipeline_edit_session(
 
     data = {
         "version": SESSION_VERSION,
+        "editor_character_profile_name": config.editor_character_profile_name,
+        "editor_source_folder_name": config.editor_source_folder_name,
         "source_image_path": str(source_path),
         "overwrite_target_path": (
             str(Path(translated_output_path).resolve()) if translated_output_path else str(source_path)

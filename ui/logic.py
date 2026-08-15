@@ -145,6 +145,32 @@ def _upload_root_label(image_files: List[Path]) -> Optional[str]:
     return _safe_archive_name(name, name)
 
 
+def _batch_source_folder_name(value: Any) -> str:
+    if isinstance(value, dict):
+        value = value.get("files") or value.get("zip") or ""
+    if isinstance(value, (list, tuple)):
+        paths = [Path(str(item)) for item in value if item]
+        decoded = [_decode_uploaded_relative_path(path.name) for path in paths]
+        roots = {
+            relative.parts[0]
+            for relative in decoded
+            if relative is not None and len(relative.parts) > 1
+        }
+        if len(roots) == 1:
+            return next(iter(roots))
+        if paths:
+            parent_name = _common_parent(paths).name
+            if parent_name and not _looks_like_generated_temp_name(parent_name):
+                return parent_name
+        return ""
+    path = Path(str(value or "").strip())
+    if path.is_dir():
+        return path.name
+    if path.is_file() and path.suffix.lower() == ".zip":
+        return path.stem
+    return ""
+
+
 def _gradio_upload_base(image_files: List[Path]) -> Optional[Path]:
     """Return the Gradio upload-id folder so browser directory paths stay intact."""
     bases: List[Path] = []
@@ -568,6 +594,7 @@ def process_batch_logic(
         Exception: For unexpected errors during processing.
     """
     start_time = time.time()
+    config.editor_source_folder_name = _batch_source_folder_name(input_dir_or_files)
 
     try:
         # Create temporary config for validation since we only have the font pack name

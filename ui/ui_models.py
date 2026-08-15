@@ -331,6 +331,7 @@ class UIConfigState:
     batch_previous_context_image_count: int = 0
     batch_previous_context_text_count: int = 3
     batch_previous_context_text_mode: str = "strict"
+    character_profile_name: str = ""
 
     def to_save_dict(self) -> Dict[str, Any]:
         """Converts the UI state into a dictionary suitable for saving to config.json."""
@@ -1420,6 +1421,7 @@ def map_ui_to_backend_config(
         test_mode=ui_state.general.test_mode,
         parallel_requests=ui_state.batch_parallel_requests if is_batch else 1,
         retry_failed_once=ui_state.batch_retry_failed_once if is_batch else False,
+        editor_character_profile_name=ui_state.character_profile_name,
     )
 
     return backend_config

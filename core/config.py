@@ -286,6 +286,8 @@ class MangaTranslatorConfig:
     processing_scale: float = 1.0
     parallel_requests: int = 1
     retry_failed_once: bool = False
+    editor_character_profile_name: str = ""
+    editor_source_folder_name: str = ""
 
     def __post_init__(self):
         # Load API keys from environment variables if not already set

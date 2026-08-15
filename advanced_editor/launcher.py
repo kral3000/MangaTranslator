@@ -96,6 +96,7 @@ from core.editor_session import (
     _resolve_repo_relative_path,
     add_region,
     delete_region,
+    editor_session_context_label,
     load_session,
     related_edit_session_paths,
     render_session_image,
@@ -2888,8 +2889,10 @@ class AdvancedEditorWindow(QMainWindow):
         current_row = self.session_list.currentRow()
         current_text = str(current_row + 1) if current_row >= 0 else "-"
         selected_count = len(self.session_list.selectedItems())
+        summary = f"현재 {current_text} / {self.session_list.count()} · 선택 {selected_count}장"
+        context = editor_session_context_label(self.session)
         self.session_selection_label.setText(
-            f"현재 {current_text} / {self.session_list.count()} · 선택 {selected_count}장"
+            f"{summary}\n{context}" if context else summary
         )
 
     def _set_session_list_current(self, path: Path, *, preserve_selection: bool = False) -> None:
@@ -2970,6 +2973,8 @@ class AdvancedEditorWindow(QMainWindow):
             self.reload_display_image()
             self.refresh_region_list()
             self.load_selected_region_to_form()
+            if hasattr(self, "session_selection_label"):
+                self._update_session_selection_summary()
             self._refresh_history_menu()
             self.setWindowTitle(
                 f"MangaTranslator 고급 편집기 - {self.session_path.name}"

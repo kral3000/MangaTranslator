@@ -291,7 +291,10 @@ def handle_browse_image_editor_folder(current_value: str) -> gr.update:
 def _discover_existing_editor_sessions(
     repo_root: Optional[Path] = None,
 ) -> tuple[List[Tuple[str, str]], int]:
-    from core.editor_session import related_edit_session_paths
+    from core.editor_session import (
+        editor_session_context_label,
+        related_edit_session_paths,
+    )
 
     repo_root = (repo_root or Path(__file__).resolve().parents[1]).resolve()
     session_paths: Dict[str, Path] = {}
@@ -356,6 +359,16 @@ def _discover_existing_editor_sessions(
                 f"{display_name}  ·  영역 {len(data.get('regions') or [])}개"
                 f"  ·  {modified_text}"
             )
+        context = next(
+            (
+                value
+                for record in records
+                if (value := editor_session_context_label(record[1]))
+            ),
+            "",
+        )
+        if context:
+            label += f"  ·  〔{context}〕"
         choices.append((modified, label, str(paths[0])))
 
     choices.sort(key=lambda item: (-item[0], item[1].casefold()))
@@ -1048,6 +1061,7 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         batch_previous_context_image_count=int(batch_previous_context_image_count_val),
         batch_previous_context_text_count=int(batch_previous_context_text_count_val),
         batch_previous_context_text_mode=str(batch_previous_context_text_mode_val),
+        character_profile_name=str(character_profile_name or "").strip(),
     )
 
 

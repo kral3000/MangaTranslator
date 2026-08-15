@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 from pathlib import Path
@@ -6,6 +7,7 @@ from unittest import TestCase
 
 from core.editor_session import related_edit_session_paths
 from ui.callbacks import _discover_existing_editor_sessions
+from ui.logic import _batch_source_folder_name
 
 
 class ExistingEditorSessionDiscoveryTest(TestCase):
@@ -22,7 +24,14 @@ class ExistingEditorSessionDiscoveryTest(TestCase):
                 encoding="utf-8",
             )
             newer.write_text(
-                json.dumps({"source_display_path": "newer.png", "regions": [{}, {}]}),
+                json.dumps(
+                    {
+                        "source_display_path": "newer.png",
+                        "editor_character_profile_name": "지붕 밑 아르테미스",
+                        "editor_source_folder_name": "Chapter 55",
+                        "regions": [{}, {}],
+                    }
+                ),
                 encoding="utf-8",
             )
             invalid.write_text("not json", encoding="utf-8")
@@ -36,7 +45,15 @@ class ExistingEditorSessionDiscoveryTest(TestCase):
                 "older_edit_session.json",
             ])
             self.assertIn("영역 2개", choices[0][0])
+            self.assertIn("〔지붕 밑 아르테미스 · Chapter 55〕", choices[0][0])
             self.assertEqual(invalid_count, 1)
+
+    def test_reads_chapter_name_from_folder_upload_paths(self) -> None:
+        relative_path = "Chapter 55/01.png"
+        encoded = base64.urlsafe_b64encode(relative_path.encode()).decode().rstrip("=")
+        upload = Path(f"__MT_RELATIVE_PATH__{encoded}.png")
+
+        self.assertEqual(_batch_source_folder_name([upload]), "Chapter 55")
 
     def test_restores_a_group_after_the_repository_folder_was_renamed(self) -> None:
         with TemporaryDirectory() as temp_dir:
