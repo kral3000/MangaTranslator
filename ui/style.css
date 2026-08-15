@@ -483,6 +483,19 @@
     outline-offset: 2px !important;
 }
 
+/* --- BATCH NATIVE PICKERS --- */
+#batch-tab .batch-native-picker-row {
+    align-items: flex-end !important;
+    gap: 8px !important;
+}
+
+#batch-tab .batch-native-picker-row button {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 112px !important;
+    white-space: nowrap !important;
+}
+
 /* --- ADVANCED EDITOR LAUNCHER --- */
 #advanced-editor-tab {
     --editor-radius: 6px;

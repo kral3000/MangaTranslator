@@ -876,18 +876,44 @@ def create_layout(
                     elem_classes=["editor-status-callout"],
                 )
 
-            with gr.TabItem("Batch"):
+            with gr.TabItem("Batch", elem_id="batch-tab"):
                 with gr.Row():
                     with gr.Column(scale=1):
+                        with gr.Row(elem_classes=["batch-native-picker-row"]):
+                            batch_native_folder_path = gr.Textbox(
+                                label="탐색기에서 선택한 폴더",
+                                placeholder=r"C:\Users\dongw\Documents\Mana",
+                                interactive=False,
+                                scale=1,
+                            )
+                            batch_native_folder_button = gr.Button(
+                                "폴더 선택",
+                                variant="secondary",
+                                scale=0,
+                                min_width=112,
+                            )
                         input_files = gr.File(
-                            label="Upload Entire Folder",
+                            label="또는 폴더를 끌어다 놓기",
                             file_count="directory",
                             file_types=["image"],
                             type="filepath",
                             elem_id="batch_folder_upload",
                         )
+                        with gr.Row(elem_classes=["batch-native-picker-row"]):
+                            batch_native_zip_path = gr.Textbox(
+                                label="탐색기에서 선택한 ZIP",
+                                placeholder=r"C:\Users\dongw\Documents\Mana",
+                                interactive=False,
+                                scale=1,
+                            )
+                            batch_native_zip_button = gr.Button(
+                                "ZIP 선택",
+                                variant="secondary",
+                                scale=0,
+                                min_width=112,
+                            )
                         input_zip = gr.File(
-                            label="Upload ZIP Archive (preserves directory structure)",
+                            label="또는 ZIP을 끌어다 놓기 (폴더 구조 유지)",
                             file_count="single",
                             file_types=[".zip"],
                             type="filepath",
@@ -3730,6 +3756,8 @@ def create_layout(
         batch_inputs = [
             input_files,
             input_zip,
+            batch_native_folder_path,
+            batch_native_zip_path,
             confidence,
             conjoined_confidence,
             panel_confidence,
@@ -4610,10 +4638,34 @@ def create_layout(
             ],
             queue=False,
         )
+        batch_native_folder_button.click(
+            fn=callbacks.handle_browse_batch_folder,
+            outputs=[batch_native_folder_path, input_files],
+            queue=False,
+            show_progress="hidden",
+        )
+        batch_native_zip_button.click(
+            fn=callbacks.handle_browse_batch_zip,
+            outputs=[batch_native_zip_path, input_zip],
+            queue=False,
+            show_progress="hidden",
+        )
+        input_files.upload(
+            fn=lambda: "",
+            outputs=[batch_native_folder_path],
+            queue=False,
+        )
+        input_zip.upload(
+            fn=lambda: "",
+            outputs=[batch_native_zip_path],
+            queue=False,
+        )
         batch_clear_button.click(
             fn=lambda: (
                 None,
                 None,
+                "",
+                "",
                 None,
                 gr.update(value="", lines=1),
                 gr.update(value=None, visible=True),
@@ -4624,6 +4676,8 @@ def create_layout(
             outputs=[
                 input_files,
                 input_zip,
+                batch_native_folder_path,
+                batch_native_zip_path,
                 batch_output_gallery,
                 batch_status_message,
                 batch_success_zip_file,

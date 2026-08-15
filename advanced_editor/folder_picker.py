@@ -10,12 +10,17 @@ from PyQt6.QtWidgets import QApplication, QFileDialog
 def main() -> int:
     initial = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd()
     title = sys.argv[2] if len(sys.argv) > 2 else "폴더 선택"
+    mode = sys.argv[3] if len(sys.argv) > 3 else "folder"
     app = QApplication.instance() or QApplication(sys.argv[:1])
     dialog = QFileDialog()
     dialog.setWindowTitle(title)
     dialog.setDirectory(str(initial))
-    dialog.setFileMode(QFileDialog.FileMode.Directory)
-    dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+    if mode == "zip":
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        dialog.setNameFilter("ZIP 압축파일 (*.zip)")
+    else:
+        dialog.setFileMode(QFileDialog.FileMode.Directory)
+        dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
     dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
     if dialog.exec() == QFileDialog.DialogCode.Accepted:
         selected = dialog.selectedFiles()

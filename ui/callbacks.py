@@ -49,6 +49,7 @@ from .ui_models import (
 ERROR_PREFIX = "오류: "
 SUCCESS_PREFIX = "완료: "
 IMAGE_EDITOR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+DEFAULT_MANA_DIRECTORY = Path(r"C:\Users\dongw\Documents\Mana")
 
 CANCELLATION_MANAGER: Optional[CancellationManager] = None
 
@@ -225,6 +226,10 @@ def handle_browse_output_directory(current_value: str) -> gr.update:
 
 
 def _select_folder_with_explorer(current_value: Any, title: str) -> str:
+    return _select_path_with_explorer(current_value, title, "folder")
+
+
+def _select_path_with_explorer(current_value: Any, title: str, mode: str) -> str:
     repo_root = Path(__file__).resolve().parents[1]
     current_text = os.path.expandvars(str(current_value or "").strip())
     initial = Path(current_text).expanduser() if current_text else repo_root
@@ -242,6 +247,7 @@ def _select_folder_with_explorer(current_value: Any, title: str) -> str:
             "advanced_editor.folder_picker",
             str(initial),
             title,
+            mode,
         ],
         cwd=str(repo_root),
         capture_output=True,
@@ -259,6 +265,56 @@ def _select_folder_with_explorer(current_value: Any, title: str) -> str:
         if completed.stdout.strip()
         else ""
     )
+
+
+def handle_browse_batch_folder() -> tuple[gr.update, gr.update]:
+    try:
+        selected = _select_folder_with_explorer(
+            DEFAULT_MANA_DIRECTORY, "번역할 만화 폴더 선택"
+        )
+        if selected:
+            return gr.update(value=selected), gr.update(value=None)
+    except Exception as exc:
+        gr.Warning(f"폴더 선택 창을 열 수 없습니다: {exc}")
+    return gr.update(), gr.update()
+
+
+def handle_browse_batch_zip() -> tuple[gr.update, gr.update]:
+    try:
+        selected = _select_path_with_explorer(
+            DEFAULT_MANA_DIRECTORY, "번역할 ZIP 압축파일 선택", "zip"
+        )
+        if selected:
+            return gr.update(value=selected), gr.update(value=None)
+    except Exception as exc:
+        gr.Warning(f"ZIP 선택 창을 열 수 없습니다: {exc}")
+    return gr.update(), gr.update()
+
+
+def _resolve_native_batch_inputs(
+    input_files: Any,
+    input_zip: Any,
+    folder_path: Any,
+    zip_path: Any,
+) -> tuple[Any, Any]:
+    folder_text = str(folder_path or "").strip()
+    if folder_text:
+        folder = Path(folder_text).expanduser().resolve()
+        if not folder.is_dir():
+            raise ValidationError(f"선택한 폴더를 찾을 수 없습니다: {folder}")
+        input_files = sorted(
+            (
+                str(path)
+                for path in folder.rglob("*")
+                if path.is_file() and path.suffix.lower() in IMAGE_EDITOR_EXTENSIONS
+            ),
+            key=str.casefold,
+        )
+        if not input_files:
+            raise ValidationError(f"선택한 폴더에 지원되는 이미지가 없습니다: {folder}")
+    if str(zip_path or "").strip():
+        input_zip = str(zip_path).strip()
+    return input_files, input_zip
 
 
 def _remember_image_editor_source_path(value: Any) -> str:
@@ -2165,10 +2221,18 @@ def handle_batch_click(
     """Callback for the 'Start Batch Translating' button click. Uses dataclasses."""
     input_files = args[0]
     input_zip = args[1] if len(args) > 1 else None
+    native_folder_path = args[2] if len(args) > 2 else None
+    native_zip_path = args[3] if len(args) > 3 else None
     progress(0, desc=ko("Starting batch process..."))
     global CANCELLATION_MANAGER
     CANCELLATION_MANAGER = CancellationManager()
     try:
+        input_files, input_zip = _resolve_native_batch_inputs(
+            input_files,
+            input_zip,
+            native_folder_path,
+            native_zip_path,
+        )
         zip_file_path = None
         if input_zip:
             try:
@@ -2198,7 +2262,7 @@ def handle_batch_click(
         else:
             input_to_process = input_files
 
-        ui_state = _build_ui_state_from_args(args[2:], is_batch=True)
+        ui_state = _build_ui_state_from_args(args[4:], is_batch=True)
 
         _validate_ui_state(ui_state)
 

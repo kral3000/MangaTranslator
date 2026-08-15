@@ -6,7 +6,10 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from core.editor_session import related_edit_session_paths
-from ui.callbacks import _discover_existing_editor_sessions
+from ui.callbacks import (
+    _discover_existing_editor_sessions,
+    _resolve_native_batch_inputs,
+)
 from ui.logic import _batch_source_folder_name
 
 
@@ -64,6 +67,22 @@ class ExistingEditorSessionDiscoveryTest(TestCase):
                 _batch_source_folder_name(str(archive)),
                 "아르테미스 125-126화.zip",
             )
+
+    def test_native_folder_selection_supplies_nested_images(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            folder = Path(temp_dir) / "Chapter 55"
+            nested = folder / "pages"
+            nested.mkdir(parents=True)
+            image = nested / "01.png"
+            image.touch()
+            (nested / "memo.txt").touch()
+
+            files, archive = _resolve_native_batch_inputs(
+                None, None, folder, None
+            )
+
+            self.assertEqual(files, [str(image)])
+            self.assertIsNone(archive)
 
     def test_restores_a_group_after_the_repository_folder_was_renamed(self) -> None:
         with TemporaryDirectory() as temp_dir:
