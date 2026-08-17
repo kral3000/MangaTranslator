@@ -66,6 +66,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QMessageBox,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QScrollBar,
@@ -378,6 +379,7 @@ class AutoHideStatusLabel(QLabel):
 class TaskSignals(QObject):
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
+    progress = pyqtSignal(int, int, str)
 
 REGION_TYPE_LABELS = {
     "speech_bubble": "말풍선",
@@ -1401,6 +1403,7 @@ class AdvancedEditorWindow(QMainWindow):
         self._font_change_requested = False
         self._task_signals: list[TaskSignals] = []
         self._background_job_count = 0
+        self._export_running = False
         self._inpainting_running = False
         self._inpainting_elapsed_seconds = 0
         self._preview_request_serial = 0
@@ -2527,6 +2530,29 @@ class AdvancedEditorWindow(QMainWindow):
                 color: #ffffff;
                 font-size: 12px;
                 font-weight: 600;
+            }
+            QProgressDialog#ExportProgressDialog {
+                background: #f8fafc;
+                color: #172033;
+                border: 1px solid #c4cfdd;
+            }
+            QProgressDialog#ExportProgressDialog QLabel {
+                color: #334155;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 4px 2px;
+            }
+            QProgressBar#ExportProgressBar {
+                background: #e2e8f0;
+                border: 0;
+                border-radius: 4px;
+                min-height: 8px;
+                max-height: 8px;
+                color: transparent;
+            }
+            QProgressBar#ExportProgressBar::chunk {
+                background: #2563eb;
+                border-radius: 4px;
             }
             QScrollBar:vertical {
                 width: 10px;
@@ -4714,6 +4740,7 @@ class AdvancedEditorWindow(QMainWindow):
         *,
         working_message: str,
         on_failure=None,
+        on_progress=None,
     ) -> None:
         signals = TaskSignals()
         self._task_signals.append(signals)
@@ -4721,12 +4748,14 @@ class AdvancedEditorWindow(QMainWindow):
         if hasattr(self, "session_list"):
             self.session_list.setEnabled(False)
         signals.finished.connect(on_success)
+        if on_progress is not None:
+            signals.progress.connect(on_progress)
+        if on_failure is not None:
+            signals.failed.connect(on_failure)
         signals.failed.connect(
             lambda message: QMessageBox.critical(self, "작업 실패", message)
         )
         signals.failed.connect(lambda message: self.status_label.setText(message))
-        if on_failure is not None:
-            signals.failed.connect(on_failure)
 
         def _cleanup(*_args) -> None:
             if signals in self._task_signals:
@@ -4741,7 +4770,12 @@ class AdvancedEditorWindow(QMainWindow):
 
         def _worker() -> None:
             try:
-                signals.finished.emit(task())
+                result = (
+                    task(signals.progress.emit)
+                    if on_progress is not None
+                    else task()
+                )
+                signals.finished.emit(result)
             except Exception:
                 signals.failed.emit(traceback.format_exc())
 
@@ -6627,46 +6661,123 @@ class AdvancedEditorWindow(QMainWindow):
         if selected:
             self._export_sessions(session_paths, Path(selected), single_file=False)
 
-    def _export_sessions(
-        self, session_paths: list[Path], destination: Path, *, single_file: bool
-    ) -> None:
+    def _export_sessions_work(
+        self,
+        session_paths: list[Path],
+        destination: Path,
+        *,
+        single_file: bool,
+        progress=None,
+    ) -> tuple[list[Path], list[str], list[str]]:
         exported: list[Path] = []
         failures: list[str] = []
         warnings: list[str] = []
         used: set[Path] = set()
-        for session_path in session_paths:
+        total = len(session_paths)
+        for index, session_path in enumerate(session_paths):
+            display_name = session_path.name
+            succeeded = False
             try:
                 session = load_session(session_path)
+                relative_path = self._session_export_relative_path(session_path, session)
+                display_name = relative_path.as_posix()
+                if progress is not None:
+                    progress(index, total, f"{display_name} 렌더링 중")
                 image, render_errors = render_session_image(session)
                 target = (
                     destination
                     if single_file
-                    else destination
-                    / self._session_export_relative_path(session_path, session)
+                    else destination / relative_path
                 ).resolve()
                 if not single_file:
                     target = self._unique_export_target(target, used)
                 self._save_image_to_target(image, target)
                 exported.append(target)
                 warnings.extend(render_errors)
+                succeeded = True
             except Exception as exc:
                 failures.append(f"{session_path.name}: {exc}")
-        if exported:
-            destination_text = exported[0] if single_file else destination.resolve()
-            self.status_label.setText(
-                f"{len(exported)}개 이미지 내보내기 완료: {destination_text}"
-            )
-            self._show_save_toast(f"{len(exported)}개 이미지 내보내기 완료")
-        if failures:
-            QMessageBox.warning(
-                self,
-                "일부 이미지 내보내기 실패",
-                "\n".join(failures[:8]),
-            )
-        elif warnings:
-            self.status_label.setText(
-                self.status_label.text() + f"\n렌더링 경고 {len(warnings)}건"
-            )
+            finally:
+                if progress is not None:
+                    state = "완료" if succeeded else "실패"
+                    progress(index + 1, total, f"{display_name} {state}")
+        return exported, failures, warnings
+
+    def _export_sessions(
+        self, session_paths: list[Path], destination: Path, *, single_file: bool
+    ) -> None:
+        if self._export_running or not session_paths:
+            return
+        total = len(session_paths)
+        progress_dialog = QProgressDialog("내보내기 준비 중", "", 0, total, self)
+        progress_dialog.setObjectName("ExportProgressDialog")
+        progress_dialog.setWindowTitle("이미지 내보내기")
+        progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        progress_dialog.setCancelButton(None)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setAutoReset(False)
+        progress_dialog.setMinimumWidth(420)
+        progress_bar = progress_dialog.findChild(QProgressBar)
+        if progress_bar is not None:
+            progress_bar.setObjectName("ExportProgressBar")
+            progress_bar.setTextVisible(False)
+            progress_bar.style().unpolish(progress_bar)
+            progress_bar.style().polish(progress_bar)
+        progress_dialog.show()
+        self._export_running = True
+
+        def _progress(completed: int, count: int, detail: str) -> None:
+            progress_dialog.setRange(0, count)
+            progress_dialog.setValue(completed)
+            progress_dialog.setLabelText(f"{detail}\n{completed}/{count} 처리")
+
+        def _failure(_message: str) -> None:
+            self._export_running = False
+            progress_dialog.close()
+
+        def _success(result: tuple[list[Path], list[str], list[str]]) -> None:
+            exported, failures, warnings = result
+            self._export_running = False
+            progress_dialog.setValue(total)
+            if failures:
+                progress_dialog.close()
+            else:
+                progress_dialog.setLabelText(
+                    f"내보내기 완료\n{len(exported)}개 이미지 저장됨"
+                )
+                QTimer.singleShot(1100, progress_dialog.close)
+            if exported:
+                destination_text = (
+                    exported[0] if single_file else destination.resolve()
+                )
+                self.status_label.setText(
+                    f"{len(exported)}개 이미지 내보내기 완료: {destination_text}"
+                )
+                self._show_save_toast(f"{len(exported)}개 이미지 내보내기 완료")
+            if failures:
+                QMessageBox.warning(
+                    self,
+                    "일부 이미지 내보내기 실패",
+                    "\n".join(failures[:8]),
+                )
+            elif warnings:
+                self.status_label.setText(
+                    self.status_label.text() + f"\n렌더링 경고 {len(warnings)}건"
+                )
+
+        self._run_background(
+            lambda report: self._export_sessions_work(
+                session_paths,
+                destination,
+                single_file=single_file,
+                progress=report,
+            ),
+            _success,
+            working_message=f"{total}개 이미지를 내보내는 중입니다.",
+            on_failure=_failure,
+            on_progress=_progress,
+        )
 
     def render_and_save(
         self,

@@ -115,13 +115,25 @@ class ExportScopeTest(TestCase):
                 ),
                 patch("advanced_editor.launcher.rerender_session") as rerender,
             ):
-                AdvancedEditorWindow._export_sessions(
-                    window, session_paths, root / "export", single_file=False
+                progress = Mock()
+                exported, failures, warnings = AdvancedEditorWindow._export_sessions_work(
+                    window,
+                    session_paths,
+                    root / "export",
+                    single_file=False,
+                    progress=progress,
                 )
 
             rerender.assert_not_called()
+            self.assertEqual(failures, [])
+            self.assertEqual(warnings, [])
+            self.assertEqual(len(exported), 2)
             targets = [call.args[1] for call in window._save_image_to_target.call_args_list]
             self.assertEqual(
                 targets,
                 [root / "export/chapter/01.png", root / "export/chapter/02.png"],
+            )
+            self.assertEqual(
+                [call.args[:2] for call in progress.call_args_list],
+                [(0, 2), (1, 2), (1, 2), (2, 2)],
             )
