@@ -342,6 +342,26 @@ def _draw_horizontal_ellipsis(canvas, start_x, baseline_y, width, top, bottom, t
         canvas.drawCircle(float(dot_x), float(center_y), float(radius), paint_obj)
 
 
+def _draw_vertical_ellipsis(
+    canvas,
+    center_x,
+    center_y,
+    dot_count,
+    dot_step,
+    radius,
+    paint_obj,
+    outline_paint,
+):
+    first_offset = -float(dot_step) * (int(dot_count) - 1) / 2.0
+    for idx in range(int(dot_count)):
+        dot_y = float(center_y) + first_offset + float(dot_step) * idx
+        if outline_paint:
+            canvas.drawCircle(
+                float(center_x), float(dot_y), float(radius + 0.5), outline_paint
+            )
+        canvas.drawCircle(float(center_x), float(dot_y), float(radius), paint_obj)
+
+
 def load_font_resources(
     font_path: str,
 ) -> Tuple[bytes, skia.Typeface, hb.Face]:
@@ -727,6 +747,9 @@ def draw_layout(
                                 radius * 2.0 + max(1.0, final_font_size * 0.16),
                             )
                         )
+                        dot_count = max(
+                            2, int(line_data.get("ellipsis_dot_count", 3))
+                        )
 
                         if bg_paint is not None:
                             pad_x = final_font_size * 0.1
@@ -739,13 +762,15 @@ def draw_layout(
                             )
                             canvas.drawRect(rect, bg_paint)
 
-                        for offset_y in (-dot_step, 0.0, dot_step):
-                            dot_y = center_y + offset_y
-                            canvas.drawCircle(
-                                float(unit_center_x),
-                                float(dot_y),
-                                float(radius),
-                                paint,
+                        _draw_vertical_ellipsis(
+                            canvas,
+                            unit_center_x,
+                            center_y,
+                            dot_count,
+                            dot_step,
+                            radius,
+                            paint,
+                            outline_paint,
                         )
                         log_message(
                             "Rendered vertical ellipsis",

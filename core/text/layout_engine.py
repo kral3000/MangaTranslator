@@ -58,7 +58,6 @@ DASH_LINE_CHARS = set("-‐‑‒–—―−─━ーｰㅡ")
 VERTICAL_VERTICAL_BRACKET_GLYPHS = set("()（）[]［］{}｛｝【】「」『』《》〈〉〔〕〖〗〘〙〚〛")
 VERTICAL_ROTATED_GLYPHS = DASH_LINE_CHARS | set("~～〜") | VERTICAL_VERTICAL_BRACKET_GLYPHS
 VERTICAL_ROTATION_DEGREES = 90.0
-VERTICAL_ELLIPSIS_TOKEN = "\ue001"
 VERTICAL_SPACE_TOKEN = "\ue002"
 VERTICAL_CENTERED_DOT_TOKEN = "\ue007"
 VERTICAL_WORD_SPACE_RATIO = 0.24
@@ -352,6 +351,18 @@ def _is_vertical_ellipsis_text(text: str) -> bool:
     )
 
 
+def _vertical_ellipsis_dot_count(text: str) -> int:
+    count = 0
+    for ch in text:
+        if ch in VERTICAL_DOT_ELLIPSIS_CHARS:
+            count += 1
+        elif ch == "\u2025":
+            count += 2
+        elif ch in VERTICAL_ELLIPSIS_CHARS:
+            count += 3
+    return count
+
+
 def _strip_vertical_terminal_period(text: str) -> str:
     """Drop a single ASCII sentence-ending period only for vertical text layout."""
     if not text:
@@ -385,9 +396,7 @@ def _strip_vertical_terminal_period(text: str) -> str:
 def _append_vertical_unit(
     units: List[Tuple[str, str]], text: str, style_name: str
 ) -> None:
-    if _is_vertical_ellipsis_text(text):
-        text = VERTICAL_ELLIPSIS_TOKEN
-    elif len(text) == 1 and text in VERTICAL_DOT_ELLIPSIS_CHARS:
+    if len(text) == 1 and text in VERTICAL_DOT_ELLIPSIS_CHARS:
         text = VERTICAL_CENTERED_DOT_TOKEN
     units.append((text, style_name))
 
@@ -709,12 +718,13 @@ def _measure_vertical_unit(
             "vertical_space": True,
         }
 
-    if text == VERTICAL_ELLIPSIS_TOKEN:
+    if _is_vertical_ellipsis_text(text):
+        dot_count = _vertical_ellipsis_dot_count(text)
         dot_radius = max(0.95, float(font_size) * 0.065)
         dot_gap = max(1.25, float(font_size) * 0.15)
         dot_step = dot_radius * 2.0 + dot_gap
         visual_width = dot_radius * 2.0
-        visual_height = dot_radius * 6.0 + dot_gap * 2.0
+        visual_height = dot_radius * 2.0 * dot_count + dot_gap * (dot_count - 1)
         return {
             "text_with_markers": text,
             "style": style_name,
@@ -727,6 +737,7 @@ def _measure_vertical_unit(
             "top": -visual_height / 2.0,
             "bottom": visual_height / 2.0,
             "draw_vertical_ellipsis": True,
+            "ellipsis_dot_count": dot_count,
             "ellipsis_dot_radius": dot_radius,
             "ellipsis_dot_step": dot_step,
         }
