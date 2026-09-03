@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import torch
 
@@ -201,6 +201,7 @@ class OutsideTextConfig:
     """Configuration for outside speech bubble text detection and removal."""
 
     enabled: bool = False
+    processing_mode: str = "all"  # "off", "prose", or "all"
     enable_page_number_filtering: bool = False
     page_filter_margin_threshold: float = 0.1
     page_filter_min_area_ratio: float = 0.05
@@ -248,6 +249,28 @@ class OutsideTextConfig:
     flux_guidance_scale: float = 2.5
     flux_kontext_prompt: str = DEFAULT_FLUX_KONTEXT_PROMPT
     flux_klein_prompt: str = DEFAULT_FLUX_KLEIN_PROMPT
+
+
+OUTSIDE_TEXT_PROCESSING_MODES = {"off", "prose", "all"}
+OUTSIDE_TEXT_PROSE_EXCLUDED_TAGS = {"OT", "OH", "SFX", "SFXI", "SFXS"}
+
+
+def normalize_outside_text_processing_mode(value: Any, enabled: bool = False) -> str:
+    if isinstance(value, bool):
+        return "all" if value else "off"
+    mode = str(value or "").strip().lower()
+    if mode in OUTSIDE_TEXT_PROCESSING_MODES:
+        return mode
+    return "all" if enabled else "off"
+
+
+def should_process_outside_text_tag(mode: Any, render_tag: Any) -> bool:
+    normalized_mode = normalize_outside_text_processing_mode(mode)
+    if normalized_mode == "off":
+        return False
+    if normalized_mode == "all":
+        return True
+    return str(render_tag or "").strip().upper() not in OUTSIDE_TEXT_PROSE_EXCLUDED_TAGS
 
 
 @dataclass

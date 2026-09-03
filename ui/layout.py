@@ -4,6 +4,7 @@ from typing import Any
 
 import gradio as gr
 
+from core.config import normalize_outside_text_processing_mode
 from core.tag_styles import TAG_DEFINITIONS, TAG_STYLE_COLUMNS, tag_styles_to_table
 
 from . import callbacks, character_profiles, korean, settings_manager, utils
@@ -2426,17 +2427,34 @@ def create_layout(
                                     "Can also set via HF_TOKEN env var."
                                 ),
                             )
-                            outside_text_enabled = gr.Checkbox(
-                                value=saved_settings.get("outside_text_enabled", False),
-                                label="Enable OSB Text Detection",
-                                info="Detect, inpaint, and translate text outside speech bubbles.",
+                            outside_text_enabled = gr.Dropdown(
+                                choices=[
+                                    ("처리 안 함", "off"),
+                                    ("대사·독백·나레이션만", "prose"),
+                                    ("전체 처리", "all"),
+                                ],
+                                value=normalize_outside_text_processing_mode(
+                                    saved_settings.get("outside_text_processing_mode"),
+                                    enabled=bool(
+                                        saved_settings.get("outside_text_enabled", False)
+                                    ),
+                                ),
+                                label="말풍선 밖 텍스트 처리",
+                                info=(
+                                    "권장 모드는 대사·독백·나레이션만 번역하고 "
+                                    "효과음·제목·종이 위 손글씨는 원본으로 유지합니다."
+                                ),
                             )
 
                             # Wrap all settings except the enable checkbox and token in a Column with visibility control
                             with gr.Column(
-                                visible=saved_settings.get(
-                                    "outside_text_enabled", False
+                                visible=normalize_outside_text_processing_mode(
+                                    saved_settings.get("outside_text_processing_mode"),
+                                    enabled=bool(
+                                        saved_settings.get("outside_text_enabled", False)
+                                    ),
                                 )
+                                != "off"
                             ) as outside_text_settings_wrapper:
                                 gr.Markdown("### Detection")
                                 outside_text_osb_confidence = gr.Slider(
@@ -4216,7 +4234,7 @@ def create_layout(
 
         # OSB enable/disable handler
         outside_text_enabled.change(
-            fn=lambda x: gr.update(visible=x),
+            fn=lambda mode: gr.update(visible=mode != "off"),
             inputs=outside_text_enabled,
             outputs=outside_text_settings_wrapper,
             queue=False,

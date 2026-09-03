@@ -248,6 +248,7 @@ DEFAULT_SETTINGS = {
     "osb_min_side_pixels": 128,
     # Outside text removal settings
     "outside_text_enabled": False,
+    "outside_text_processing_mode": "prose",
     "outside_text_seed": 1,
     "outside_text_huggingface_token": "",
     "outside_text_inpainting_method": "flux_klein_4b",
@@ -415,6 +416,7 @@ CANONICAL_CONFIG_KEY_ORDER: List[str] = [
     "colored_bubble_mask_dilation_offset",
     # Outside Text Removal
     "outside_text_enabled",
+    "outside_text_processing_mode",
     "outside_text_seed",
     "outside_text_huggingface_token",
     "outside_text_inpainting_method",
@@ -663,6 +665,13 @@ def get_saved_settings() -> Dict[str, Any]:
                         settings["padding_horizontal_pixels"] = legacy_padding_pixels
                     if "padding_vertical_pixels" not in saved_config:
                         settings["padding_vertical_pixels"] = legacy_padding_pixels
+
+                # 6) Preserve the old checkbox meaning when upgrading to the
+                # three-state outside-text menu.
+                if "outside_text_processing_mode" not in saved_config:
+                    settings["outside_text_processing_mode"] = (
+                        "all" if saved_config.get("outside_text_enabled", False) else "off"
+                    )
             except Exception:
                 pass
 

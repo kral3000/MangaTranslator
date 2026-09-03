@@ -13,7 +13,7 @@ import torch
 from PIL import Image
 
 import runtime_logging
-from core.config import MangaTranslatorConfig
+from core.config import MangaTranslatorConfig, normalize_outside_text_processing_mode
 from core.pipeline import (
     BATCH_EMBEDDED_OUTPUT_DIR_NAME,
     BATCH_PLAIN_OUTPUT_DIR_NAME,
@@ -909,6 +909,9 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
     flux_cpu_offload, flux_low_vram = flux_offload_flags(
         outside_text_flux_offload_mode_val
     )
+    outside_text_processing_mode = normalize_outside_text_processing_mode(
+        outside_text_enabled_val
+    )
 
     return UIConfigState(
         detection=UIDetectionSettings(
@@ -940,7 +943,8 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
             ),
         ),
         outside_text=UIOutsideTextSettings(
-            enabled=outside_text_enabled_val,
+            enabled=outside_text_processing_mode != "off",
+            processing_mode=outside_text_processing_mode,
             seed=int(outside_text_seed_val),
             huggingface_token=outside_text_huggingface_token_val,
             inpainting_method=outside_text_inpainting_method_val,
@@ -2558,6 +2562,9 @@ def handle_save_config_click(*args: Any) -> str:
     flux_cpu_offload, flux_low_vram = flux_offload_flags(
         outside_text_flux_offload_mode_val
     )
+    outside_text_processing_mode = normalize_outside_text_processing_mode(
+        outside_text_enabled_val
+    )
 
     ui_state = UIConfigState(
         detection=UIDetectionSettings(
@@ -2589,7 +2596,8 @@ def handle_save_config_click(*args: Any) -> str:
             roi_shrink_px=int(max(0, min(8, roi_shrink_px))),
         ),
         outside_text=UIOutsideTextSettings(
-            enabled=outside_text_enabled_val,
+            enabled=outside_text_processing_mode != "off",
+            processing_mode=outside_text_processing_mode,
             seed=int(outside_text_seed_val),
             huggingface_token=outside_text_huggingface_token_val,
             inpainting_method=outside_text_inpainting_method_val,

@@ -19,7 +19,12 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from core.caching import get_cache
-from core.config import MangaTranslatorConfig, PreprocessingConfig, RenderingConfig
+from core.config import (
+    MangaTranslatorConfig,
+    PreprocessingConfig,
+    RenderingConfig,
+    should_process_outside_text_tag,
+)
 from core.scaling import scale_area, scale_font_size, scale_length, scale_scalar
 from utils.exceptions import (
     CancellationError,
@@ -12805,6 +12810,40 @@ def translate_and_render(
                             )
                             if protected_index != i and protected_bbox is not None
                         ]
+
+                        if is_outside_text and not should_process_outside_text_tag(
+                            config.outside_text.processing_mode,
+                            render_tag,
+                        ):
+                            restore_bbox = tuple(
+                                int(round(float(value)))
+                                for value in osb_position_bbox
+                            )
+                            (
+                                pil_cleaned_image,
+                                blocked_restore_pixels,
+                            ) = _restore_original_region_excluding_bboxes(
+                                pil_cleaned_image,
+                                original_restore_image,
+                                restore_bbox,
+                                other_restore_protection_bboxes,
+                                None,
+                            )
+                            final_image_to_save = pil_cleaned_image
+                            bubble["skip_render"] = True
+                            log_message(
+                                "Restored original outside text "
+                                f"{bbox} - <{render_tag or 'UNTAGGED'}> excluded by "
+                                f"{config.outside_text.processing_mode} mode"
+                                + (
+                                    f" ({blocked_restore_pixels} protected px)"
+                                    if blocked_restore_pixels > 0
+                                    else ""
+                                ),
+                                verbose=verbose,
+                                always_print=True,
+                            )
+                            continue
 
                         if (
                             not text

@@ -18,6 +18,7 @@ from core.config import (
     RenderingConfig,
     TagStyleConfig,
     TranslationConfig,
+    normalize_outside_text_processing_mode,
 )
 
 
@@ -220,6 +221,7 @@ class UIOutsideTextSettings:
     """UI state for outside speech bubble text removal settings."""
 
     enabled: bool = False
+    processing_mode: str = "prose"
     enable_page_number_filtering: bool = False
     page_filter_margin_threshold: float = 0.1
     page_filter_min_area_ratio: float = 0.05
@@ -437,6 +439,7 @@ class UIConfigState:
             "outside_dark_outline_color": self.rendering.outside_dark_outline_color,
             "outside_dark_outline_width": self.rendering.outside_dark_outline_width,
             "outside_text_enabled": self.outside_text.enabled,
+            "outside_text_processing_mode": self.outside_text.processing_mode,
             "outside_text_seed": self.outside_text.seed,
             "outside_text_huggingface_token": self.outside_text.huggingface_token,
             "outside_text_inpainting_method": self.outside_text.inpainting_method,
@@ -562,6 +565,24 @@ class UIConfigState:
         padding_vertical_pixels = data.get(
             "padding_vertical_pixels", legacy_padding_pixels
         )
+        legacy_outside_text_enabled = bool(
+            data.get(
+                "outside_text_enabled",
+                defaults.get("outside_text_enabled", False),
+            )
+        )
+        outside_text_processing_mode = normalize_outside_text_processing_mode(
+            data.get("outside_text_processing_mode")
+            if "outside_text_processing_mode" in data
+            else (
+                "all"
+                if legacy_outside_text_enabled
+                else "off"
+                if "outside_text_enabled" in data
+                else defaults.get("outside_text_processing_mode", "prose")
+            ),
+            enabled=legacy_outside_text_enabled,
+        )
 
         return UIConfigState(
             detection=UIDetectionSettings(
@@ -622,7 +643,8 @@ class UIConfigState:
                 ),
             ),
             outside_text=UIOutsideTextSettings(
-                enabled=data.get("outside_text_enabled", False),
+                enabled=outside_text_processing_mode != "off",
+                processing_mode=outside_text_processing_mode,
                 enable_page_number_filtering=data.get(
                     "outside_text_enable_page_number_filtering",
                     defaults.get("outside_text_enable_page_number_filtering", False),
@@ -1349,6 +1371,7 @@ def map_ui_to_backend_config(
 
     outside_text_cfg = OutsideTextConfig(
         enabled=ui_state.outside_text.enabled,
+        processing_mode=ui_state.outside_text.processing_mode,
         enable_page_number_filtering=ui_state.outside_text.enable_page_number_filtering,
         page_filter_margin_threshold=ui_state.outside_text.page_filter_margin_threshold,
         page_filter_min_area_ratio=ui_state.outside_text.page_filter_min_area_ratio,
