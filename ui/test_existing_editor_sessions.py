@@ -123,7 +123,12 @@ class ExistingEditorSessionDiscoveryTest(TestCase):
                 )
 
             self.assertEqual(related_edit_session_paths(first), [first, second])
-            choices, invalid_count = _discover_existing_editor_sessions(root)
+            with patch(
+                "core.editor_session.related_edit_session_paths",
+                wraps=related_edit_session_paths,
+            ) as related_paths:
+                choices, invalid_count = _discover_existing_editor_sessions(root)
             self.assertEqual(len(choices), 1)
             self.assertIn("묶음 2장", choices[0][0])
             self.assertEqual(invalid_count, 0)
+            self.assertEqual(related_paths.call_count, 0)

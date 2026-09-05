@@ -1151,10 +1151,30 @@ class ModelManager:
                 repo_id = hf_info["repo_id"]
 
                 log_message(f"Loading SDNQ pipeline from {repo_id}...", verbose=verbose)
+                pipeline_options = {
+                    "torch_dtype": self.dtype,
+                    "cache_dir": str(self.flux_cache_dir),
+                }
+                try:
+                    from diffusers import AutoencoderKLFlux2
+
+                    pipeline_options["vae"] = AutoencoderKLFlux2.from_pretrained(
+                        "black-forest-labs/FLUX.2-small-decoder",
+                        torch_dtype=self.dtype,
+                        cache_dir=str(self.flux_cache_dir),
+                    )
+                    log_message(
+                        "Using FLUX.2 Small Decoder (faster, lower VRAM).",
+                        verbose=verbose,
+                    )
+                except Exception as e:
+                    log_message(
+                        f"FLUX.2 Small Decoder unavailable ({e}); using the bundled decoder.",
+                        verbose=verbose,
+                    )
                 pipeline = Flux2KleinPipeline.from_pretrained(
                     repo_id,
-                    torch_dtype=self.dtype,
-                    cache_dir=str(self.flux_cache_dir),
+                    **pipeline_options,
                 )
 
                 # Enable INT8 MatMul for GPU acceleration (AMD, Intel ARC, NVIDIA)

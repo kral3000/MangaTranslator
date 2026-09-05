@@ -65,7 +65,11 @@ def _iter_font_files_in_dir(directory: Path, recursive: bool) -> Iterable[Path]:
     try:
         iterator = directory.rglob("*") if recursive else directory.iterdir()
         for path in iterator:
-            if path.is_file() and path.suffix.lower() in FONT_EXTENSIONS:
+            if (
+                path.is_file()
+                and path.suffix.lower() in FONT_EXTENSIONS
+                and all(part.casefold() != "_backup" for part in path.parts)
+            ):
                 yield path
     except Exception:
         return

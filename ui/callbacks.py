@@ -389,20 +389,50 @@ def _discover_existing_editor_sessions(
         except Exception:
             invalid_count += 1
 
+    def group_member_key(value: Any) -> str:
+        parts = Path(str(value)).parts
+        for index, part in enumerate(parts):
+            if part.casefold() in {"editor_sessions", "editor_imports"}:
+                parts = parts[index:]
+                break
+        return "/".join(part.casefold() for part in parts)
+
     groups: Dict[tuple[str, ...], List[Path]] = {}
-    for path, _data, _modified, _display_name in sessions.values():
-        related = [
-            candidate
-            for candidate in related_edit_session_paths(path)
-            if str(candidate).casefold() in sessions
-        ]
+    group_positions: Dict[tuple[str, ...], Dict[str, int]] = {}
+    related_cache: Dict[tuple[str, ...], List[Path]] = {}
+    for path, data, _modified, _display_name in sessions.values():
+        stored_group = tuple(
+            group_member_key(value)
+            for value in data.get("editor_session_group", []) or []
+        )
+        if stored_group:
+            groups.setdefault(stored_group, []).append(path)
+            group_positions.setdefault(
+                stored_group,
+                {member: index for index, member in enumerate(stored_group)},
+            )
+            continue
+        cache_key = (str(path).casefold(),)
+        if cache_key not in related_cache:
+            related_cache[cache_key] = [
+                candidate
+                for candidate in related_edit_session_paths(path, data)
+                if str(candidate).casefold() in sessions
+            ]
+        related = related_cache[cache_key]
         key = tuple(str(candidate).casefold() for candidate in related) or (
             str(path).casefold(),
         )
         groups.setdefault(key, related or [path])
 
     choices: List[Tuple[float, str, str]] = []
-    for paths in groups.values():
+    for key, paths in groups.items():
+        positions = group_positions.get(key)
+        if positions:
+            paths = sorted(
+                paths,
+                key=lambda item: positions.get(group_member_key(item), len(positions)),
+            )
         records = [sessions[str(path).casefold()] for path in paths]
         modified = max(record[2] for record in records)
         modified_text = time.strftime("%Y-%m-%d %H:%M", time.localtime(modified))

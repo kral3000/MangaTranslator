@@ -119,6 +119,8 @@ def _decode_uploaded_relative_path(file_name: str) -> Optional[Path]:
 
 def _path_contains_font(path: Path) -> bool:
     try:
+        if any(part.casefold() == "_backup" for part in path.parts):
+            return False
         if path.is_file():
             return path.suffix.lower() in {".ttf", ".otf", ".ttc"}
         if path.is_dir():
@@ -126,6 +128,7 @@ def _path_contains_font(path: Path) -> bool:
                 item.suffix.lower() in {".ttf", ".otf", ".ttc"}
                 for item in path.rglob("*")
                 if item.is_file()
+                and all(part.casefold() != "_backup" for part in item.parts)
             )
     except Exception:
         return False
@@ -357,6 +360,7 @@ def _normalize_session_paths(
         "rendered_snapshot_path",
         "base_image_path",
         "inpainted_image_path",
+        "inpaint_source_path",
         "inpaint_mask_path",
         "edited_image_path",
         "assets_dir",
@@ -855,6 +859,80 @@ def _safe_int_bbox(bbox: Any, image_size: Tuple[int, int]) -> Tuple[int, int, in
     right = max(left + 1, min(width, int(round(x2))))
     bottom = max(top + 1, min(height, int(round(y2))))
     return left, top, right, bottom
+
+
+def _region_text_transform(region: Dict[str, Any]) -> Tuple[float, float, float, float]:
+    """Return the editable text-layer scale, skew and perspective values."""
+    render = region.get("render", {})
+    if not isinstance(render, dict):
+        render = {}
+
+    def number(key: str, default: float, minimum: float, maximum: float) -> float:
+        try:
+            value = float(render.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        return max(minimum, min(maximum, value))
+
+    return (
+        number("transform_scale_x", 1.0, 0.1, 4.0),
+        number("transform_scale_y", 1.0, 0.1, 4.0),
+        number("transform_skew_x_deg", 0.0, -60.0, 60.0),
+        number("transform_perspective_y", 0.0, -0.8, 0.8),
+    )
+
+
+def _region_text_transform_matrix(
+    region: Dict[str, Any],
+    bbox: Optional[Tuple[int, int, int, int]] = None,
+) -> np.ndarray:
+    x1, y1, x2, y2 = bbox or tuple(_bbox_to_list(region.get("bbox")))
+    height = max(1.0, float(y2) - float(y1))
+    center_x = (float(x1) + float(x2)) / 2.0
+    center_y = (float(y1) + float(y2)) / 2.0
+    scale_x, scale_y, skew_deg, perspective_y = _region_text_transform(region)
+    rotation = math.radians(float(region.get("rotation_deg") or 0.0))
+    cosine, sine = math.cos(rotation), math.sin(rotation)
+    translate_to_origin = np.array(
+        [[1.0, 0.0, -center_x], [0.0, 1.0, -center_y], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    transform = np.array(
+        [
+            [scale_x, math.tan(math.radians(skew_deg)), 0.0],
+            [0.0, scale_y, 0.0],
+            [0.0, perspective_y / height, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    rotate = np.array(
+        [[cosine, -sine, 0.0], [sine, cosine, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    translate_back = np.array(
+        [[1.0, 0.0, center_x], [0.0, 1.0, center_y], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    return translate_back @ rotate @ transform @ translate_to_origin
+
+
+def _warp_rgba_text_layer(layer: Image.Image, matrix: np.ndarray) -> Image.Image:
+    rgba = np.asarray(layer.convert("RGBA"), dtype=np.float32)
+    alpha = rgba[..., 3:4] / 255.0
+    premultiplied = np.concatenate((rgba[..., :3] * alpha, rgba[..., 3:4]), axis=2)
+    warped = cv2.warpPerspective(
+        premultiplied,
+        matrix,
+        layer.size,
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0, 0),
+    )
+    warped_alpha = warped[..., 3:4] / 255.0
+    rgb = np.zeros_like(warped[..., :3])
+    np.divide(warped[..., :3], warped_alpha, out=rgb, where=warped_alpha > 1e-6)
+    result = np.concatenate((rgb, warped[..., 3:4]), axis=2)
+    return Image.fromarray(np.clip(np.rint(result), 0, 255).astype(np.uint8), "RGBA")
 
 
 def _baseline_bbox(region: Dict[str, Any]) -> Optional[List[float]]:
@@ -1402,6 +1480,7 @@ def save_pipeline_edit_session(
         "rendered_snapshot_path": str(rendered_snapshot_path.resolve()),
         "base_image_path": str(base_image_path.resolve()),
         "inpainted_image_path": "",
+        "inpaint_source_path": "",
         "inpainted_background_text_free": False,
         "inpaint_mask_path": "",
         "edited_image_path": str(edited_image_path.resolve()),
@@ -1583,6 +1662,7 @@ def create_image_edit_sessions(
             "rendered_snapshot_path": "",
             "base_image_path": str(base_image_path.resolve()),
             "inpainted_image_path": "",
+            "inpaint_source_path": "",
             "inpainted_background_text_free": False,
             "inpaint_mask_path": "",
             "edited_image_path": str(edited_image_path.resolve()),
@@ -2171,44 +2251,54 @@ def _render_region_onto(
     rotation_deg = float(region.get("rotation_deg") or 0.0)
     vertical_stack = bool(region.get("vertical_stack", False))
     text_color_rgb = _normalize_rgb(region.get("font_color"))
-    try:
-        use_mask = bool(region.get("use_mask")) and not _region_geometry_changed(region)
-        mask = _load_mask(region.get("mask_path")) if use_mask else None
-        return render_text_skia(
-            pil_image=image,
+
+    scale_x, scale_y, skew_deg, perspective_y = _region_text_transform(region)
+    use_text_warp = (
+        abs(scale_x - 1.0) > 1e-4
+        or abs(scale_y - 1.0) > 1e-4
+        or abs(skew_deg) > 1e-4
+        or abs(perspective_y) > 1e-4
+    )
+
+    def render_at(
+        target_bbox: Tuple[int, int, int, int],
+        target_mask: Optional[np.ndarray],
+    ) -> Image.Image:
+        target_image = Image.new("RGBA", image.size, (0, 0, 0, 0)) if use_text_warp else image
+        result = render_text_skia(
+            pil_image=target_image,
             text=text,
-            bbox=bbox,
+            bbox=target_bbox,
             font_dir=font_dir,
-            cleaned_mask=mask,
+            cleaned_mask=target_mask,
             bubble_color_bgr=bubble_color_bgr,
             config=config,
             verbose=False,
             bubble_id=str(index),
-            rotation_deg=rotation_deg,
+            rotation_deg=0.0 if use_text_warp else rotation_deg,
             vertical_stack=vertical_stack,
             text_color_rgb=text_color_rgb,
             raise_on_safe_error=False,
             auto_vertical_ignore_word_count=True,
         )
+        if not use_text_warp:
+            return result
+        warped = _warp_rgba_text_layer(
+            result,
+            _region_text_transform_matrix(region, target_bbox),
+        )
+        composited = Image.alpha_composite(image.convert("RGBA"), warped)
+        composited.info.update(result.info)
+        return composited
+
+    try:
+        use_mask = bool(region.get("use_mask")) and not _region_geometry_changed(region)
+        mask = _load_mask(region.get("mask_path")) if use_mask else None
+        return render_at(bbox, mask)
     except Exception as initial_exc:
         for overflow_bbox in _editor_overflow_bboxes(region, image.size):
             try:
-                result = render_text_skia(
-                    pil_image=image,
-                    text=text,
-                    bbox=overflow_bbox,
-                    font_dir=font_dir,
-                    cleaned_mask=None,
-                    bubble_color_bgr=bubble_color_bgr,
-                    config=config,
-                    verbose=False,
-                    bubble_id=str(index),
-                    rotation_deg=rotation_deg,
-                    vertical_stack=vertical_stack,
-                    text_color_rgb=text_color_rgb,
-                    raise_on_safe_error=False,
-                    auto_vertical_ignore_word_count=True,
-                )
+                result = render_at(overflow_bbox, None)
                 result.info["editor_overflow_bbox"] = overflow_bbox
                 return result
             except Exception:

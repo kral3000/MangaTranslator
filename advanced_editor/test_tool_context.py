@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import numpy as np
 
-from advanced_editor.launcher import AdvancedEditorWindow
+from advanced_editor.launcher import AdvancedEditorWindow, SPEECH_BALLOON_REPAIR_PROMPT
 
 
 class ToolContextTest(TestCase):
@@ -55,6 +55,32 @@ class ToolContextTest(TestCase):
         self.assertIn("중간 수준", description)
         self.assertNotIn("OpenCV", description)
         self.assertNotIn("Flux", description)
+
+    def test_inpaint_prompt_presets_switch_and_show_the_active_choice(self) -> None:
+        prompt_edit = SimpleNamespace(
+            value="custom",
+            setPlainText=lambda value: setattr(prompt_edit, "value", value),
+            toPlainText=lambda: prompt_edit.value,
+        )
+        buttons = {"일반 인페인트": Mock(), "말풍선 복구": Mock()}
+        window = SimpleNamespace(
+            inpaint_prompt_edit=prompt_edit,
+            inpaint_prompt_presets={
+                "일반 인페인트": "general",
+                "말풍선 복구": SPEECH_BALLOON_REPAIR_PROMPT,
+            },
+            inpaint_prompt_preset_buttons=buttons,
+            _sync_inpaint_prompt_preset_buttons=lambda: AdvancedEditorWindow._sync_inpaint_prompt_preset_buttons(window),
+            _store_inpaint_controls=Mock(),
+            status_label=SimpleNamespace(setText=Mock()),
+        )
+
+        AdvancedEditorWindow._apply_inpaint_prompt_preset(window, "말풍선 복구")
+
+        self.assertEqual(prompt_edit.value, SPEECH_BALLOON_REPAIR_PROMPT)
+        buttons["일반 인페인트"].setChecked.assert_called_with(False)
+        buttons["말풍선 복구"].setChecked.assert_called_with(True)
+        window._store_inpaint_controls.assert_called_once()
 
     def test_paint_brush_opens_color_settings_and_toolbar_swatch(self) -> None:
         window = SimpleNamespace(

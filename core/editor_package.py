@@ -33,6 +33,7 @@ SESSION_FILE_KEYS = (
     "rendered_snapshot_path",
     "base_image_path",
     "inpainted_image_path",
+    "inpaint_source_path",
     "inpaint_mask_path",
     "edited_image_path",
     "paint_overlay_path",

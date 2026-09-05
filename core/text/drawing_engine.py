@@ -362,6 +362,20 @@ def _draw_vertical_ellipsis(
         canvas.drawCircle(float(center_x), float(dot_y), float(radius), paint_obj)
 
 
+def _horizontal_line_start_x(
+    target_center_x: float,
+    alignment_width: float,
+    line_width: float,
+    text_alignment: str,
+) -> float:
+    left = float(target_center_x) - float(alignment_width) / 2.0
+    if text_alignment == "left":
+        return left
+    if text_alignment == "right":
+        return left + float(alignment_width) - float(line_width)
+    return float(target_center_x) - float(line_width) / 2.0
+
+
 def load_font_resources(
     font_path: str,
 ) -> Tuple[bytes, skia.Typeface, hb.Face]:
@@ -549,7 +563,11 @@ def draw_layout(
                 StrokeJoin=skia.Paint.kRound_Join,
             )
 
-        block_start_x = target_center_x - final_max_line_width / 2.0
+        text_alignment = str(layout_data.get("text_alignment") or "center").lower()
+        alignment_width = max(
+            float(final_max_line_width),
+            float(layout_data.get("alignment_width") or final_max_line_width),
+        )
 
         num_lines = len(final_lines_data)
         if num_lines > 0:
@@ -1073,9 +1091,11 @@ def draw_layout(
                 for i, line_data in enumerate(final_lines_data):
                     line_width_measured = line_data["width"]
 
-                    line_start_x = (
-                        block_start_x
-                        + (final_max_line_width - line_width_measured) / 2.0
+                    line_start_x = _horizontal_line_start_x(
+                        target_center_x,
+                        alignment_width,
+                        line_width_measured,
+                        text_alignment,
                     )
                     cursor_x = line_start_x
 

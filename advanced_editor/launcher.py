@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -20,6 +21,7 @@ from fontTools.ttLib import TTFont
 from PIL import Image
 from PyQt6.QtCore import (
     QByteArray,
+    QEvent,
     QObject,
     QPointF,
     QRect,
@@ -45,6 +47,7 @@ from PyQt6.QtGui import (
     QPen,
     QPixmap,
     QTextCursor,
+    QTransform,
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -54,6 +57,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QCompleter,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -82,6 +86,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from PyQt6.QtSvg import QSvgRenderer
+from advanced_editor.font_picker import FontPicker
 
 from advanced_editor.backend import (
     detect_and_recognize,
@@ -92,7 +97,9 @@ from advanced_editor.backend import (
 from core.config import DEFAULT_FLUX_KLEIN_PROMPT, DEFAULT_FLUX_KONTEXT_PROMPT
 from core.editor_package import embed_editor_package, resolve_editor_session_input
 from core.editor_session import (
+    _apply_original_restore,
     _region_render_signature,
+    _region_text_transform,
     _decode_uploaded_relative_path,
     _resolve_repo_relative_path,
     add_region,
@@ -110,6 +117,19 @@ from core.text.text_processing import extract_translation_tag
 
 
 DEFAULT_EXPORT_DIRECTORY = Path(r"C:\Users\dongw\Documents\Mana")
+
+SPEECH_BALLOON_REPAIR_PROMPT = (
+    "Repair only the masked part of the existing manga speech bubble. First inspect the "
+    "intact border immediately before and after the mask and copy its exact local pattern. "
+    "If the border is solid and continuous, join its visible ends with one smooth stroke. "
+    "If the border is dotted, dashed, or otherwise discontinuous, DO NOT connect the ends "
+    "with a continuous stroke; place separate short marks with the same length, thickness, "
+    "angle, spacing, curvature, rhythm, and black level as the neighboring marks. If it is "
+    "jagged, spiky, wavy, cloud-shaped, or angular, continue the same repeating geometry. "
+    "Fill every remaining masked pixel with the surrounding white fill, paper texture, or "
+    "screentone. Do not redraw the whole bubble, add text or symbols, invent details, or "
+    "alter unmasked artwork. The repair must have no visible seam."
+)
 
 TOOLS = {
     "select": "선택/이동",
@@ -162,6 +182,7 @@ EDITOR_ICON_PATHS = {
     "minus": '<path d="M5 12h14"/>',
     "check": '<path d="M5 12l4 4L19 6"/>',
     "clear": '<path d="M6 6l12 12M18 6L6 18"/>',
+    "search": '<circle cx="11" cy="11" r="6"/><path d="M16 16l5 5"/>',
     "align_left": '<path d="M4 6h16M4 10h11M4 14h16M4 18h9"/>',
     "align_center": '<path d="M4 6h16M7 10h10M4 14h16M8 18h8"/>',
     "align_right": '<path d="M4 6h16M9 10h11M4 14h16M11 18h9"/>',
@@ -208,7 +229,9 @@ def _editor_icon(name: str, color: str = "#e5e7eb") -> QIcon:
 class ResizableTextEdit(QTextEdit):
     """Compact text edit with a browser-style vertical resize corner."""
 
+    heightChanged = pyqtSignal(int)
     _GRIP_SIZE = 16
+    _MAX_HEIGHT = 240
 
     def __init__(self, height: int, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -240,7 +263,9 @@ class ResizableTextEdit(QTextEdit):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._resize_start_y is not None:
             delta = int(event.globalPosition().y()) - self._resize_start_y
-            self.setFixedHeight(max(52, min(360, self._resize_start_height + delta)))
+            self.setFixedHeight(
+                max(52, min(self._MAX_HEIGHT, self._resize_start_height + delta))
+            )
             event.accept()
             return
         cursor = (
@@ -258,6 +283,12 @@ class ResizableTextEdit(QTextEdit):
             return
         super().mouseReleaseEvent(event)
 
+    def resizeEvent(self, event) -> None:
+        old_height = event.oldSize().height()
+        super().resizeEvent(event)
+        if old_height >= 0 and old_height != event.size().height():
+            self.heightChanged.emit(event.size().height())
+
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
         painter = QPainter(self.viewport())
@@ -271,19 +302,106 @@ class ResizableTextEdit(QTextEdit):
 class ModernComboBox(QComboBox):
     """Platform-independent combo field with a centered line chevron."""
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        *,
+        searchable: bool = False,
+    ):
         super().__init__(parent)
         self._popup_open = False
+        self._searchable = searchable
+        self._search_mode = False
+        self._search_start_index = -1
         self.setMinimumHeight(34)
+        if searchable:
+            self.setEditable(True)
+            self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+            self.setMaxVisibleItems(18)
+            self.view().setMinimumWidth(320)
+            popup_item_style = (
+                "QAbstractItemView::item { min-height: 22px; padding: 2px 8px; }"
+            )
+            self.view().setStyleSheet(popup_item_style)
+            self.view().setVerticalScrollMode(
+                QAbstractItemView.ScrollMode.ScrollPerPixel
+            )
+            editor = self.lineEdit()
+            editor.setPlaceholderText("글꼴 검색...")
+            editor.setReadOnly(True)
+            editor.installEventFilter(self)
+            editor.setStyleSheet(
+                "QLineEdit { background: transparent; border: 0; "
+                "padding: 0 4px; color: #172033; }"
+            )
+            self._search_action = editor.addAction(
+                _editor_icon("search", "#475569"),
+                QLineEdit.ActionPosition.TrailingPosition,
+            )
+            self._search_action.setToolTip("글꼴 검색")
+            self._search_action.triggered.connect(self._begin_search)
+            completer = self.completer()
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+            completer.setMaxVisibleItems(18)
+            completer.popup().setMinimumWidth(320)
+            completer.popup().setStyleSheet(popup_item_style)
+            completer.activated.connect(
+                lambda _text: QTimer.singleShot(0, self._finish_search)
+            )
+
+    def _begin_search(self) -> None:
+        if not self._searchable:
+            return
+        self._search_mode = True
+        self._search_start_index = self.currentIndex()
+        editor = self.lineEdit()
+        editor.setReadOnly(False)
+        editor.setFocus()
+        editor.selectAll()
+        self.completer().complete()
+
+    def _finish_search(self, restore: bool = False) -> None:
+        if not self._searchable:
+            return
+        if restore and self.currentIndex() < 0 and self._search_start_index >= 0:
+            blocker = QSignalBlocker(self)
+            self.setCurrentIndex(self._search_start_index)
+            del blocker
+        self._search_mode = False
+        self._search_start_index = -1
+        self.lineEdit().setReadOnly(True)
+        self.update()
+
+    def _finish_search_if_idle(self) -> None:
+        if not self._popup_open and not self.completer().popup().isVisible():
+            self._finish_search(restore=True)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if self._searchable and watched is self.lineEdit():
+            if (
+                event.type() == QEvent.Type.MouseButtonPress
+                and not self._search_mode
+            ):
+                self.showPopup()
+                return True
+            if event.type() == QEvent.Type.FocusOut and self._search_mode:
+                QTimer.singleShot(0, self._finish_search_if_idle)
+        return super().eventFilter(watched, event)
 
     def showPopup(self) -> None:
         self._popup_open = True
         self.update()
         super().showPopup()
+        if self._search_mode:
+            self.lineEdit().selectAll()
 
     def hidePopup(self) -> None:
         super().hidePopup()
         self._popup_open = False
+        if self._search_mode:
+            self._finish_search(restore=self.currentIndex() < 0)
         self.update()
 
     def paintEvent(self, event) -> None:
@@ -308,7 +426,9 @@ class ModernComboBox(QComboBox):
             text_color = QColor("#172033")
             border_color = QColor(
                 "#2563eb"
-                if self.hasFocus() or self._popup_open
+                if self.hasFocus()
+                or (self.isEditable() and self.lineEdit().hasFocus())
+                or self._popup_open
                 else "#94a3b8"
                 if self.underMouse()
                 else "#c4cfdd"
@@ -330,23 +450,24 @@ class ModernComboBox(QComboBox):
             QPointF(button_left, outer.bottom() - 1),
         )
 
-        text_rect = QRectF(
-            outer.left() + 8,
-            outer.top(),
-            max(0.0, button_left - outer.left() - 16),
-            outer.height(),
-        )
-        text = self.fontMetrics().elidedText(
-            self.currentText(),
-            Qt.TextElideMode.ElideRight,
-            max(0, int(text_rect.width())),
-        )
-        painter.setPen(text_color)
-        painter.drawText(
-            text_rect,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            text,
-        )
+        if not self.isEditable():
+            text_rect = QRectF(
+                outer.left() + 8,
+                outer.top(),
+                max(0.0, button_left - outer.left() - 16),
+                outer.height(),
+            )
+            text = self.fontMetrics().elidedText(
+                self.currentText(),
+                Qt.TextElideMode.ElideRight,
+                max(0, int(text_rect.width())),
+            )
+            painter.setPen(text_color)
+            painter.drawText(
+                text_rect,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                text,
+            )
 
         center_x = button_left + 14.0
         center_y = outer.center().y()
@@ -368,6 +489,20 @@ class ModernComboBox(QComboBox):
             QPointF(center_x, center_y + 2 * direction),
             QPointF(center_x + 4, center_y - 2 * direction),
         )
+
+
+class FontGridComboBox(ModernComboBox):
+    def showPopup(self) -> None:
+        if not hasattr(self, "font_picker"):
+            self.font_picker = FontPicker(self)
+        self._popup_open = True
+        self.update()
+        self.font_picker.open()
+
+    def hidePopup(self) -> None:
+        if hasattr(self, "font_picker") and self.font_picker.isVisible():
+            self.font_picker.hide()
+        super().hidePopup()
 
 
 class AutoHideStatusLabel(QLabel):
@@ -544,6 +679,15 @@ def _split_font_filename(stem: str) -> tuple[str, str]:
         if compact_match and compact_match.start() > 0:
             family = original[: compact_match.start()].strip(" _-")
             return family or original, style
+    short_hangul_style = {"b": "Bold", "m": "Medium", "l": "Light"}
+    if len(original) > 1 and "가" <= original[-2] <= "힣":
+        style = short_hangul_style.get(original[-1].casefold())
+        if style:
+            return original[:-1].strip(" _-"), style
+    if len(original) > 1 and original[-1].casefold() == "b" and (
+        original[-2].islower() or original[-2] in " _-"
+    ):
+        return original[:-1].strip(" _-"), "Bold"
     short_regular = re.search(r"(?:[-_]|(?<=[a-z]))(?:b?rg|r)$", original)
     if short_regular:
         family = original[: short_regular.start()].strip(" _-")
@@ -588,6 +732,17 @@ def _normalized_font_style(value: str, filename_style: str) -> str:
     return weight
 
 
+def _decoded_font_metadata_name(value: str) -> str:
+    text = str(value or "").strip()
+    if "\ufffd" in text:
+        return ""
+    try:
+        repaired = text.encode("latin-1").decode("cp949")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+    return repaired if any("가" <= char <= "힣" for char in repaired) else text
+
+
 def _font_descriptor(path: Path, fonts_root: Path) -> dict[str, str]:
     filename_family, filename_style = _split_font_filename(path.stem)
     family = ""
@@ -601,6 +756,16 @@ def _font_descriptor(path: Path, fonts_root: Path) -> dict[str, str]:
             font.close()
     except Exception:
         pass
+    family = _decoded_font_metadata_name(family)
+    style = _decoded_font_metadata_name(style)
+    if filename_style != "Regular" and family.casefold() in {
+        f"{filename_family}{suffix}".casefold() for suffix in ("b", "m", "l")
+    }:
+        family = filename_family
+    if any("가" <= char <= "힣" for char in filename_family) and not any(
+        "가" <= char <= "힣" for char in family
+    ):
+        family = filename_family
     family = re.sub(r"\s+", " ", family).strip() or filename_family
     style = _normalized_font_style(style, filename_style)
     try:
@@ -2107,6 +2272,13 @@ class AdvancedEditorWindow(QMainWindow):
                 padding-bottom: 1px;
                 border-bottom: 1px solid #d5dde8;
             }
+            QLabel#FontPreviewLabel {
+                background: #ffffff;
+                color: #172033;
+                border: 1px solid #d5dde8;
+                border-radius: 6px;
+                padding: 1px 6px;
+            }
             QWidget#MetricRow {
                 background: transparent;
                 border: 0;
@@ -2123,11 +2295,15 @@ class AdvancedEditorWindow(QMainWindow):
                 background: transparent;
                 border: 0;
             }
-            QLabel#MetricGroupHint {
-                color: #7b8a9d;
-                font-size: 10px;
+            QToolButton#MetricGroupAction {
                 background: transparent;
-                border: 0;
+                border: 1px solid transparent;
+                border-radius: 4px;
+                padding: 2px;
+            }
+            QToolButton#MetricGroupAction:hover {
+                background: #e8eef5;
+                border-color: #cbd5e1;
             }
             QWidget#MetricField {
                 background: #ffffff;
@@ -2364,6 +2540,30 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #edf1f6;
                 border-color: #d5dde8;
                 color: #94a3b8;
+            }
+            QWidget#InpaintPromptPresets {
+                background: #edf1f6;
+                border: 1px solid #c4cfdd;
+                border-radius: 7px;
+            }
+            QWidget#InpaintPromptPresets QPushButton#InpaintPromptPreset {
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 5px;
+                min-height: 24px;
+                padding: 5px 9px;
+                color: #475569;
+            }
+            QWidget#InpaintPromptPresets QPushButton#InpaintPromptPreset:hover {
+                background: #eff6ff;
+                border-color: #93c5fd;
+                color: #1e3a8a;
+            }
+            QWidget#InpaintPromptPresets QPushButton#InpaintPromptPreset:checked {
+                background: #dbeafe;
+                border-color: #60a5fa;
+                color: #1d4ed8;
+                font-weight: 700;
             }
             QTabWidget::pane {
                 border: 1px solid #d5dde8;
@@ -3040,6 +3240,7 @@ class AdvancedEditorWindow(QMainWindow):
     def _build_side_panel(self) -> QWidget:
         panel = QWidget(self)
         panel.setObjectName("InspectorPanel")
+        self.inspector_panel = panel
         panel.setMinimumWidth(340)
         panel.setMaximumWidth(450)
         layout = QVBoxLayout(panel)
@@ -3078,6 +3279,12 @@ class AdvancedEditorWindow(QMainWindow):
         region_layout.addWidget(QLabel("편집할 텍스트"))
         self.translation_edit = ResizableTextEdit(60)
         self.translation_edit.textChanged.connect(self._on_translation_text_changed)
+        for editor in (self.source_edit, self.translation_edit):
+            editor.heightChanged.connect(
+                lambda _height: self._sync_inspector_page_size(
+                    self.inspector_sections.currentIndex()
+                )
+            )
         region_layout.addWidget(self.translation_edit)
 
         style_row = QHBoxLayout()
@@ -3171,7 +3378,7 @@ class AdvancedEditorWindow(QMainWindow):
         font_label.setObjectName("CompactSectionLabel")
         region_layout.addWidget(font_label)
         metrics_layout = QVBoxLayout()
-        metrics_layout.setSpacing(4)
+        metrics_layout.setSpacing(6)
         self.x_spin = self._spin(0, 99999)
         self.y_spin = self._spin(0, 99999)
         self.w_spin = self._spin(1, 99999)
@@ -3183,6 +3390,10 @@ class AdvancedEditorWindow(QMainWindow):
             "박스에 들어가지 않는 큰 글자는 박스 바깥까지 표시합니다."
         )
         self.rotation_spin = self._double_spin(-180.0, 180.0)
+        self.transform_scale_x_spin = self._double_spin(10.0, 400.0)
+        self.transform_scale_y_spin = self._double_spin(10.0, 400.0)
+        self.transform_skew_spin = self._double_spin(-60.0, 60.0)
+        self.transform_perspective_spin = self._double_spin(-80.0, 80.0)
         self.line_spacing_spin = self._double_spin(0.2, 4.0)
         self.padding_spin = self._double_spin(0.0, 80.0)
         self.stroke_width_spin = self._double_spin(0.0, 20.0)
@@ -3193,6 +3404,10 @@ class AdvancedEditorWindow(QMainWindow):
             self.h_spin,
             self.font_size_spin,
             self.rotation_spin,
+            self.transform_scale_x_spin,
+            self.transform_scale_y_spin,
+            self.transform_skew_spin,
+            self.transform_perspective_spin,
             self.line_spacing_spin,
             self.padding_spin,
             self.stroke_width_spin,
@@ -3206,6 +3421,13 @@ class AdvancedEditorWindow(QMainWindow):
             )
         self.rotation_spin.setSuffix("°")
         self.rotation_spin.setSingleStep(1.0)
+        for spin in (self.transform_scale_x_spin, self.transform_scale_y_spin):
+            spin.setSuffix(" %")
+            spin.setSingleStep(5.0)
+        self.transform_skew_spin.setSuffix("°")
+        self.transform_skew_spin.setSingleStep(1.0)
+        self.transform_perspective_spin.setSuffix(" %")
+        self.transform_perspective_spin.setSingleStep(5.0)
         self.line_spacing_spin.setSingleStep(0.1)
         self.padding_spin.setSingleStep(0.5)
         self.stroke_width_spin.setSingleStep(0.5)
@@ -3229,6 +3451,22 @@ class AdvancedEditorWindow(QMainWindow):
                 ),
             ),
             (
+                "텍스트 비율",
+                "선택 상자만",
+                (
+                    ("가로", "metric_width", self.transform_scale_x_spin),
+                    ("세로", "metric_height", self.transform_scale_y_spin),
+                ),
+            ),
+            (
+                "효과음 왜곡",
+                "편집 가능 유지",
+                (
+                    ("기울기", "metric_rotation", self.transform_skew_spin),
+                    ("원근", "metric_padding", self.transform_perspective_spin),
+                ),
+            ),
+            (
                 "영역",
                 "박스 크기와 안쪽 여백",
                 (
@@ -3241,23 +3479,33 @@ class AdvancedEditorWindow(QMainWindow):
         for group_label, group_hint, fields in metric_groups:
             group_widget = QWidget(region_page)
             group_widget.setObjectName("MetricGroup")
+            group_widget.setToolTip(group_hint)
             group_layout = QVBoxLayout(group_widget)
-            group_layout.setContentsMargins(6, 5, 6, 6)
-            group_layout.setSpacing(4)
+            group_layout.setContentsMargins(5, 4, 5, 4)
+            group_layout.setSpacing(3)
             group_header = QHBoxLayout()
             group_header.setContentsMargins(2, 0, 2, 0)
             label = QLabel(group_label, group_widget)
             label.setObjectName("MetricGroupLabel")
             group_header.addWidget(label)
             group_header.addStretch(1)
-            hint = QLabel(group_hint, group_widget)
-            hint.setObjectName("MetricGroupHint")
-            group_header.addWidget(hint)
+            if group_label == "효과음 왜곡":
+                self.transform_reset_button = QToolButton(group_widget)
+                self.transform_reset_button.setObjectName("MetricGroupAction")
+                self.transform_reset_button.setIcon(_editor_icon("reset", "#64748b"))
+                self.transform_reset_button.setIconSize(QSize(12, 12))
+                self.transform_reset_button.setFixedSize(20, 18)
+                self.transform_reset_button.setToolTip("선택한 텍스트 왜곡 초기화")
+                self.transform_reset_button.setAccessibleName("텍스트 왜곡 초기화")
+                self.transform_reset_button.clicked.connect(
+                    self.reset_selected_text_transform
+                )
+                group_header.addWidget(self.transform_reset_button)
             group_layout.addLayout(group_header)
 
             row_widget = QWidget(group_widget)
             row_widget.setObjectName("MetricRow")
-            row_widget.setFixedHeight(32)
+            row_widget.setFixedHeight(28)
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.setSpacing(4)
@@ -3288,7 +3536,7 @@ class AdvancedEditorWindow(QMainWindow):
                 field_layout.addWidget(spin, 1)
                 stepper = QWidget(field)
                 stepper.setObjectName("MetricStepper")
-                stepper.setFixedSize(15, 30)
+                stepper.setFixedSize(15, 26)
                 stepper_layout = QVBoxLayout(stepper)
                 stepper_layout.setContentsMargins(0, 0, 0, 0)
                 stepper_layout.setSpacing(0)
@@ -3304,7 +3552,7 @@ class AdvancedEditorWindow(QMainWindow):
                     button = QToolButton(stepper)
                     button.setObjectName("MetricStepButton")
                     button.setProperty("stepRole", role)
-                    button.setFixedSize(15, 15)
+                    button.setFixedSize(15, 13)
                     button.setIcon(_editor_icon(icon_name, "#334155"))
                     button.setIconSize(QSize(10, 10))
                     button.setToolTip(tooltip)
@@ -3317,10 +3565,11 @@ class AdvancedEditorWindow(QMainWindow):
 
         font_row = QHBoxLayout()
         font_row.addWidget(QLabel("글꼴 가족"))
-        self.font_family_combo = ModernComboBox()
+        self.font_family_combo = FontGridComboBox()
         self.font_family_combo.setMinimumContentsLength(18)
+        self.font_family_combo.setAccessibleName("글꼴 가족 검색")
         self.font_family_combo.setToolTip(
-            "fonts 폴더와 모든 하위 폴더의 글꼴을 이름이 같은 가족끼리 묶어서 표시합니다."
+            "넓은 폰트 메뉴에서 검색하고 용도 태그로 골라보세요. 마우스 휠로 목록을 이동합니다."
         )
         self.font_family_combo.currentIndexChanged.connect(
             self._on_font_family_changed
@@ -3341,6 +3590,12 @@ class AdvancedEditorWindow(QMainWindow):
         self.font_style_combo.currentIndexChanged.connect(self._on_font_style_changed)
         font_style_row.addWidget(self.font_style_combo, 1)
         region_layout.addLayout(font_style_row)
+        self.font_preview_label = QLabel("가나다라마바사 ABC 123  ! ? . , …")
+        self.font_preview_label.setObjectName("FontPreviewLabel")
+        self.font_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.font_preview_label.setMinimumHeight(32)
+        self.font_preview_label.setToolTip("현재 선택한 글꼴 미리보기")
+        region_layout.addWidget(self.font_preview_label)
         self.populate_font_combo()
 
         metrics_label = QLabel("세부 조정")
@@ -3584,18 +3839,55 @@ class AdvancedEditorWindow(QMainWindow):
         prompt_widget = QWidget()
         prompt_layout = QVBoxLayout(prompt_widget)
         prompt_layout.setContentsMargins(0, 0, 0, 0)
-        prompt_layout.addWidget(QLabel("프롬프트"))
-        self.inpaint_prompt_edit = QTextEdit()
-        self.inpaint_prompt_edit.setMinimumHeight(72)
+        prompt_layout.setSpacing(6)
         default_prompt = (
             str(webui_settings.get("outside_text_flux_kontext_prompt") or DEFAULT_FLUX_KONTEXT_PROMPT)
             if str(saved.get("method") or "") == "flux_kontext"
             else str(webui_settings.get("outside_text_flux_klein_prompt") or DEFAULT_FLUX_KLEIN_PROMPT)
         )
+        self.inpaint_prompt_presets = {
+            "일반 인페인트": default_prompt,
+            "말풍선 복구": SPEECH_BALLOON_REPAIR_PROMPT,
+        }
+        prompt_layout.addWidget(QLabel("작업 프리셋"))
+        preset_widget = QWidget()
+        preset_widget.setObjectName("InpaintPromptPresets")
+        preset_layout = QHBoxLayout(preset_widget)
+        preset_layout.setContentsMargins(3, 3, 3, 3)
+        preset_layout.setSpacing(3)
+        self.inpaint_prompt_preset_buttons: dict[str, QPushButton] = {}
+        preset_details = (
+            ("일반 인페인트", "inpaint_brush", "일반적인 마스크 영역을 주변 배경에 맞춰 복원합니다."),
+            ("말풍선 복구", "restore_brush", "끊기거나 뚫린 말풍선 윤곽과 내부 결을 주변에 맞춰 복원합니다."),
+        )
+        for name, icon_name, tooltip in preset_details:
+            button = QPushButton(name)
+            button.setObjectName("InpaintPromptPreset")
+            button.setCheckable(True)
+            button.setProperty("preserveIcon", True)
+            button.setIcon(_editor_icon(icon_name, "#334155"))
+            button.setIconSize(QSize(17, 17))
+            button.setToolTip(tooltip)
+            button.setAccessibleName(f"인페인팅 프롬프트: {name}")
+            button.clicked.connect(
+                lambda _checked=False, preset_name=name: self._apply_inpaint_prompt_preset(
+                    preset_name
+                )
+            )
+            self.inpaint_prompt_preset_buttons[name] = button
+            preset_layout.addWidget(button, 1)
+        prompt_layout.addWidget(preset_widget)
+        prompt_layout.addWidget(QLabel("프롬프트"))
+        self.inpaint_prompt_edit = QTextEdit()
+        self.inpaint_prompt_edit.setMinimumHeight(72)
         self.inpaint_prompt_edit.setPlainText(
             str(saved.get("prompt") or default_prompt)
         )
+        self.inpaint_prompt_edit.textChanged.connect(
+            self._sync_inpaint_prompt_preset_buttons
+        )
         prompt_layout.addWidget(self.inpaint_prompt_edit)
+        self._sync_inpaint_prompt_preset_buttons()
         option_widget("flux", prompt_widget)
 
         self.hf_token_edit = QLineEdit(str(
@@ -3733,6 +4025,20 @@ class AdvancedEditorWindow(QMainWindow):
         )
         self._update_inpaint_option_visibility()
         return tab
+
+    def _apply_inpaint_prompt_preset(self, name: str) -> None:
+        prompt = self.inpaint_prompt_presets.get(name)
+        if prompt is None:
+            return
+        self.inpaint_prompt_edit.setPlainText(prompt)
+        self._sync_inpaint_prompt_preset_buttons()
+        self._store_inpaint_controls()
+        self.status_label.setText(f"{name} 프롬프트를 적용했습니다.")
+
+    def _sync_inpaint_prompt_preset_buttons(self) -> None:
+        current = self.inpaint_prompt_edit.toPlainText().strip()
+        for name, button in self.inpaint_prompt_preset_buttons.items():
+            button.setChecked(current == self.inpaint_prompt_presets[name].strip())
 
     def _update_inpaint_option_visibility(self, *_args) -> None:
         method = str(self.inpaint_method_combo.currentData() or "opencv")
@@ -4270,6 +4576,8 @@ class AdvancedEditorWindow(QMainWindow):
     @staticmethod
     def _font_files_under(path: Path) -> list[Path]:
         try:
+            if any(part.casefold() == "_backup" for part in path.parts):
+                return []
             if path.is_file() and path.suffix.lower() in SUPPORTED_FONT_SUFFIXES:
                 return [path.resolve()]
             if path.is_dir():
@@ -4279,6 +4587,7 @@ class AdvancedEditorWindow(QMainWindow):
                         for item in path.rglob("*")
                         if item.is_file()
                         and item.suffix.lower() in SUPPORTED_FONT_SUFFIXES
+                        and all(part.casefold() != "_backup" for part in item.parts)
                     ),
                     key=lambda item: str(item).casefold(),
                 )
@@ -4460,9 +4769,11 @@ class AdvancedEditorWindow(QMainWindow):
                 )
             if selected_index >= 0:
                 self.font_style_combo.setCurrentIndex(selected_index)
+                self._update_font_preview()
                 return str(self.font_style_combo.currentData() or "")
         finally:
             self.font_style_combo.blockSignals(False)
+        self._update_font_preview()
         return ""
 
     def _select_font_target(self, value: Any) -> str:
@@ -4488,15 +4799,41 @@ class AdvancedEditorWindow(QMainWindow):
 
     def _on_font_family_changed(self, *_args) -> None:
         family_key = self.font_family_combo.currentData()
+        if not family_key:
+            return
         self._populate_font_style_combo(family_key)
         if not self._syncing:
             self._font_change_requested = True
             self.commit_region_form()
 
     def _on_font_style_changed(self, *_args) -> None:
+        self._update_font_preview()
         if not self._syncing:
             self._font_change_requested = True
             self.commit_region_form()
+
+    def _update_font_preview(self) -> None:
+        if not hasattr(self, "font_preview_label"):
+            return
+        path = str(self.font_style_combo.currentData() or "")
+        if not path or not Path(path).is_file():
+            self.font_preview_label.setFont(QFont("Segoe UI", 13))
+            self.font_preview_label.setStyleSheet(
+                'font-family: "Segoe UI"; font-size: 13pt;'
+            )
+            self.font_preview_label.setToolTip("현재 선택한 글꼴 미리보기")
+            return
+        region = {"render": {"font_dir": path}}
+        family = self._qfont_family_for_region(region)
+        style = self._qfont_style_for_region(region, family)
+        font = QFontDatabase.font(family, style, 15) if style else QFont(family, 15)
+        font.setPointSize(15)
+        self.font_preview_label.setFont(font)
+        safe_family = family.replace("\\", "\\\\").replace('"', '\\"')
+        self.font_preview_label.setStyleSheet(
+            f'font-family: "{safe_family}"; font-size: 15pt;'
+        )
+        self.font_preview_label.setToolTip(Path(path).name)
 
     def populate_font_combo(self) -> None:
         current = (
@@ -4624,14 +4961,23 @@ class AdvancedEditorWindow(QMainWindow):
         self.paint_color_toolbar_button.setVisible(tool == "paint_brush")
 
     def _sync_inspector_page_size(self, index: int) -> None:
-        policy = (
-            QSizePolicy.Policy.Ignored
-            if index == 0
-            else QSizePolicy.Policy.Preferred
-        )
         self.inspector_sections.setSizePolicy(
-            QSizePolicy.Policy.Preferred, policy
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Preferred,
         )
+        current_page = self.inspector_sections.widget(index)
+        if current_page is not None:
+            current_page.updateGeometry()
+            tab_height = self.inspector_sections.tabBar().sizeHint().height()
+            self.inspector_sections.setMinimumHeight(
+                current_page.sizeHint().height() + tab_height + 4
+            )
+            margins = self.inspector_panel.layout().contentsMargins()
+            self.inspector_panel.setMinimumHeight(
+                self.inspector_sections.minimumHeight()
+                + margins.top()
+                + margins.bottom()
+            )
         self.inspector_sections.updateGeometry()
 
     def set_tool(self, tool: str) -> None:
@@ -4934,6 +5280,11 @@ class AdvancedEditorWindow(QMainWindow):
                 self.h_spin,
                 self.font_size_spin,
                 self.rotation_spin,
+                self.transform_scale_x_spin,
+                self.transform_scale_y_spin,
+                self.transform_skew_spin,
+                self.transform_perspective_spin,
+                self.transform_reset_button,
                 self.line_spacing_spin,
                 self.padding_spin,
                 self.stroke_width_spin,
@@ -4966,6 +5317,11 @@ class AdvancedEditorWindow(QMainWindow):
             )
             self.font_size_spin.setValue(font_size)
             self.rotation_spin.setValue(float(region.get("rotation_deg") or 0.0))
+            scale_x, scale_y, skew_deg, perspective_y = _region_text_transform(region)
+            self.transform_scale_x_spin.setValue(scale_x * 100.0)
+            self.transform_scale_y_spin.setValue(scale_y * 100.0)
+            self.transform_skew_spin.setValue(skew_deg)
+            self.transform_perspective_spin.setValue(perspective_y * 100.0)
             spacing_value = (
                 render.get("vertical_line_spacing_mult")
                 if region.get("vertical_stack", False) and render.get("vertical_line_spacing_mult") is not None
@@ -5019,6 +5375,20 @@ class AdvancedEditorWindow(QMainWindow):
         region["bbox"] = [x, y, x + w, y + h]
         region["rotation_deg"] = float(self.rotation_spin.value())
         render = region.setdefault("render", {})
+        for key, value, default in (
+            ("transform_scale_x", self.transform_scale_x_spin.value() / 100.0, 1.0),
+            ("transform_scale_y", self.transform_scale_y_spin.value() / 100.0, 1.0),
+            ("transform_skew_x_deg", self.transform_skew_spin.value(), 0.0),
+            (
+                "transform_perspective_y",
+                self.transform_perspective_spin.value() / 100.0,
+                0.0,
+            ),
+        ):
+            if abs(float(value) - default) < 1e-6:
+                render.pop(key, None)
+            else:
+                render[key] = float(value)
         set_region_font_size(region, int(self.font_size_spin.value()))
         line_spacing = float(self.line_spacing_spin.value())
         render["line_spacing_mult"] = line_spacing
@@ -5039,6 +5409,24 @@ class AdvancedEditorWindow(QMainWindow):
         self._font_change_requested = False
         if mark_dirty:
             self._mark_region_dirty(region)
+        self.schedule_exact_preview()
+
+    def reset_selected_text_transform(self) -> None:
+        region = self.selected_region()
+        if region is None:
+            return
+        self._push_history("텍스트 왜곡 초기화")
+        render = region.setdefault("render", {})
+        for key in (
+            "transform_scale_x",
+            "transform_scale_y",
+            "transform_skew_x_deg",
+            "transform_perspective_y",
+        ):
+            render.pop(key, None)
+        self._mark_region_dirty(region)
+        self.load_selected_region_to_form()
+        self.canvas.update()
         self.schedule_exact_preview()
 
     def update_selected_bbox_from_drag(
@@ -5544,7 +5932,7 @@ class AdvancedEditorWindow(QMainWindow):
             return
         self.save_current_session(push_history=False)
         self.reload_display_image()
-        if tool in {"restore_brush", "restore_eraser"}:
+        if tool in {"paint_brush", "paint_eraser", "restore_brush", "restore_eraser"}:
             self.schedule_exact_preview()
         if (
             tool == "inpaint_brush"
@@ -5901,30 +6289,32 @@ class AdvancedEditorWindow(QMainWindow):
         return image
 
     def _flatten_fast_editor_layers_after_save(self, saved_background_path: Path) -> None:
-        baseline_path = saved_background_path.resolve()
         restore_mask_path = Path(self.session.get("restore_mask_path") or "")
+        inpainted_path = Path(self.session.get("inpainted_image_path") or "")
         if restore_mask_path.is_file():
-            session_without_restore = copy.deepcopy(self.session)
-            session_without_restore["restore_mask_path"] = ""
-            unmasked_image, unmasked_errors = render_session_image(
-                session_without_restore
+            background = self._inpainting_source_image(include_paint_overlay=False)
+            background = _apply_original_restore(background, self.session)
+            assets_dir = Path(
+                self.session.get("assets_dir")
+                or self.session_path.with_name(f"{self.session_path.stem}_assets")
             )
-            if not unmasked_errors:
-                assets_dir = Path(
-                    self.session.get("assets_dir")
-                    or self.session_path.with_name(f"{self.session_path.stem}_assets")
-                )
-                assets_dir.mkdir(parents=True, exist_ok=True)
-                baseline_path = assets_dir / "rendered_snapshot_without_restore.png"
-                unmasked_image.convert("RGBA").save(baseline_path)
-                baseline_path = baseline_path.resolve()
-        self.session["rendered_snapshot_path"] = str(baseline_path)
+            assets_dir.mkdir(parents=True, exist_ok=True)
+            baked_path = assets_dir / "baked_inpaint_source.png"
+            background.convert("RGBA").save(baked_path)
+            self.session["inpaint_source_path"] = str(baked_path.resolve())
+        elif (
+            self.session.get("inpainted_background_text_free")
+            and inpainted_path.is_file()
+        ):
+            self.session["inpaint_source_path"] = str(inpainted_path.resolve())
+        self.session["rendered_snapshot_path"] = str(saved_background_path.resolve())
         self._dirty_region_ids.clear()
         self.session["editor_dirty_region_ids"] = []
         self.session["deleted_region_bboxes"] = []
         self.session["paint_overlay_path"] = ""
         self.session["inpainted_image_path"] = ""
         self.session["inpainted_background_text_free"] = False
+        self.session["restore_mask_path"] = ""
         for region in self.session.get("regions", []):
             region["render_baseline"] = _region_render_signature(region)
 
@@ -5937,7 +6327,9 @@ class AdvancedEditorWindow(QMainWindow):
         image = self._load_base_image().copy()
         return self._apply_paint_overlay_to(image)
 
-    def _inpainting_source_image(self) -> Image.Image:
+    def _inpainting_source_image(
+        self, *, include_paint_overlay: bool = True
+    ) -> Image.Image:
         inpainted_path = Path(self.session.get("inpainted_image_path") or "")
         if (
             self.session.get("inpainted_background_text_free")
@@ -5945,10 +6337,16 @@ class AdvancedEditorWindow(QMainWindow):
         ):
             image = Image.open(inpainted_path).convert("RGBA")
         else:
-            image = self._clean_base_image().copy()
+            baked_path = Path(self.session.get("inpaint_source_path") or "")
+            if baked_path.is_file():
+                image = Image.open(baked_path).convert("RGBA")
+            else:
+                image = self._clean_base_image().copy()
         if image.size != self.image_size:
             image = image.resize(self.image_size, Image.Resampling.LANCZOS)
-        return self._apply_paint_overlay_to(image)
+        if include_paint_overlay:
+            return self._apply_paint_overlay_to(image)
+        return image
 
     def _text_restore_source_image(self) -> Optional[Image.Image]:
         session_copy = copy.deepcopy(self.session)
@@ -6038,17 +6436,8 @@ class AdvancedEditorWindow(QMainWindow):
         if not value:
             return None
         path = Path(str(value))
-        if path.is_file() and path.suffix.lower() in SUPPORTED_FONT_SUFFIXES:
-            return path
-        if path.is_dir():
-            fonts = [
-                item
-                for item in path.rglob("*")
-                if item.is_file()
-                and item.suffix.lower() in SUPPORTED_FONT_SUFFIXES
-            ]
-            if not fonts:
-                return None
+        fonts = self._font_files_under(path)
+        if fonts:
             def score(item: Path) -> tuple[int, str]:
                 name = item.stem.lower()
                 if "regular" in name or "normal" in name:
@@ -6188,9 +6577,31 @@ class AdvancedEditorWindow(QMainWindow):
         painter.save()
         center = rect.center()
         rotation = float(region.get("rotation_deg") or 0.0)
-        if abs(rotation) > 0.01:
+        scale_x, scale_y, skew_deg, perspective_y = _region_text_transform(region)
+        has_transform = (
+            abs(rotation) > 0.01
+            or abs(scale_x - 1.0) > 1e-4
+            or abs(scale_y - 1.0) > 1e-4
+            or abs(skew_deg) > 1e-4
+            or abs(perspective_y) > 1e-4
+        )
+        if has_transform:
             painter.translate(center)
             painter.rotate(rotation)
+            painter.setWorldTransform(
+                QTransform(
+                    scale_x,
+                    0.0,
+                    0.0,
+                    math.tan(math.radians(skew_deg)),
+                    scale_y,
+                    perspective_y / max(1.0, rect.height()),
+                    0.0,
+                    0.0,
+                    1.0,
+                ),
+                True,
+            )
             draw_rect = QRectF(
                 -rect.width() / 2.0 + padding,
                 -rect.height() / 2.0 + padding,

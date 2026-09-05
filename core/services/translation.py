@@ -845,7 +845,7 @@ Your sole purpose is to accurately transcribe the original text from a series of
 - **Transcription Policy:** Preserve all original punctuation, ellipses, and casing. Collapse multi-line text into a single line, separated by a single space.
 - **Ignore Policy:** Ignore all non-text visual elements (borders, tails, watermarks, etc.).
 - **Language Focus:** Transcribe only the original {lang_label}text.
-- **Ruby/Furigana Policy:** If small phonetic characters (ruby/furigana) are present, you must ignore them and transcribe only the main, larger base text.
+- **Ruby/Furigana Policy:** When small phonetic characters are attached to larger base text, preserve the relationship inline as `BASE{{RUBY}}`, for example `三嶋{{みしま}}さん！`. Keep both in the same JSON item and never emit ruby as a separate item. Do not invent a reading; if the ruby is unreadable, transcribe only the base text.
 - **Quotes:** Do not wrap the transcribed text in quotation marks unless they are explicitly present in the image.
 - **Edge Cases:**
   - If an image contains standalone periods/ellipses, you must return it exactly as it appears.
@@ -945,6 +945,13 @@ def _build_system_prompt_translation(
   - **Character Voice:** Preserve each character's established voice, register, and pronoun choices.
   - **Referents:** Disambiguate callbacks, ongoing beats, or unclear references using prior dialogue."""  # noqa
 
+    if mode == "two-step":
+        ruby_rule = """
+- **Ruby/Furigana:** OCR annotations use `BASE{RUBY}`. Unless an explicit user-provided character-name mapping specifies another target spelling, treat RUBY as the author's authoritative intended reading. For person names and other proper nouns, transliterate RUBY into the target language; never guess a competing reading from BASE. Remove the annotation and braces from the translation. For ordinary vocabulary or wordplay, use both BASE and RUBY to translate the intended expression naturally."""  # noqa
+    else:
+        ruby_rule = """
+- **Ruby/Furigana:** When small phonetic ruby is attached to larger base text in an image, preserve it in the transcription as `BASE{RUBY}`. Unless an explicit user-provided character-name mapping specifies another target spelling, treat RUBY as the author's authoritative intended reading. For person names and other proper nouns, transliterate RUBY into the target language; never guess a competing reading from BASE. Remove the annotation and braces from the translation, and never output ruby as a separate item."""  # noqa
+
     core_rules = f"""
 ## CORE RULES
 - **Reading Context:** The {input_type} are presented in a {direction} reading order. Do not reorder them.
@@ -954,6 +961,7 @@ def _build_system_prompt_translation(
 - **Conciseness:** Keep translations idiomatic and concise.
 - **Punctuation:** Replace ellipses (e.g., "…") with consecutive periods (e.g., "...").
 - **Quotes:** Do not wrap the translated text in quotation marks unless they are explicitly present in the source text.
+{ruby_rule}
 - **Text Types:**
   - **Spoken Dialogue/Internal Monologue:** Translate naturally, matching the character's personality.
   - **Narration:** Translate neutrally without special styling.

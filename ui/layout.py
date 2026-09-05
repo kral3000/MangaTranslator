@@ -475,6 +475,30 @@ js_refresh_button_processing = """
 """
 
 
+js_editor_session_refresh_processing = """
+() => {
+    const button = document.querySelector('.editor-session-refresh-button button');
+    if (button) {
+        button.textContent = '세션 검색 중...';
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+    }
+    return [];
+}
+"""
+
+js_editor_session_refresh_reset = """
+() => {
+    const button = document.querySelector('.editor-session-refresh-button button');
+    if (button) {
+        button.textContent = '세션 새로고침';
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+    }
+}
+"""
+
+
 js_reset_status_height = """
 () => {
     setTimeout(() => {
@@ -826,7 +850,10 @@ def create_layout(
                                     variant="secondary",
                                     scale=0,
                                     min_width=138,
-                                    elem_classes=["editor-inline-action"],
+                                    elem_classes=[
+                                        "editor-inline-action",
+                                        "editor-session-refresh-button",
+                                    ],
                                 )
                             with gr.Row(elem_classes=["editor-card-actions"]):
                                 existing_editor_open_button = gr.Button(
@@ -4599,7 +4626,14 @@ def create_layout(
                 image_editor_status,
             ],
             queue=False,
-            show_progress="hidden",
+            show_progress="minimal",
+            js=js_editor_session_refresh_processing,
+        ).then(
+            fn=None,
+            inputs=None,
+            outputs=None,
+            js=js_editor_session_refresh_reset,
+            queue=False,
         )
         existing_editor_session_select.change(
             fn=lambda session_path: gr.update(

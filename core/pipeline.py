@@ -1474,7 +1474,7 @@ def _apply_tag_style_overrides(
     vertical_line_spacing: Optional[float],
     font_scale: Optional[float] = None,
     font_maximum: int = 384,
-) -> Tuple[str, int, int, float, Optional[float], Optional[int]]:
+) -> Tuple[str, int, int, float, Optional[float], Optional[int], Optional[float]]:
     """Apply per-tag rendering overrides from Config > Tag Styles.
 
     The translation step may return tags like <BN>...</BN>.  The tag is stripped
@@ -1482,13 +1482,13 @@ def _apply_tag_style_overrides(
     overrides.  Missing values fall back to the normal bubble/OSB settings.
     """
     if not render_tag:
-        return font_dir, min_font, max_font, line_spacing, vertical_line_spacing, None
+        return font_dir, min_font, max_font, line_spacing, vertical_line_spacing, None, None
 
     tag_name = str(render_tag).upper().strip().strip("<>")
     styles = getattr(getattr(config, "rendering", None), "tag_styles", None) or {}
     style = styles.get(tag_name) if isinstance(styles, dict) else None
     if style is None:
-        return font_dir, min_font, max_font, line_spacing, vertical_line_spacing, None
+        return font_dir, min_font, max_font, line_spacing, vertical_line_spacing, None, None
 
     tag_font_dir = _get_tag_style_value(style, "font_dir")
     if tag_font_dir:

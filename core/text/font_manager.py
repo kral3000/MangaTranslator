@@ -342,6 +342,7 @@ def find_font_variants(
                 item
                 for item in font_dir_path.rglob("*")
                 if item.is_file() and item.suffix.lower() in {".ttf", ".otf", ".ttc"}
+                and all(part.casefold() != "_backup" for part in item.parts)
             ]
         else:
             log_message(f"Font directory not found: {font_dir_path}", always_print=True)

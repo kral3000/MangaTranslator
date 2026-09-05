@@ -2019,18 +2019,13 @@ def render_text_skia(
                     )
 
     text_alignment = str(getattr(config, "text_alignment", "center") or "center").lower()
-    if layout_data.get("orientation") != "vertical" and text_alignment in {"left", "right"}:
-        block_width = float(layout_data.get("max_line_width") or 0.0)
-        render_width = float(max_render_width or 0.0)
-        if block_width > 0.0 and render_width > 0.0:
-            if layout_box_top_left is not None:
-                left_bound = float(layout_box_top_left[0])
-            else:
-                left_bound = float(target_center_x) - render_width / 2.0
-            if text_alignment == "left":
-                target_center_x = left_bound + block_width / 2.0
-            else:
-                target_center_x = left_bound + render_width - block_width / 2.0
+    if text_alignment not in {"left", "center", "right"}:
+        text_alignment = "center"
+    if layout_data.get("orientation") != "vertical":
+        layout_data["text_alignment"] = text_alignment
+        layout_data["alignment_width"] = float(
+            max_render_width or layout_data.get("max_line_width") or 0.0
+        )
 
     try:
         target_center_x += float(layout_data.get("position_offset_x") or 0.0)
@@ -2163,6 +2158,10 @@ def render_text_skia(
         scaled_layout_data["font_size"] = layout_data["font_size"] * factor
         scaled_layout_data["line_height"] = layout_data["line_height"] * factor
         scaled_layout_data["max_line_width"] = layout_data["max_line_width"] * factor
+        if layout_data.get("alignment_width") is not None:
+            scaled_layout_data["alignment_width"] = (
+                layout_data["alignment_width"] * factor
+            )
         if layout_data.get("block_height") is not None:
             scaled_layout_data["block_height"] = layout_data["block_height"] * factor
         if layout_data.get("block_width") is not None:

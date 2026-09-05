@@ -10,6 +10,46 @@ from advanced_editor.launcher import AdvancedEditorWindow, DEFAULT_EXPORT_DIRECT
 
 
 class ExportScopeTest(TestCase):
+    def test_saved_original_restore_is_baked_for_the_next_inpaint(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            saved = root / "saved.png"
+            Image.new("RGBA", (3, 2), "green").save(saved)
+            original = root / "original.png"
+            Image.new("RGBA", (3, 2), (210, 30, 20, 255)).save(original)
+            restore_mask = root / "restore.png"
+            mask = Image.new("L", (3, 2), 0)
+            mask.putpixel((0, 0), 255)
+            mask.save(restore_mask)
+            clean_base = Mock(return_value=Image.new("RGBA", (3, 2), "blue"))
+            window = SimpleNamespace(
+                session={
+                    "rendered_snapshot_path": "",
+                    "edited_image_path": str(saved),
+                    "original_snapshot_path": str(original),
+                    "restore_mask_path": str(restore_mask),
+                    "regions": [],
+                },
+                session_path=root / "session.json",
+                image_size=(3, 2),
+                _dirty_region_ids={"changed"},
+                _clean_base_image=clean_base,
+                _apply_paint_overlay_to=lambda image: image,
+            )
+            window._inpainting_source_image = MethodType(
+                AdvancedEditorWindow._inpainting_source_image, window
+            )
+
+            AdvancedEditorWindow._flatten_fast_editor_layers_after_save(window, saved)
+            image = AdvancedEditorWindow._inpainting_source_image(window)
+
+            self.assertEqual(window.session["restore_mask_path"], "")
+            self.assertEqual(image.getpixel((0, 0)), (210, 30, 20, 255))
+            self.assertEqual(image.getpixel((1, 0)), (0, 0, 255, 255))
+            self.assertEqual(
+                Path(window.session["rendered_snapshot_path"]), saved.resolve()
+            )
+
     def test_export_dialogs_start_in_mana_folder(self) -> None:
         self.assertEqual(
             DEFAULT_EXPORT_DIRECTORY,

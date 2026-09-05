@@ -79,7 +79,7 @@ def get_available_font_packs(fonts_base_dir: Path) -> Tuple[List[str], Optional[
     default_font: Optional[str] = None
 
     for pack_dir in sorted(fonts_base_dir.iterdir(), key=lambda p: p.name.lower()):
-        if not pack_dir.is_dir():
+        if not pack_dir.is_dir() or pack_dir.name.casefold() == "_backup":
             continue
         choices.append(pack_dir.name)
         if default_font is None:
@@ -88,7 +88,9 @@ def get_available_font_packs(fonts_base_dir: Path) -> Tuple[List[str], Optional[
         font_files = [
             item
             for item in pack_dir.rglob("*")
-            if item.is_file() and item.suffix.lower() in FONT_FILE_SUFFIXES
+            if item.is_file()
+            and item.suffix.lower() in FONT_FILE_SUFFIXES
+            and all(part.casefold() != "_backup" for part in item.parts)
         ]
         for font_file in sorted(font_files, key=lambda p: str(p).lower()):
             choices.append(font_file.relative_to(fonts_base_dir).as_posix())
