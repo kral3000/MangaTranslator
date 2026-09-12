@@ -10,6 +10,38 @@ from advanced_editor.launcher import AdvancedEditorWindow
 
 
 class ClearRestoreMaskTest(TestCase):
+    def test_clear_paint_overlay_preserves_undo_and_other_layers(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "paint.png"
+            Image.new("RGBA", (8, 6), (10, 20, 30, 255)).save(path)
+            original = path.read_bytes()
+            history = []
+            window = SimpleNamespace(
+                session={
+                    "paint_overlay_path": str(path),
+                    "restore_mask_path": "keep.png",
+                },
+                session_path=Path(directory) / "session.json",
+                image_size=(8, 6),
+                _push_history=Mock(
+                    side_effect=lambda label: history.append(path.read_bytes())
+                ),
+                status_label=Mock(),
+                reload_display_image=Mock(),
+                schedule_exact_preview=Mock(),
+            )
+
+            with patch("advanced_editor.launcher.save_session") as save:
+                AdvancedEditorWindow.clear_paint_overlay(window)
+
+            self.assertEqual(history, [original])
+            with Image.open(path) as image:
+                self.assertIsNone(image.getchannel("A").getbbox())
+            self.assertEqual(window.session["restore_mask_path"], "keep.png")
+            save.assert_called_once_with(window.session_path, window.session)
+            window.reload_display_image.assert_called_once()
+            window.schedule_exact_preview.assert_called_once()
+
     def test_clear_preserves_undo_data_and_refreshes_preview(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "restore.png"

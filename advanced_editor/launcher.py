@@ -4491,6 +4491,13 @@ class AdvancedEditorWindow(QMainWindow):
         quick_colors.addWidget(self.custom_paint_color_button, 1)
         layout.addLayout(quick_colors)
 
+        clear_paint_button = QPushButton("그리기 전체 지우기")
+        clear_paint_button.setToolTip(
+            "현재 이미지에 그린 브러시 레이어만 모두 지웁니다. 실행취소할 수 있습니다."
+        )
+        clear_paint_button.clicked.connect(self.clear_paint_overlay)
+        layout.addWidget(clear_paint_button)
+
         layout.addWidget(
             self._help_label(
                 "이 크기는 그리기 브러시와 그리기 지우개에만 적용됩니다. 사용자 색상은 색 선택 창에서 "
@@ -7069,6 +7076,22 @@ class AdvancedEditorWindow(QMainWindow):
         self.reload_display_image()
         self.schedule_exact_preview()
         self.status_label.setText("현재 이미지의 원본 복구 마스크를 모두 지웠습니다.")
+
+    def clear_paint_overlay(self) -> None:
+        overlay_path = self.session.get("paint_overlay_path")
+        if not overlay_path or not Path(overlay_path).is_file():
+            self.status_label.setText("지울 그리기 내용이 없습니다.")
+            return
+        overlay = _overlay_to_array(Path(overlay_path), self.image_size)
+        if not np.any(overlay[..., 3]):
+            self.status_label.setText("지울 그리기 내용이 없습니다.")
+            return
+        self._push_history("그리기 전체 지우기")
+        _array_to_overlay_image(np.zeros_like(overlay)).save(overlay_path)
+        save_session(self.session_path, self.session)
+        self.reload_display_image()
+        self.schedule_exact_preview()
+        self.status_label.setText("현재 이미지의 그리기 내용을 모두 지웠습니다.")
 
     def reset_inpainting_result(self) -> None:
         self._push_history("인페인팅 결과 초기화")
