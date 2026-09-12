@@ -115,6 +115,7 @@ from core.editor_session import (
     save_session,
     set_region_font_size,
 )
+from core.text.font_manager import font_size_multiplier
 from core.text.text_processing import extract_translation_tag
 
 
@@ -5098,12 +5099,17 @@ class AdvancedEditorWindow(QMainWindow):
         region = {"render": {"font_dir": path}}
         family = self._qfont_family_for_region(region)
         style = self._qfont_style_for_region(region, family)
-        font = QFontDatabase.font(family, style, 15) if style else QFont(family, 15)
-        font.setPointSize(15)
+        preview_size = max(1, round(15 * font_size_multiplier(path)))
+        font = (
+            QFontDatabase.font(family, style, preview_size)
+            if style
+            else QFont(family, preview_size)
+        )
+        font.setPointSize(preview_size)
         self.font_preview_label.setFont(font)
         safe_family = family.replace("\\", "\\\\").replace('"', '\\"')
         self.font_preview_label.setStyleSheet(
-            f'font-family: "{safe_family}"; font-size: 15pt;'
+            f'font-family: "{safe_family}"; font-size: {preview_size}pt;'
         )
         self.font_preview_label.setToolTip(Path(path).name)
 
@@ -7420,7 +7426,16 @@ class AdvancedEditorWindow(QMainWindow):
             1,
             int(render.get("font_size") or render.get("max_font_size") or 24),
         )
-        pixel_size = max(1, int(round(fixed_font_size * scale)))
+        pixel_size = max(
+            1,
+            int(
+                round(
+                    fixed_font_size
+                    * font_size_multiplier(str(render.get("font_dir") or ""))
+                    * scale
+                )
+            ),
+        )
         font_family = self._qfont_family_for_region(region)
         font = QFont(font_family)
         font_style = self._qfont_style_for_region(region, font_family)

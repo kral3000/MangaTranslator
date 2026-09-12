@@ -1,3 +1,4 @@
+import copy
 import re
 from typing import Optional, Tuple
 
@@ -15,6 +16,7 @@ from core.text.drawing_engine import (
 )
 from core.text.font_manager import (
     find_font_variants,
+    font_size_multiplier,
     get_font_cmap,
     get_font_features,
 )
@@ -63,6 +65,28 @@ TALL_BUBBLE_VERTICAL_MAX_HORIZONTAL_FILL = 0.75
 TALL_BUBBLE_VERTICAL_MIN_FILL_GAIN = 0.10
 TALL_BUBBLE_VERTICAL_MIN_FONT_SIZE_RATIO = 1.0
 EMPHASIS_STYLES = {"bold", "bold_italic"}
+
+
+def _scaled_font_config(
+    config: RenderingConfig, font_dir: str
+) -> RenderingConfig:
+    multiplier = font_size_multiplier(font_dir)
+    if multiplier == 1.0:
+        return config
+    scaled = copy.copy(config)
+    for name in (
+        "max_font_size",
+        "emphasis_max_font_size",
+        "min_font_size",
+        "force_vertical_retry_font_size",
+        "tight_fit_shrink_min_font_size",
+        "small_text_zero_padding_max_font_size",
+        "wrapped_symbol_relax_font_size_threshold",
+    ):
+        value = getattr(scaled, name, None)
+        if value is not None:
+            setattr(scaled, name, max(1, round(float(value) * multiplier)))
+    return scaled
 
 
 def _render_padding_pair(config: RenderingConfig) -> tuple[float, float]:
@@ -887,6 +911,7 @@ def render_text_skia(
     # Initialize config with defaults if not provided
     if config is None:
         config = RenderingConfig()
+    config = _scaled_font_config(config, font_dir)
 
     padding_x, padding_y = _render_padding_pair(config)
     layout_box_top_left = None

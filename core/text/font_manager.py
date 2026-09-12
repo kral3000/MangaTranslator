@@ -47,6 +47,7 @@ _font_variants_cache: Dict[str, Dict[str, Optional[Path]]] = {}
 
 FONT_DISK_CACHE_VERSION = "font-sanitize-v1"
 _FONT_DISK_CACHE_DIR = Path(__file__).resolve().parents[2] / "models" / "font_cache"
+FONT_SIZE_MULTIPLIERS = {"typodonquixote": 1.25}
 
 # Font style detection keywords
 FONT_KEYWORDS = {
@@ -54,6 +55,16 @@ FONT_KEYWORDS = {
     "italic": {"italic", "oblique", "slanted", "inclined"},
     "regular": {"regular", "normal", "roman", "medium"},
 }
+
+
+def font_size_multiplier(font_path: str) -> float:
+    font_name = "".join(
+        char for char in Path(str(font_path or "")).stem.casefold() if char.isalnum()
+    )
+    for prefix, multiplier in FONT_SIZE_MULTIPLIERS.items():
+        if font_name.startswith(prefix):
+            return multiplier
+    return 1.0
 
 
 def _filename_style_flags(font_file: Path) -> tuple[bool, bool, bool]:
