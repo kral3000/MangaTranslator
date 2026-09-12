@@ -13,6 +13,50 @@ from advanced_editor.launcher import (
 
 
 class UndoPreviewSyncTest(TestCase):
+    def test_duplicate_textbox_keeps_style_without_sharing_erase_mask(self) -> None:
+        source = {
+            "id": "r001",
+            "label": "1. 원본",
+            "translation": "복제할 글자",
+            "bbox": [10, 20, 40, 60],
+            "original_bbox": [10, 20, 40, 60],
+            "mask_path": "shared-mask.png",
+            "use_mask": True,
+            "render_baseline": {"font_size": 12},
+            "render": {"font_size": 18, "outline_width": 2.0},
+        }
+        window = SimpleNamespace(
+            session={"regions": [source], "editor_dirty_region_ids": []},
+            session_path=Path("session.json"),
+            selected_index=0,
+            image_size=(100, 100),
+            _dirty_region_ids=set(),
+            selected_region=lambda: window.session["regions"][window.selected_index],
+            commit_region_form=Mock(),
+            _push_history=Mock(),
+            refresh_region_list=Mock(),
+            load_selected_region_to_form=Mock(),
+            canvas=SimpleNamespace(update=Mock()),
+            schedule_exact_preview=Mock(),
+            status_label=SimpleNamespace(setText=Mock()),
+        )
+        window._mark_region_dirty = lambda region: AdvancedEditorWindow._mark_region_dirty(
+            window, region
+        )
+
+        with patch("advanced_editor.launcher.save_session"):
+            AdvancedEditorWindow.duplicate_selected_region(window)
+
+        duplicate = window.session["regions"][1]
+        self.assertEqual(duplicate["bbox"], [26.0, 36.0, 56.0, 76.0])
+        self.assertEqual(duplicate["render"], source["render"])
+        self.assertIsNot(duplicate["render"], source["render"])
+        self.assertIsNone(duplicate["mask_path"])
+        self.assertFalse(duplicate["use_mask"])
+        self.assertNotIn("render_baseline", duplicate)
+        self.assertEqual(window.selected_index, 1)
+        window._push_history.assert_called_once_with("텍스트 박스 복제")
+
     def test_bulk_format_adjustments_apply_relative_values_and_limits(self) -> None:
         session = {"regions": []}
         region = {

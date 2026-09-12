@@ -169,6 +169,7 @@ EDITOR_ICON_PATHS = {
     "export": '<path d="M14 3h7v7M21 3l-10 10"/><path d="M18 14v7H3V6h7"/>',
     "images": '<rect x="3" y="5" width="14" height="14" rx="2"/><path d="M7 9h.01M4 16l4-4 3 3 2-2 4 4"/><path d="M7 2h14v14"/>',
     "add": '<path d="M12 5v14M5 12h14"/>',
+    "duplicate": '<rect x="8" y="8" width="12" height="12" rx="1"/><path d="M16 8V4H4v12h4"/>',
     "trash": '<path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/>',
     "refresh": '<path d="M20 7V3l-3 3a8 8 0 1 0 2 9"/>',
     "folder": '<path d="M3 6h7l2 2h9v12H3z"/>',
@@ -1863,6 +1864,13 @@ class AdvancedEditorWindow(QMainWindow):
         self.history_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.history_button.setMenu(self.history_menu)
         action_toolbar.addWidget(self.history_button)
+
+        self.duplicate_action = QAction(_editor_icon("duplicate"), "복제", self)
+        self.duplicate_action.setShortcut(QKeySequence("Ctrl+D"))
+        self.duplicate_action.setToolTip("선택한 텍스트 박스 복제 (Ctrl+D)")
+        self.duplicate_action.setEnabled(self.selected_region() is not None)
+        self.duplicate_action.triggered.connect(self.duplicate_selected_region)
+        action_toolbar.addAction(self.duplicate_action)
 
         self.bulk_format_action = QAction(
             _editor_icon("bulk_format"), "일괄 서식", self
@@ -5995,6 +6003,8 @@ class AdvancedEditorWindow(QMainWindow):
 
     def load_selected_region_to_form(self) -> None:
         region = self.selected_region()
+        if hasattr(self, "duplicate_action"):
+            self.duplicate_action.setEnabled(region is not None)
         self._syncing = True
         self._font_change_requested = False
         try:
@@ -6208,6 +6218,56 @@ class AdvancedEditorWindow(QMainWindow):
         self.load_selected_region_to_form()
         self.canvas.update()
         self.status_label.setText("텍스트 영역을 추가했습니다.")
+
+    def duplicate_selected_region(self) -> None:
+        if self.selected_region() is None:
+            return
+        self.commit_region_form(mark_dirty=False)
+        source = self.selected_region()
+        if source is None:
+            return
+        self._push_history("텍스트 박스 복제")
+        regions = self.session.setdefault("regions", [])
+        existing_ids = {str(region.get("id") or "") for region in regions}
+        next_number = len(regions) + 1
+        while f"r{next_number:03d}" in existing_ids:
+            next_number += 1
+
+        duplicate = copy.deepcopy(source)
+        duplicate.pop("render_baseline", None)
+        for key in list(duplicate):
+            if str(key).startswith("_editor_"):
+                duplicate.pop(key, None)
+        x1, y1, x2, y2 = _bbox(source)
+        box_width, box_height = x2 - x1, y2 - y1
+        image_width, image_height = self.image_size
+        offset = 16.0
+        new_x = x1 + offset if x2 + offset <= image_width else max(0.0, x1 - offset)
+        new_y = y1 + offset if y2 + offset <= image_height else max(0.0, y1 - offset)
+        duplicate.update(
+            {
+                "id": f"r{next_number:03d}",
+                "label": f"{len(regions) + 1}. 복제한 텍스트",
+                "bbox": [new_x, new_y, new_x + box_width, new_y + box_height],
+                "original_bbox": [
+                    new_x,
+                    new_y,
+                    new_x + box_width,
+                    new_y + box_height,
+                ],
+                "mask_path": None,
+                "use_mask": False,
+            }
+        )
+        regions.append(duplicate)
+        self.selected_index = len(regions) - 1
+        self._mark_region_dirty(duplicate)
+        save_session(self.session_path, self.session)
+        self.refresh_region_list()
+        self.load_selected_region_to_form()
+        self.canvas.update()
+        self.schedule_exact_preview()
+        self.status_label.setText("텍스트 박스를 복제했습니다. (Ctrl+D)")
 
     def create_textbox_from_drag(self, start: QPointF, end: QPointF) -> None:
         x1, x2 = sorted([start.x(), end.x()])
