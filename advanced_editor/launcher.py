@@ -4425,15 +4425,29 @@ class AdvancedEditorWindow(QMainWindow):
         layout.setSpacing(9)
 
         size_row = QHBoxLayout()
+        size_row.setSpacing(8)
         size_row.addWidget(QLabel("그리기 브러시 크기"))
+        self.paint_brush_slider = QSlider(Qt.Orientation.Horizontal)
+        self.paint_brush_slider.setRange(1, 200)
+        self.paint_brush_slider.setValue(self.paint_brush_size)
+        self.paint_brush_slider.setAccessibleName("그리기 브러시 크기 슬라이더")
+        size_row.addWidget(self.paint_brush_slider, 1)
         self.paint_brush_size_spin = self._standalone_spin(
             1, 200, self.paint_brush_size
         )
         self.paint_brush_size_spin.setSuffix(" px")
+        self.paint_brush_size_spin.setFixedWidth(72)
         self.paint_brush_size_spin.setAccessibleName("그리기 브러시 크기")
+        self.paint_brush_slider.valueChanged.connect(
+            self.paint_brush_size_spin.setValue
+        )
+        self.paint_brush_size_spin.valueChanged.connect(
+            self.paint_brush_slider.setValue
+        )
         self.paint_brush_size_spin.valueChanged.connect(
             self._on_paint_brush_size_changed
         )
+        self.paint_brush_slider.sliderReleased.connect(self._store_brush_settings)
         self.paint_brush_size_spin.editingFinished.connect(
             self._store_brush_settings
         )
