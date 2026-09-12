@@ -120,6 +120,37 @@ class ToolContextTest(TestCase):
         self.assertEqual(mask[10, 10], 0)
         self.assertEqual(mask[15, 15], 255)
 
+    def test_one_pixel_brush_marks_exactly_one_pixel(self) -> None:
+        window = SimpleNamespace(
+            image_size=(10, 10),
+            brush_size=1,
+            brush_shape="circle",
+        )
+
+        mask = AdvancedEditorWindow._stroke_mask(window, [(5, 5)])
+
+        self.assertEqual(np.count_nonzero(mask), 1)
+        self.assertEqual(mask[5, 5], 255)
+
+    def test_paint_and_mask_brush_sizes_are_updated_independently(self) -> None:
+        window = SimpleNamespace(
+            paint_brush_size=2,
+            mask_brush_size=18,
+            canvas=SimpleNamespace(update=Mock()),
+        )
+
+        AdvancedEditorWindow._on_paint_brush_size_changed(window, 1)
+        AdvancedEditorWindow._on_brush_size_changed(window, 24)
+
+        self.assertEqual(window.paint_brush_size, 1)
+        self.assertEqual(window.mask_brush_size, 24)
+        self.assertEqual(
+            AdvancedEditorWindow.brush_size_for_tool(window, "paint_eraser"), 1
+        )
+        self.assertEqual(
+            AdvancedEditorWindow.brush_size_for_tool(window, "restore_brush"), 24
+        )
+
     def test_inpainting_progress_exposes_running_and_complete_states(self) -> None:
         state_label = Mock()
         window = SimpleNamespace(

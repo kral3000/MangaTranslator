@@ -457,6 +457,13 @@
     line-height: 1.6 !important;
 }
 
+#translator-character-profile-entries textarea,
+#batch-character-profile-entries textarea {
+    overflow-y: auto !important;
+    max-height: 16em;
+    resize: vertical;
+}
+
 .character-profile-actions {
     justify-content: flex-end !important;
     gap: var(--profile-gap-tight) !important;

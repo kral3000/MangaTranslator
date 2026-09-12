@@ -6,10 +6,47 @@ from unittest.mock import Mock, patch
 
 from PIL import Image
 
-from advanced_editor.launcher import AdvancedEditorWindow
+from advanced_editor.launcher import (
+    AdvancedEditorWindow,
+    _apply_region_format_adjustments,
+)
 
 
 class UndoPreviewSyncTest(TestCase):
+    def test_bulk_format_adjustments_apply_relative_values_and_limits(self) -> None:
+        session = {"regions": []}
+        region = {
+            "id": "region-1",
+            "vertical_stack": False,
+            "render": {
+                "font_dir": "old.ttf",
+                "font_size": 20,
+                "line_spacing_mult": 1.0,
+                "padding_pixels": 5.0,
+                "outline_width": 1.0,
+            },
+        }
+        session["regions"].append(region)
+
+        changed = _apply_region_format_adjustments(
+            session,
+            region,
+            1,
+            font_path="new.ttf",
+            font_size_delta=-3,
+            line_spacing_delta=0.2,
+            padding_delta=-10.0,
+            outline_delta=30.0,
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(region["render"]["font_dir"], "new.ttf")
+        self.assertEqual(region["render"]["font_size"], 17)
+        self.assertEqual(region["render"]["line_spacing_mult"], 1.2)
+        self.assertEqual(region["render"]["vertical_line_spacing_mult"], 1.2)
+        self.assertEqual(region["render"]["padding_pixels"], 0.0)
+        self.assertEqual(region["render"]["outline_width"], 20.0)
+
     def test_history_snapshots_restore_exact_compressed_assets(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -69,15 +106,62 @@ class UndoPreviewSyncTest(TestCase):
 
         window.schedule_exact_preview.assert_called_once_with()
 
+    def test_preview_background_removes_stale_text_from_dirty_regions(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            background_path = Path(temporary_directory) / "translated.png"
+            Image.new("RGBA", (8, 6), (255, 255, 255, 255)).save(background_path)
+            overlaid = Image.new("RGBA", (8, 6), (10, 20, 30, 255))
+            cleaned = Image.new("RGBA", (8, 6), (40, 50, 60, 255))
+            window = SimpleNamespace(
+                _dirty_region_ids={"r001"},
+                session={"regions": [{"id": "r001"}]},
+                _editor_background_source=Mock(
+                    return_value=(background_path, "translated")
+                ),
+                _apply_paint_overlay_to=Mock(return_value=overlaid),
+                _paste_clean_regions_for_fast_edit=Mock(return_value=cleaned),
+            )
+            window._region_changed_for_fast_preview = lambda region: (
+                AdvancedEditorWindow._region_changed_for_fast_preview(window, region)
+            )
+
+            result = AdvancedEditorWindow._preview_background_image(window)
+
+            self.assertIs(result, cleaned)
+            window._paste_clean_regions_for_fast_edit.assert_called_once_with(
+                overlaid,
+                include_dirty_regions=True,
+            )
+
+    def test_changed_region_without_dirty_id_is_still_cleaned_before_preview(self) -> None:
+        region = {
+            "id": "r011",
+            "bbox": [10, 20, 110, 120],
+            "translation": "현재 문장",
+            "render": {"text_alignment": "center"},
+            "render_baseline": {
+                "bbox": [10, 20, 110, 120],
+                "translation": "이전 문장",
+                "render": {"text_alignment": "center"},
+            },
+        }
+        window = SimpleNamespace(_dirty_region_ids=set())
+
+        self.assertTrue(
+            AdvancedEditorWindow._region_changed_for_fast_preview(window, region)
+        )
+
     def test_named_history_undo_and_redo_restore_one_action_at_a_time(self) -> None:
         window = SimpleNamespace(
             history=[],
             redo_stack=[],
-            _capture_state=Mock(side_effect=[
-                {"session": {"value": 0}},
-                {"session": {"value": 1}},
-                {"session": {"value": 0}},
-            ]),
+            _capture_state=Mock(
+                side_effect=[
+                    {"session": {"value": 0}},
+                    {"session": {"value": 1}},
+                    {"session": {"value": 0}},
+                ]
+            ),
             _restore_state=Mock(),
             _refresh_history_menu=Mock(),
             status_label=SimpleNamespace(setText=Mock()),
@@ -91,3 +175,80 @@ class UndoPreviewSyncTest(TestCase):
         AdvancedEditorWindow.redo(window)
         self.assertEqual(window._restore_state.call_args.args[0]["session"]["value"], 1)
         self.assertEqual(window.history[-1]["history_label"], "텍스트 수정")
+
+    def test_bulk_history_undo_and_redo_keep_related_sessions_together(self) -> None:
+        before_related = {"other.json": {"value": "before"}}
+        after_related = {"other.json": {"value": "after"}}
+        window = SimpleNamespace(
+            history=[
+                {
+                    "session": {"value": "before"},
+                    "related_sessions": before_related,
+                    "history_label": "묶음 일괄 서식 변경",
+                }
+            ],
+            redo_stack=[],
+            _capture_state=Mock(
+                side_effect=[
+                    {"session": {"value": "after"}},
+                    {"session": {"value": "before"}},
+                ]
+            ),
+            _capture_related_sessions=Mock(
+                side_effect=[after_related, before_related]
+            ),
+            _restore_state=Mock(),
+            _refresh_history_menu=Mock(),
+            status_label=SimpleNamespace(setText=Mock()),
+        )
+
+        AdvancedEditorWindow.undo_steps(window, 1)
+        self.assertEqual(
+            window._restore_state.call_args.args[0]["related_sessions"],
+            before_related,
+        )
+
+        AdvancedEditorWindow.redo(window)
+        self.assertEqual(
+            window._restore_state.call_args.args[0]["related_sessions"],
+            after_related,
+        )
+        self.assertEqual(window.history[-1]["related_sessions"], before_related)
+
+    def test_restore_related_sessions_uses_only_linked_json_allowlist(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            current = root / "current.json"
+            sibling = root / "sibling.json"
+            outside = root / "outside.json"
+            for path in (current, sibling, outside):
+                path.write_text("{}", encoding="utf-8")
+            window = SimpleNamespace(
+                session={},
+                session_path=current,
+                related_session_paths=[current, sibling],
+                selected_index=None,
+                reload_display_image=Mock(),
+                refresh_region_list=Mock(),
+                load_selected_region_to_form=Mock(),
+                schedule_exact_preview=Mock(),
+            )
+            state = {
+                "session": {"regions": [], "editor_dirty_region_ids": []},
+                "masks": {},
+                "overlay_path": None,
+                "overlay": None,
+                "selected_index": None,
+                "related_sessions": {
+                    str(sibling): {"value": "allowed"},
+                    str(outside): {"value": "blocked"},
+                },
+            }
+
+            with patch("advanced_editor.launcher.save_session") as save:
+                AdvancedEditorWindow._restore_state(window, state)
+
+            saved_paths = [Path(call.args[0]).resolve() for call in save.call_args_list]
+            self.assertIn(sibling.resolve(), saved_paths)
+            self.assertIn(current.resolve(), saved_paths)
+            self.assertNotIn(outside.resolve(), saved_paths)

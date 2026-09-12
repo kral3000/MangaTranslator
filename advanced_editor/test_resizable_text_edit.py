@@ -71,6 +71,9 @@ class ResizableTextEditTest(TestCase):
         self.assertEqual(_split_font_filename("HY피오피L"), ("HY피오피", "Light"))
         self.assertEqual(_split_font_filename("HY피오피M"), ("HY피오피", "Medium"))
         self.assertEqual(
+            _split_font_filename("210 악동클럽R"), ("210 악동클럽", "Regular")
+        )
+        self.assertEqual(
             _decoded_font_metadata_name("\u00c5\u00c2-\u00c0\u00b8\u00b6\u00e4B"),
             "태-으뜸B",
         )

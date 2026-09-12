@@ -59,6 +59,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QCompleter,
     QDoubleSpinBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -98,6 +99,7 @@ from core.config import DEFAULT_FLUX_KLEIN_PROMPT, DEFAULT_FLUX_KONTEXT_PROMPT
 from core.editor_package import embed_editor_package, resolve_editor_session_input
 from core.editor_session import (
     _apply_original_restore,
+    _region_is_baseline,
     _region_render_signature,
     _region_text_transform,
     _decode_uploaded_relative_path,
@@ -162,6 +164,7 @@ EDITOR_ICON_PATHS = {
     "undo": '<path d="M8.2 8A8 8 0 1 1 4 15.5" stroke-width="2.4"/><path d="M8.5 2L2 8l6.5 6z" fill="currentColor" stroke="none"/>',
     "redo": '<path d="M15.8 8A8 8 0 1 0 20 15.5" stroke-width="2.4"/><path d="M15.5 2L22 8l-6.5 6z" fill="currentColor" stroke="none"/>',
     "history": '<circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/>',
+    "bulk_format": '<path d="M3 18L8 5h2l5 13M5 13h8"/><path d="M16 8h5M19 5l3 3-3 3M21 16h-5M18 13l-3 3 3 3"/>',
     "save": '<path d="M4 3h13l3 3v15H4z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/>',
     "export": '<path d="M14 3h7v7M21 3l-10 10"/><path d="M18 14v7H3V6h7"/>',
     "images": '<rect x="3" y="5" width="14" height="14" rx="2"/><path d="M7 9h.01M4 16l4-4 3 3 2-2 4 4"/><path d="M7 2h14v14"/>',
@@ -240,7 +243,9 @@ class ResizableTextEdit(QTextEdit):
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
         self.setFixedHeight(height)
-        self.setToolTip("오른쪽 아래 모서리를 끌어 입력 상자 높이를 조절할 수 있습니다.")
+        self.setToolTip(
+            "오른쪽 아래 모서리를 끌어 입력 상자 높이를 조절할 수 있습니다."
+        )
 
     def _over_resize_grip(self, event: QMouseEvent) -> bool:
         position = event.position()
@@ -250,9 +255,8 @@ class ResizableTextEdit(QTextEdit):
         )
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if (
-            event.button() == Qt.MouseButton.LeftButton
-            and self._over_resize_grip(event)
+        if event.button() == Qt.MouseButton.LeftButton and self._over_resize_grip(
+            event
         ):
             self._resize_start_y = int(event.globalPosition().y())
             self._resize_start_height = self.height()
@@ -380,10 +384,7 @@ class ModernComboBox(QComboBox):
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if self._searchable and watched is self.lineEdit():
-            if (
-                event.type() == QEvent.Type.MouseButtonPress
-                and not self._search_mode
-            ):
+            if event.type() == QEvent.Type.MouseButtonPress and not self._search_mode:
                 self.showPopup()
                 return True
             if event.type() == QEvent.Type.FocusOut and self._search_mode:
@@ -516,6 +517,7 @@ class TaskSignals(QObject):
     failed = pyqtSignal(str)
     progress = pyqtSignal(int, int, str)
 
+
 REGION_TYPE_LABELS = {
     "speech_bubble": "말풍선",
     "outside_text": "말풍선 밖 텍스트",
@@ -581,7 +583,9 @@ def _bbox(region: dict[str, Any]) -> list[float]:
     return [x1, y1, max(x1 + 1.0, x2), max(y1 + 1.0, y2)]
 
 
-def _rgb_from_hex(value: str, fallback: tuple[int, int, int] = (0, 0, 0)) -> tuple[int, int, int]:
+def _rgb_from_hex(
+    value: str, fallback: tuple[int, int, int] = (0, 0, 0)
+) -> tuple[int, int, int]:
     text = str(value or "").strip()
     if text.startswith("#") and len(text) == 7:
         try:
@@ -679,13 +683,20 @@ def _split_font_filename(stem: str) -> tuple[str, str]:
         if compact_match and compact_match.start() > 0:
             family = original[: compact_match.start()].strip(" _-")
             return family or original, style
-    short_hangul_style = {"b": "Bold", "m": "Medium", "l": "Light"}
+    short_hangul_style = {
+        "b": "Bold",
+        "m": "Medium",
+        "l": "Light",
+        "r": "Regular",
+    }
     if len(original) > 1 and "가" <= original[-2] <= "힣":
         style = short_hangul_style.get(original[-1].casefold())
         if style:
             return original[:-1].strip(" _-"), style
-    if len(original) > 1 and original[-1].casefold() == "b" and (
-        original[-2].islower() or original[-2] in " _-"
+    if (
+        len(original) > 1
+        and original[-1].casefold() == "b"
+        and (original[-2].islower() or original[-2] in " _-")
     ):
         return original[:-1].strip(" _-"), "Bold"
     short_regular = re.search(r"(?:[-_]|(?<=[a-z]))(?:b?rg|r)$", original)
@@ -723,11 +734,16 @@ def _normalized_font_style(value: str, filename_style: str) -> str:
         return filename_style
     if italic:
         return "Italic" if weight == "Regular" else f"{weight} Italic"
-    if text and weight == "Regular" and lowered not in {
-        "regular",
-        "normal",
-        "roman",
-    }:
+    if (
+        text
+        and weight == "Regular"
+        and lowered
+        not in {
+            "regular",
+            "normal",
+            "roman",
+        }
+    ):
         return text
     return weight
 
@@ -787,6 +803,68 @@ def _font_style_sort_key(style: str) -> tuple[int, int, str]:
     base = re.sub(r"\s+(?:Italic|Oblique)$", "", text, flags=re.IGNORECASE)
     italic = int(bool(re.search(r"(?:Italic|Oblique)$", text, flags=re.IGNORECASE)))
     return FONT_STYLE_ORDER.get(base, 1000), italic, text.casefold()
+
+
+def _apply_region_format_adjustments(
+    session: dict[str, Any],
+    region: dict[str, Any],
+    region_number: int,
+    *,
+    font_path: str,
+    font_size_delta: int = 0,
+    line_spacing_delta: float = 0.0,
+    padding_delta: float = 0.0,
+    outline_delta: float = 0.0,
+) -> bool:
+    """Apply one bulk-format replacement while preserving untouched fields."""
+    render = region.setdefault("render", {})
+    changed = False
+    if font_path and os.path.normcase(
+        str(render.get("font_dir") or "")
+    ) != os.path.normcase(font_path):
+        render["font_dir"] = font_path
+        changed = True
+
+    if font_size_delta:
+        current_size = resolve_region_font_size(session, region, region_number)
+        target_size = max(1, min(999, current_size + int(font_size_delta)))
+        if target_size != current_size:
+            set_region_font_size(region, target_size)
+            changed = True
+
+    if line_spacing_delta:
+        spacing_key = (
+            "vertical_line_spacing_mult"
+            if region.get("vertical_stack", False)
+            and render.get("vertical_line_spacing_mult") is not None
+            else "line_spacing_mult"
+        )
+        current_spacing = float(render.get(spacing_key) or 1.0)
+        target_spacing = round(
+            max(0.2, min(4.0, current_spacing + float(line_spacing_delta))), 3
+        )
+        if target_spacing != current_spacing:
+            for key in (
+                "line_spacing_mult",
+                "emphasis_line_spacing_mult",
+                "vertical_line_spacing_mult",
+                "vertical_emphasis_line_spacing_mult",
+            ):
+                render[key] = target_spacing
+            changed = True
+
+    for key, delta, default, maximum in (
+        ("padding_pixels", padding_delta, 5.0, 80.0),
+        ("outline_width", outline_delta, 0.0, 20.0),
+    ):
+        if not delta:
+            continue
+        current = float(render.get(key) if render.get(key) is not None else default)
+        target = round(max(0.0, min(maximum, current + float(delta))), 3)
+        if target != current:
+            render[key] = target
+            changed = True
+    return changed
 
 
 def _is_temporary_upload_path(path: Any) -> bool:
@@ -1019,7 +1097,9 @@ class EditorCanvas(QWidget):
         self._fit_transform()
         self.update()
 
-    def set_absolute_scale(self, scale: float, anchor: Optional[QPointF] = None) -> None:
+    def set_absolute_scale(
+        self, scale: float, anchor: Optional[QPointF] = None
+    ) -> None:
         self._fit_transform()
         target_scale = max(0.02, min(8.0, float(scale)))
         current_scale = max(0.0001, self.scale)
@@ -1072,11 +1152,14 @@ class EditorCanvas(QWidget):
             event.ignore()
             return
         steps = delta / 120.0
-        self.zoom_at(QPointF(event.position()), 1.2 ** steps)
+        self.zoom_at(QPointF(event.position()), 1.2**steps)
         event.accept()
 
     def image_to_view(self, point: QPointF) -> QPointF:
-        return QPointF(point.x() * self.scale + self.offset.x(), point.y() * self.scale + self.offset.y())
+        return QPointF(
+            point.x() * self.scale + self.offset.x(),
+            point.y() * self.scale + self.offset.y(),
+        )
 
     def view_to_image(self, point: QPointF) -> QPointF:
         image = self.window.display_image
@@ -1103,9 +1186,7 @@ class EditorCanvas(QWidget):
             "sw": (rect.left() - gap - size, rect.bottom() + gap),
             "se": (rect.right() + gap, rect.bottom() + gap),
         }
-        return {
-            key: QRectF(x, y, size, size) for key, (x, y) in positions.items()
-        }
+        return {key: QRectF(x, y, size, size) for key, (x, y) in positions.items()}
 
     def _hit_test(self, pos: QPointF) -> tuple[Optional[int], Optional[str]]:
         selected_index = self.window.selected_index
@@ -1133,7 +1214,11 @@ class EditorCanvas(QWidget):
         image = self.window.display_image
         if image is None:
             painter.setPen(QColor("#dddddd"))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "편집 세션을 불러오지 못했습니다")
+            painter.drawText(
+                self.rect(),
+                Qt.AlignmentFlag.AlignCenter,
+                "편집 세션을 불러오지 못했습니다",
+            )
             return
 
         self._draw_display_image(painter, image)
@@ -1279,6 +1364,7 @@ class EditorCanvas(QWidget):
     def _draw_stroke_preview(self, painter: QPainter) -> None:
         if len(self.stroke_points) == 0:
             return
+        brush_size = self.window.brush_size_for_tool(self.tool)
         if self.tool == "paint_brush":
             color = QColor(self.window.paint_color)
             color.setAlpha(210)
@@ -1298,13 +1384,9 @@ class EditorCanvas(QWidget):
         painter.setPen(
             QPen(
                 color,
-                max(1.0, self.window.brush_size * self.scale),
+                max(1.0, brush_size * self.scale),
                 Qt.PenStyle.SolidLine,
-                (
-                    Qt.PenCapStyle.SquareCap
-                    if square_brush
-                    else Qt.PenCapStyle.RoundCap
-                ),
+                (Qt.PenCapStyle.SquareCap if square_brush else Qt.PenCapStyle.RoundCap),
                 (
                     Qt.PenJoinStyle.MiterJoin
                     if square_brush
@@ -1314,7 +1396,7 @@ class EditorCanvas(QWidget):
         )
         points = [self.image_to_view(QPointF(x, y)) for x, y in self.stroke_points]
         if len(points) == 1:
-            r = max(1.0, self.window.brush_size * self.scale / 2.0)
+            r = max(1.0, brush_size * self.scale / 2.0)
             if square_brush:
                 painter.drawRect(
                     QRectF(points[0].x() - r, points[0].y() - r, r * 2, r * 2)
@@ -1336,7 +1418,8 @@ class EditorCanvas(QWidget):
         }:
             return
         center = self.image_to_view(self.hover_image_pos)
-        radius = max(2.0, self.window.brush_size * self.scale / 2.0)
+        brush_size = self.window.brush_size_for_tool(self.tool)
+        radius = max(2.0, brush_size * self.scale / 2.0)
         cursor_rect = QRectF(
             center.x() - radius,
             center.y() - radius,
@@ -1402,7 +1485,9 @@ class EditorCanvas(QWidget):
             "restore_brush",
             "restore_eraser",
         }:
-            self.stroke_points = [(int(round(image_pos.x())), int(round(image_pos.y())))]
+            self.stroke_points = [
+                (int(round(image_pos.x())), int(round(image_pos.y())))
+            ]
             self.update()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
@@ -1415,11 +1500,16 @@ class EditorCanvas(QWidget):
             return
         image_pos = self.view_to_image(QPointF(event.position()))
         self.hover_image_pos = image_pos
-        if self.drag_mode and self.drag_start_bbox is not None and self.tool == "select":
+        if (
+            self.drag_mode
+            and self.drag_start_bbox is not None
+            and self.tool == "select"
+        ):
             movement = QPointF(event.position()) - self.drag_start_view
-            if not self.drag_has_moved and (
-                abs(movement.x()) + abs(movement.y())
-            ) < 4.0:
+            if (
+                not self.drag_has_moved
+                and (abs(movement.x()) + abs(movement.y())) < 4.0
+            ):
                 return
             if not self.drag_has_moved:
                 self.drag_has_moved = True
@@ -1431,7 +1521,9 @@ class EditorCanvas(QWidget):
                     )
                     self.window._push_history(label)
                     self.drag_history_pushed = True
-            self.window.update_selected_bbox_from_drag(self.drag_mode, self.drag_start_bbox, self.drag_start_image, image_pos)
+            self.window.update_selected_bbox_from_drag(
+                self.drag_mode, self.drag_start_bbox, self.drag_start_image, image_pos
+            )
             self.update()
             return
         if self.textbox_start is not None:
@@ -1468,8 +1560,7 @@ class EditorCanvas(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if (
-            event.button()
-            in {Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton}
+            event.button() in {Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton}
             and self.pan_drag_start is not None
         ):
             self.pan_drag_start = None
@@ -1489,7 +1580,9 @@ class EditorCanvas(QWidget):
             self.drag_history_pushed = False
             return
         if self.textbox_start is not None and self.textbox_current is not None:
-            self.window.create_textbox_from_drag(self.textbox_start, self.textbox_current)
+            self.window.create_textbox_from_drag(
+                self.textbox_start, self.textbox_current
+            )
             self.textbox_start = None
             self.textbox_current = None
             self.update()
@@ -1539,22 +1632,31 @@ class AdvancedEditorWindow(QMainWindow):
             saved_brush_size = int(brush_settings.get("size", 30))
         except (TypeError, ValueError):
             saved_brush_size = 30
-        self.brush_size = max(5, min(200, saved_brush_size))
+        try:
+            saved_paint_brush_size = int(
+                brush_settings.get("paint_size", saved_brush_size)
+            )
+        except (TypeError, ValueError):
+            saved_paint_brush_size = saved_brush_size
+        try:
+            saved_mask_brush_size = int(
+                brush_settings.get("mask_size", saved_brush_size)
+            )
+        except (TypeError, ValueError):
+            saved_mask_brush_size = saved_brush_size
+        self.paint_brush_size = max(1, min(200, saved_paint_brush_size))
+        self.mask_brush_size = max(5, min(200, saved_mask_brush_size))
         saved_paint_color = QColor(str(brush_settings.get("color", "#ffffff")))
         self.paint_color = (
             saved_paint_color.name() if saved_paint_color.isValid() else "#ffffff"
         )
-        saved_custom_color = QColor(
-            str(brush_settings.get("custom_color", "#808080"))
-        )
+        saved_custom_color = QColor(str(brush_settings.get("custom_color", "#808080")))
         self.custom_paint_color = (
             saved_custom_color.name() if saved_custom_color.isValid() else "#808080"
         )
         saved_brush_shape = str(brush_settings.get("shape", "circle"))
         self.brush_shape = (
-            saved_brush_shape
-            if saved_brush_shape in {"circle", "square"}
-            else "circle"
+            saved_brush_shape if saved_brush_shape in {"circle", "square"} else "circle"
         )
         self.history: list[dict[str, Any]] = []
         self.redo_stack: list[dict[str, Any]] = []
@@ -1755,19 +1857,31 @@ class AdvancedEditorWindow(QMainWindow):
         self.history_button = QToolButton(self)
         self.history_button.setText("작업 기록")
         self.history_button.setIcon(_editor_icon("history"))
-        self.history_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.history_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
         self.history_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.history_button.setMenu(self.history_menu)
         action_toolbar.addWidget(self.history_button)
+
+        self.bulk_format_action = QAction(
+            _editor_icon("bulk_format"), "일괄 서식", self
+        )
+        self.bulk_format_action.setShortcut(QKeySequence("Ctrl+H"))
+        self.bulk_format_action.setToolTip(
+            "폰트 교체와 크기·간격 상대 조정을 여러 텍스트 영역에 적용 (Ctrl+H)"
+        )
+        self.bulk_format_action.triggered.connect(self.show_bulk_format_dialog)
+        action_toolbar.addAction(self.bulk_format_action)
         action_toolbar.addSeparator()
 
-        brush_label = QLabel("브러시 크기")
+        brush_label = QLabel("인페인트·복구 크기")
         brush_label.setObjectName("TopBarLabel")
         action_toolbar.addWidget(brush_label)
         self.brush_slider = QSlider(Qt.Orientation.Horizontal)
         self.brush_slider.setObjectName("TopBarBrushSlider")
         self.brush_slider.setRange(5, 200)
-        self.brush_slider.setValue(self.brush_size)
+        self.brush_slider.setValue(self.mask_brush_size)
         self.brush_slider.setFixedWidth(120)
         self.brush_slider.valueChanged.connect(self._on_brush_size_changed)
         self.brush_slider.sliderReleased.connect(self._store_brush_settings)
@@ -1776,7 +1890,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.brush_size_spin.setObjectName("TopBarMetricSpin")
         self.brush_size_spin.setRange(5, 200)
         self.brush_size_spin.setSuffix(" px")
-        self.brush_size_spin.setValue(self.brush_size)
+        self.brush_size_spin.setValue(self.mask_brush_size)
         self.brush_size_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.brush_size_spin.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.brush_size_spin.valueChanged.connect(self.brush_slider.setValue)
@@ -1906,11 +2020,15 @@ class AdvancedEditorWindow(QMainWindow):
 
         self.plain_render_action = QAction(_editor_icon("export"), "내보내기", self)
         self.plain_render_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
-        self.plain_render_action.setToolTip("범위와 새 저장 위치를 골라 내보내기 (Ctrl+Shift+S)")
+        self.plain_render_action.setToolTip(
+            "범위와 새 저장 위치를 골라 내보내기 (Ctrl+Shift+S)"
+        )
         self.plain_render_action.triggered.connect(self.save_plain_rendered_image)
         self.export_menu = QMenu(self)
         self.export_current_action = self.export_menu.addAction("현재 이미지 내보내기…")
-        self.export_selected_action = self.export_menu.addAction("선택한 이미지 내보내기…")
+        self.export_selected_action = self.export_menu.addAction(
+            "선택한 이미지 내보내기…"
+        )
         self.export_all_action = self.export_menu.addAction("묶음 전체 내보내기…")
         self.export_current_action.triggered.connect(self.save_plain_rendered_image)
         self.export_selected_action.triggered.connect(self.export_selected_images)
@@ -1986,9 +2104,7 @@ class AdvancedEditorWindow(QMainWindow):
 
         actual_size_button = QPushButton("100%")
         actual_size_button.setShortcut(QKeySequence("Ctrl+1"))
-        actual_size_button.setToolTip(
-            "이미지 1픽셀을 화면 1픽셀 크기로 표시합니다."
-        )
+        actual_size_button.setToolTip("이미지 1픽셀을 화면 1픽셀 크기로 표시합니다.")
         actual_size_button.clicked.connect(self.zoom_actual_size)
         zoom_layout.addWidget(actual_size_button)
         zoom_layout.addStretch(1)
@@ -2505,6 +2621,20 @@ class AdvancedEditorWindow(QMainWindow):
                 padding-bottom: 6px;
                 border-bottom: 1px solid #d5dde8;
             }
+            QDialog#BulkFormatDialog {
+                background: #f4f7fb;
+            }
+            QDialog#BulkFormatDialog QLabel#BulkFormatHint {
+                color: #475569;
+                padding-bottom: 4px;
+            }
+            QDialog#BulkFormatDialog QLabel#BulkFormatSummary {
+                color: #1e3a8a;
+                background: #eef6ff;
+                border: 1px solid #bfdbfe;
+                border-radius: 6px;
+                padding: 8px 10px;
+            }
             QTextEdit, QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
                 background: #ffffff;
                 color: #172033;
@@ -2540,6 +2670,15 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #edf1f6;
                 border-color: #d5dde8;
                 color: #94a3b8;
+            }
+            QDialog#BulkFormatDialog QPushButton[dialogRole="primary"] {
+                color: #ffffff;
+                background: #2563eb;
+                border-color: #2563eb;
+            }
+            QDialog#BulkFormatDialog QPushButton[dialogRole="primary"]:hover {
+                background: #1d4ed8;
+                border-color: #60a5fa;
             }
             QWidget#InpaintPromptPresets {
                 background: #edf1f6;
@@ -3024,7 +3163,9 @@ class AdvancedEditorWindow(QMainWindow):
                     image_path = Path(str(value))
                     if collection_root is not None:
                         try:
-                            return str(image_path.resolve().relative_to(collection_root))
+                            return str(
+                                image_path.resolve().relative_to(collection_root)
+                            )
                         except Exception:
                             pass
                     return image_path.name
@@ -3121,7 +3262,9 @@ class AdvancedEditorWindow(QMainWindow):
             f"{summary}\n{context}" if context else summary
         )
 
-    def _set_session_list_current(self, path: Path, *, preserve_selection: bool = False) -> None:
+    def _set_session_list_current(
+        self, path: Path, *, preserve_selection: bool = False
+    ) -> None:
         if not hasattr(self, "session_list"):
             return
         selected = {
@@ -3216,7 +3359,8 @@ class AdvancedEditorWindow(QMainWindow):
                 self.session = load_session(previous)
                 self._dirty_region_ids = {
                     str(region_id)
-                    for region_id in self.session.get("editor_dirty_region_ids", []) or []
+                    for region_id in self.session.get("editor_dirty_region_ids", [])
+                    or []
                     if str(region_id)
                 }
                 self.startup_warnings = []
@@ -3315,9 +3459,7 @@ class AdvancedEditorWindow(QMainWindow):
             style_row.addWidget(button)
         region_layout.addLayout(style_row)
         self.translation_edit.textChanged.connect(self._sync_text_style_buttons)
-        self.translation_edit.selectionChanged.connect(
-            self._sync_text_style_buttons
-        )
+        self.translation_edit.selectionChanged.connect(self._sync_text_style_buttons)
 
         options_row = QHBoxLayout()
         options_row.setSpacing(5)
@@ -3366,7 +3508,9 @@ class AdvancedEditorWindow(QMainWindow):
         )
         self.enabled_checkbox.setFixedWidth(option_width)
         self.vertical_checkbox.setFixedWidth(option_width)
-        self.enabled_checkbox.setToolTip("선택한 텍스트 영역을 결과 이미지에 렌더링합니다.")
+        self.enabled_checkbox.setToolTip(
+            "선택한 텍스트 영역을 결과 이미지에 렌더링합니다."
+        )
         self.vertical_checkbox.setToolTip("선택한 영역의 글자를 세로로 배치합니다.")
         self.enabled_checkbox.toggled.connect(self.commit_region_form)
         self.vertical_checkbox.toggled.connect(self.commit_region_form)
@@ -3416,9 +3560,7 @@ class AdvancedEditorWindow(QMainWindow):
             spin.setAlignment(Qt.AlignmentFlag.AlignRight)
             spin.setKeyboardTracking(False)
             spin.setMinimumWidth(0)
-            spin.setSizePolicy(
-                QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
-            )
+            spin.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.rotation_spin.setSuffix("°")
         self.rotation_spin.setSingleStep(1.0)
         for spin in (self.transform_scale_x_spin, self.transform_scale_y_spin):
@@ -3571,9 +3713,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.font_family_combo.setToolTip(
             "넓은 폰트 메뉴에서 검색하고 용도 태그로 골라보세요. 마우스 휠로 목록을 이동합니다."
         )
-        self.font_family_combo.currentIndexChanged.connect(
-            self._on_font_family_changed
-        )
+        self.font_family_combo.currentIndexChanged.connect(self._on_font_family_changed)
         font_row.addWidget(self.font_family_combo, 1)
         refresh_fonts_button = QPushButton("새로고침")
         refresh_fonts_button.clicked.connect(self.populate_font_combo)
@@ -3631,9 +3771,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.settings_tabs.addTab(self._build_editor_settings_tab(), "편집기 설정")
         settings_layout.addWidget(self.settings_tabs)
         self.inspector_sections.addTab(settings_page, "도구 설정")
-        self.inspector_sections.currentChanged.connect(
-            self._sync_inspector_page_size
-        )
+        self.inspector_sections.currentChanged.connect(self._sync_inspector_page_size)
         layout.addWidget(self.inspector_sections, 1)
         self._sync_inspector_page_size(0)
 
@@ -3681,14 +3819,16 @@ class AdvancedEditorWindow(QMainWindow):
         self.detector_combo.addItem("YOLO 2 말풍선 (내장)", "yolo_2")
         self.detector_combo.addItem("OSB 외부 텍스트 (내장)", "osb")
         layout.addWidget(self.detector_combo)
-        layout.addWidget(self._help_label(
-            "기본값은 DBNet+ResNet34입니다.\n"
-            "말풍선 안과 밖의 텍스트를 모두 검출할 수 있는 범용 모델입니다.\n"
-            "YOLO 1 / YOLO 2 / OSB는 프로그램 내장 검출 모델이며, YOLO 1과 YOLO 2는 "
-            "말풍선 안 텍스트, OSB는 말풍선 밖 텍스트 검출에 적합합니다.\n"
-            "처음 실행 시 모델 로딩 또는 다운로드가 진행될 수 있습니다.\n"
-            "텍스트 박스가 감지되지 않는다면 다른 모델로 변경해보세요."
-        ))
+        layout.addWidget(
+            self._help_label(
+                "기본값은 DBNet+ResNet34입니다.\n"
+                "말풍선 안과 밖의 텍스트를 모두 검출할 수 있는 범용 모델입니다.\n"
+                "YOLO 1 / YOLO 2 / OSB는 프로그램 내장 검출 모델이며, YOLO 1과 YOLO 2는 "
+                "말풍선 안 텍스트, OSB는 말풍선 밖 텍스트 검출에 적합합니다.\n"
+                "처음 실행 시 모델 로딩 또는 다운로드가 진행될 수 있습니다.\n"
+                "텍스트 박스가 감지되지 않는다면 다른 모델로 변경해보세요."
+            )
+        )
 
         detector_row = QHBoxLayout()
         detector_row.addWidget(QLabel("민감도"))
@@ -3701,23 +3841,27 @@ class AdvancedEditorWindow(QMainWindow):
         )
         detector_row.addWidget(self.detector_confidence_spin)
         layout.addLayout(detector_row)
-        layout.addWidget(self._help_label(
-            "민감도 값을 낮추면 더 많은 영역을 감지하지만 오검출이 늘어날 수 있습니다.\n"
-            "값을 높이면 확실한 영역만 감지하지만 일부 텍스트가 누락될 수 있습니다.\n"
-            "기본값 DBNet+ResNet34와 YOLO 1 / YOLO 2 / OSB에 모두 적용됩니다."
-        ))
+        layout.addWidget(
+            self._help_label(
+                "민감도 값을 낮추면 더 많은 영역을 감지하지만 오검출이 늘어날 수 있습니다.\n"
+                "값을 높이면 확실한 영역만 감지하지만 일부 텍스트가 누락될 수 있습니다.\n"
+                "기본값 DBNet+ResNet34와 YOLO 1 / YOLO 2 / OSB에 모두 적용됩니다."
+            )
+        )
 
         self.merge_detected_boxes_checkbox = QCheckBox("선택 영역 안 검출 결과 합치기")
         self.merge_detected_boxes_checkbox.setChecked(
             bool(saved.get("merge_detected_boxes", True))
         )
         layout.addWidget(self.merge_detected_boxes_checkbox)
-        layout.addWidget(self._help_label(
-            "켜면 크게 드래그한 선택 영역 안에서 DBNet+ResNet34가 여러 조각으로 검출한 텍스트를 "
-            "하나의 큰 텍스트 박스로 합칩니다.\n"
-            "말풍선 하나를 크게 잡고 한 번에 OCR/수정하고 싶을 때 권장합니다. "
-            "여러 말풍선을 한 번에 잡은 경우에는 하나로 합쳐질 수 있으니 꺼 주세요."
-        ))
+        layout.addWidget(
+            self._help_label(
+                "켜면 크게 드래그한 선택 영역 안에서 DBNet+ResNet34가 여러 조각으로 검출한 텍스트를 "
+                "하나의 큰 텍스트 박스로 합칩니다.\n"
+                "말풍선 하나를 크게 잡고 한 번에 OCR/수정하고 싶을 때 권장합니다. "
+                "여러 말풍선을 한 번에 잡은 경우에는 하나로 합쳐질 수 있으니 꺼 주세요."
+            )
+        )
 
         layout.addWidget(QLabel("OCR 모델"))
         self.ocr_model_combo = ModernComboBox()
@@ -3725,11 +3869,13 @@ class AdvancedEditorWindow(QMainWindow):
         self.ocr_model_combo.addItem("48px OCR", "48px")
         self.ocr_model_combo.addItem("LLM OCR", "llm_ocr")
         layout.addWidget(self.ocr_model_combo)
-        layout.addWidget(self._help_label(
-            "MOCR과 48px는 범용적으로 사용되는 로컬 OCR입니다.\n"
-            "LLM OCR은 WebUI 번역 탭에 저장된 번역 제공자, 모델, API 키와 언어 설정을 "
-            "그대로 사용합니다."
-        ))
+        layout.addWidget(
+            self._help_label(
+                "MOCR과 48px는 범용적으로 사용되는 로컬 OCR입니다.\n"
+                "LLM OCR은 WebUI 번역 탭에 저장된 번역 제공자, 모델, API 키와 언어 설정을 "
+                "그대로 사용합니다."
+            )
+        )
 
         threshold_row = QHBoxLayout()
         threshold_row.addWidget(QLabel("OCR 임계값"))
@@ -3740,27 +3886,27 @@ class AdvancedEditorWindow(QMainWindow):
         self.ocr_threshold_spin.setValue(float(saved.get("ocr_threshold", 0.30)))
         threshold_row.addWidget(self.ocr_threshold_spin)
         layout.addLayout(threshold_row)
-        layout.addWidget(self._help_label(
-            "OCR 임계값은 이미지에서 글자로 인식할 기준값입니다.\n"
-            "값을 낮추면 작은 글자까지 잘 잡지만 오탐이 늘어날 수 있고, 값을 높이면 확실한 "
-            "글자만 잡지만 누락이 생길 수 있습니다.\n"
-            "MOCR과 48px OCR에서만 적용됩니다."
-        ))
+        layout.addWidget(
+            self._help_label(
+                "OCR 임계값은 이미지에서 글자로 인식할 기준값입니다.\n"
+                "값을 낮추면 작은 글자까지 잘 잡지만 오탐이 늘어날 수 있고, 값을 높이면 확실한 "
+                "글자만 잡지만 누락이 생길 수 있습니다.\n"
+                "MOCR과 48px OCR에서만 적용됩니다."
+            )
+        )
 
         ocr_button = QPushButton("선택 영역 OCR 실행")
         ocr_button.clicked.connect(self.run_ocr_for_selected_region)
         layout.addWidget(ocr_button)
         layout.addStretch(1)
-        self._set_combo_data(
-            self.detector_combo, saved.get("detector", "default")
-        )
-        self._set_combo_data(
-            self.ocr_model_combo, saved.get("ocr_model", "manga_ocr")
-        )
+        self._set_combo_data(self.detector_combo, saved.get("detector", "default"))
+        self._set_combo_data(self.ocr_model_combo, saved.get("ocr_model", "manga_ocr"))
         self.auto_ocr_checkbox.stateChanged.connect(self._store_ocr_controls)
         self.detector_combo.currentIndexChanged.connect(self._store_ocr_controls)
         self.detector_confidence_spin.valueChanged.connect(self._store_ocr_controls)
-        self.merge_detected_boxes_checkbox.stateChanged.connect(self._store_ocr_controls)
+        self.merge_detected_boxes_checkbox.stateChanged.connect(
+            self._store_ocr_controls
+        )
         self.ocr_model_combo.currentIndexChanged.connect(self._store_ocr_controls)
         self.ocr_threshold_spin.valueChanged.connect(self._store_ocr_controls)
         return tab
@@ -3774,6 +3920,7 @@ class AdvancedEditorWindow(QMainWindow):
         saved.update(self.session.get("inpaint_settings", {}) or {})
         try:
             from ui import settings_manager
+
             webui_settings = settings_manager.get_saved_settings()
         except Exception:
             webui_settings = {}
@@ -3822,18 +3969,28 @@ class AdvancedEditorWindow(QMainWindow):
         self.inpaint_steps_spin = self._standalone_spin(
             1,
             50,
-            int(saved.get("steps", webui_settings.get("outside_text_flux_num_inference_steps", 4))),
+            int(
+                saved.get(
+                    "steps",
+                    webui_settings.get("outside_text_flux_num_inference_steps", 4),
+                )
+            ),
         )
         self.inpainting_size_spin = self._standalone_spin(
             256, 4096, int(saved.get("inpainting_size", 1024)), step=256
         )
         option_row("flux", "시드", self.inpaint_seed_spin)
-        option_widget("flux", hint("Flux 시드입니다. -1은 매번 랜덤 시드를 사용합니다."))
+        option_widget(
+            "flux", hint("Flux 시드입니다. -1은 매번 랜덤 시드를 사용합니다.")
+        )
         option_row("flux", "추론 단계", self.inpaint_steps_spin)
-        option_widget("flux", hint(
-            "Flux 추론 단계입니다. 값이 낮을수록 빠르고 높을수록 더 오래 걸립니다.\n"
-            "Klein은 4를 권장합니다. Kontext는 6-15를 권장합니다."
-        ))
+        option_widget(
+            "flux",
+            hint(
+                "Flux 추론 단계입니다. 값이 낮을수록 빠르고 높을수록 더 오래 걸립니다.\n"
+                "Klein은 4를 권장합니다. Kontext는 6-15를 권장합니다."
+            ),
+        )
         option_row("model_size", "처리 크기", self.inpainting_size_spin)
 
         prompt_widget = QWidget()
@@ -3841,9 +3998,15 @@ class AdvancedEditorWindow(QMainWindow):
         prompt_layout.setContentsMargins(0, 0, 0, 0)
         prompt_layout.setSpacing(6)
         default_prompt = (
-            str(webui_settings.get("outside_text_flux_kontext_prompt") or DEFAULT_FLUX_KONTEXT_PROMPT)
+            str(
+                webui_settings.get("outside_text_flux_kontext_prompt")
+                or DEFAULT_FLUX_KONTEXT_PROMPT
+            )
             if str(saved.get("method") or "") == "flux_kontext"
-            else str(webui_settings.get("outside_text_flux_klein_prompt") or DEFAULT_FLUX_KLEIN_PROMPT)
+            else str(
+                webui_settings.get("outside_text_flux_klein_prompt")
+                or DEFAULT_FLUX_KLEIN_PROMPT
+            )
         )
         self.inpaint_prompt_presets = {
             "일반 인페인트": default_prompt,
@@ -3857,8 +4020,16 @@ class AdvancedEditorWindow(QMainWindow):
         preset_layout.setSpacing(3)
         self.inpaint_prompt_preset_buttons: dict[str, QPushButton] = {}
         preset_details = (
-            ("일반 인페인트", "inpaint_brush", "일반적인 마스크 영역을 주변 배경에 맞춰 복원합니다."),
-            ("말풍선 복구", "restore_brush", "끊기거나 뚫린 말풍선 윤곽과 내부 결을 주변에 맞춰 복원합니다."),
+            (
+                "일반 인페인트",
+                "inpaint_brush",
+                "일반적인 마스크 영역을 주변 배경에 맞춰 복원합니다.",
+            ),
+            (
+                "말풍선 복구",
+                "restore_brush",
+                "끊기거나 뚫린 말풍선 윤곽과 내부 결을 주변에 맞춰 복원합니다.",
+            ),
         )
         for name, icon_name, tooltip in preset_details:
             button = QPushButton(name)
@@ -3870,8 +4041,8 @@ class AdvancedEditorWindow(QMainWindow):
             button.setToolTip(tooltip)
             button.setAccessibleName(f"인페인팅 프롬프트: {name}")
             button.clicked.connect(
-                lambda _checked=False, preset_name=name: self._apply_inpaint_prompt_preset(
-                    preset_name
+                lambda _checked=False, preset_name=name: (
+                    self._apply_inpaint_prompt_preset(preset_name)
                 )
             )
             self.inpaint_prompt_preset_buttons[name] = button
@@ -3890,28 +4061,46 @@ class AdvancedEditorWindow(QMainWindow):
         self._sync_inpaint_prompt_preset_buttons()
         option_widget("flux", prompt_widget)
 
-        self.hf_token_edit = QLineEdit(str(
-            saved.get("huggingface_token")
-            or webui_settings.get("outside_text_huggingface_token")
-            or ""
-        ))
+        self.hf_token_edit = QLineEdit(
+            str(
+                saved.get("huggingface_token")
+                or webui_settings.get("outside_text_huggingface_token")
+                or ""
+            )
+        )
         self.hf_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
         option_row("flux", "Hugging Face 토큰", self.hf_token_edit)
 
         self.low_vram_checkbox = QCheckBox("저 VRAM 모드")
-        self.low_vram_checkbox.setChecked(bool(
-            saved.get("low_vram", webui_settings.get("outside_text_flux_low_vram", True))
-        ))
+        self.low_vram_checkbox.setChecked(
+            bool(
+                saved.get(
+                    "low_vram", webui_settings.get("outside_text_flux_low_vram", True)
+                )
+            )
+        )
         self.luminance_checkbox = QCheckBox("휘도 보정")
-        self.luminance_checkbox.setChecked(bool(
-            saved.get("luminance_correction", webui_settings.get("outside_text_flux_luminance_correction", True))
-        ))
+        self.luminance_checkbox.setChecked(
+            bool(
+                saved.get(
+                    "luminance_correction",
+                    webui_settings.get("outside_text_flux_luminance_correction", True),
+                )
+            )
+        )
         self.upscale_crop_checkbox = QCheckBox("작은 영역 확대 처리")
-        self.upscale_crop_checkbox.setChecked(bool(
-            saved.get("upscale_small_crops", webui_settings.get("outside_text_flux_upscale_small_crops", True))
-        ))
+        self.upscale_crop_checkbox.setChecked(
+            bool(
+                saved.get(
+                    "upscale_small_crops",
+                    webui_settings.get("outside_text_flux_upscale_small_crops", True),
+                )
+            )
+        )
         self.strict_clip_checkbox = QCheckBox("마스크 밖 합성 차단")
-        self.strict_clip_checkbox.setChecked(bool(saved.get("strict_mask_clipping", True)))
+        self.strict_clip_checkbox.setChecked(
+            bool(saved.get("strict_mask_clipping", True))
+        )
         self.force_torch_checkbox = QCheckBox("LAMA에서 PyTorch 강제 사용")
         self.force_torch_checkbox.setChecked(bool(saved.get("force_torch", False)))
         option_widget("flux", self.low_vram_checkbox)
@@ -3934,12 +4123,16 @@ class AdvancedEditorWindow(QMainWindow):
         self.residual_threshold_spin.setRange(0.01, 1.0)
         self.residual_threshold_spin.setDecimals(2)
         self.residual_threshold_spin.setSingleStep(0.05)
-        self.residual_threshold_spin.setValue(float(
-            saved.get(
-                "residual_diff_threshold",
-                webui_settings.get("outside_text_flux_residual_diff_threshold", 0.15),
+        self.residual_threshold_spin.setValue(
+            float(
+                saved.get(
+                    "residual_diff_threshold",
+                    webui_settings.get(
+                        "outside_text_flux_residual_diff_threshold", 0.15
+                    ),
+                )
             )
-        ))
+        )
         option_row("flux_kontext", "잔차 차이 임계값", self.residual_threshold_spin)
 
         self.opencv_radius_spin = QDoubleSpinBox()
@@ -3952,12 +4145,16 @@ class AdvancedEditorWindow(QMainWindow):
         option_row("opencv", "OpenCV 알고리즘", self.opencv_algorithm_combo)
 
         self.auto_inpaint_checkbox = QCheckBox("인페인팅 브러시 후 자동 실행")
-        self.auto_inpaint_checkbox.setChecked(bool(saved.get("auto_run_after_brush", False)))
+        self.auto_inpaint_checkbox.setChecked(
+            bool(saved.get("auto_run_after_brush", False))
+        )
         layout.addWidget(self.auto_inpaint_checkbox)
-        layout.addWidget(hint(
-            "켜면 인페인팅 브러시 획을 놓을 때 현재 마스크로 인페인팅을 자동 실행합니다. "
-            "마스크 지우개를 사용할 때는 자동 실행하지 않습니다."
-        ))
+        layout.addWidget(
+            hint(
+                "켜면 인페인팅 브러시 획을 놓을 때 현재 마스크로 인페인팅을 자동 실행합니다. "
+                "마스크 지우개를 사용할 때는 자동 실행하지 않습니다."
+            )
+        )
 
         progress_panel = QFrame()
         progress_panel.setObjectName("InpaintProgressPanel")
@@ -4002,27 +4199,26 @@ class AdvancedEditorWindow(QMainWindow):
 
         self._set_combo_data(
             self.inpaint_method_combo,
-            saved.get("method", webui_settings.get("outside_text_inpainting_method", "opencv")),
+            saved.get(
+                "method", webui_settings.get("outside_text_inpainting_method", "opencv")
+            ),
         )
-        self._set_combo_data(
-            self.inpaint_device_combo, saved.get("device", "auto")
-        )
+        self._set_combo_data(self.inpaint_device_combo, saved.get("device", "auto"))
         self._set_combo_data(
             self.kontext_backend_combo,
-            saved.get("kontext_backend", webui_settings.get("outside_text_kontext_backend", "sdnq")),
+            saved.get(
+                "kontext_backend",
+                webui_settings.get("outside_text_kontext_backend", "sdnq"),
+            ),
         )
         self._set_combo_data(
             self.opencv_algorithm_combo, saved.get("opencv_algorithm", "telea")
         )
-        self._set_combo_data(
-            self.lama_precision_combo, saved.get("precision", "bf16")
-        )
+        self._set_combo_data(self.lama_precision_combo, saved.get("precision", "bf16"))
         self.inpaint_method_combo.currentIndexChanged.connect(
             self._update_inpaint_option_visibility
         )
-        self.auto_inpaint_checkbox.stateChanged.connect(
-            self._store_inpaint_controls
-        )
+        self.auto_inpaint_checkbox.stateChanged.connect(self._store_inpaint_controls)
         self._update_inpaint_option_visibility()
         return tab
 
@@ -4094,12 +4290,14 @@ class AdvancedEditorWindow(QMainWindow):
         saved.update(self.session.get("editor_translation_settings", {}) or {})
 
         layout.addWidget(QLabel("WebUI 번역 설정"))
-        layout.addWidget(self._help_label(
-            "편집기 번역은 WebUI 번역 탭에 저장된 번역 제공자, 모델, API 키, 원문 언어와 "
-            "번역 언어 설정을 그대로 사용합니다.\n"
-            "LLM OCR도 동일한 WebUI 번역 탭 설정을 사용합니다.\n"
-            "WebUI에서 설정을 변경하면 번역 또는 LLM OCR 실행 시 최신 저장값을 다시 읽습니다."
-        ))
+        layout.addWidget(
+            self._help_label(
+                "편집기 번역은 WebUI 번역 탭에 저장된 번역 제공자, 모델, API 키, 원문 언어와 "
+                "번역 언어 설정을 그대로 사용합니다.\n"
+                "LLM OCR도 동일한 WebUI 번역 탭 설정을 사용합니다.\n"
+                "WebUI에서 설정을 변경하면 번역 또는 LLM OCR 실행 시 최신 저장값을 다시 읽습니다."
+            )
+        )
         summary = QLabel(
             f"현재 저장값: {defaults.get('provider') or '-'} / "
             f"{defaults.get('model_name') or '-'}\n"
@@ -4111,7 +4309,9 @@ class AdvancedEditorWindow(QMainWindow):
 
         self.editor_translation_source_combo = ModernComboBox()
         self.editor_translation_source_combo.addItem("원문 사용", "source")
-        self.editor_translation_source_combo.addItem("현재 편집 텍스트 사용", "translation")
+        self.editor_translation_source_combo.addItem(
+            "현재 편집 텍스트 사용", "translation"
+        )
         source_row = QHBoxLayout()
         source_row.addWidget(QLabel("입력"))
         source_row.addWidget(self.editor_translation_source_combo, 1)
@@ -4151,23 +4351,35 @@ class AdvancedEditorWindow(QMainWindow):
         self.show_inpaint_mask_checkbox.setChecked(
             bool(self._editor_setting_value("show_inpaint_mask", True))
         )
-        self.show_inpaint_mask_checkbox.stateChanged.connect(self._store_editor_controls)
+        self.show_inpaint_mask_checkbox.stateChanged.connect(
+            self._store_editor_controls
+        )
         layout.addWidget(self.show_inpaint_mask_checkbox)
 
         self.show_restore_mask_checkbox = QCheckBox("원본 복구 마스크 표시")
         self.show_restore_mask_checkbox.setChecked(
             bool(self._editor_setting_value("show_restore_mask", True))
         )
-        self.show_restore_mask_checkbox.stateChanged.connect(self._store_editor_controls)
+        self.show_restore_mask_checkbox.stateChanged.connect(
+            self._store_editor_controls
+        )
         layout.addWidget(self.show_restore_mask_checkbox)
+        clear_restore_button = QPushButton("원본 복구 마스크 전체 지우기")
+        clear_restore_button.setToolTip(
+            "현재 이미지에서 원본 복구 브러시로 칠한 부분을 모두 지웁니다. 실행취소할 수 있습니다."
+        )
+        clear_restore_button.clicked.connect(self.clear_restore_mask)
+        layout.addWidget(clear_restore_button)
 
-        layout.addWidget(self._help_label(
-            "편집기 설정값은 자동 저장됩니다.\n"
-            "프리셋1은 편집기를 열 때 자동으로 불러오는 기본 프리셋입니다.\n"
-            "프리셋1도 다른 프리셋과 똑같이 원하는 값으로 다시 저장할 수 있습니다.\n"
-            "프리셋1~5는 OCR, 인페인팅과 편집기 옵션 값을 "
-            "바꾼 뒤 해당 줄의 현재값 저장 버튼을 누르면 저장됩니다."
-        ))
+        layout.addWidget(
+            self._help_label(
+                "편집기 설정값은 자동 저장됩니다.\n"
+                "프리셋1은 편집기를 열 때 자동으로 불러오는 기본 프리셋입니다.\n"
+                "프리셋1도 다른 프리셋과 똑같이 원하는 값으로 다시 저장할 수 있습니다.\n"
+                "프리셋1~5는 OCR, 인페인팅과 편집기 옵션 값을 "
+                "바꾼 뒤 해당 줄의 현재값 저장 버튼을 누르면 저장됩니다."
+            )
+        )
 
         layout.addWidget(QLabel("프리셋"))
         for preset_id in self._editor_presets().keys():
@@ -4181,14 +4393,18 @@ class AdvancedEditorWindow(QMainWindow):
             row.addWidget(button, 1)
             save_button = QPushButton("현재값 저장")
             save_button.clicked.connect(
-                lambda _checked=False, value=preset_id: self.save_current_as_preset(value)
+                lambda _checked=False, value=preset_id: self.save_current_as_preset(
+                    value
+                )
             )
             row.addWidget(save_button, 1)
             layout.addWidget(row_widget)
 
         settings_path = QLabel(f"설정 저장 위치\n{EDITOR_SETTINGS_FILE}")
         settings_path.setWordWrap(True)
-        settings_path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        settings_path.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         layout.addWidget(settings_path)
 
         layout.addStretch(1)
@@ -4199,6 +4415,22 @@ class AdvancedEditorWindow(QMainWindow):
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(12, 12, 12, 14)
         layout.setSpacing(9)
+
+        size_row = QHBoxLayout()
+        size_row.addWidget(QLabel("그리기 브러시 크기"))
+        self.paint_brush_size_spin = self._standalone_spin(
+            1, 200, self.paint_brush_size
+        )
+        self.paint_brush_size_spin.setSuffix(" px")
+        self.paint_brush_size_spin.setAccessibleName("그리기 브러시 크기")
+        self.paint_brush_size_spin.valueChanged.connect(
+            self._on_paint_brush_size_changed
+        )
+        self.paint_brush_size_spin.editingFinished.connect(
+            self._store_brush_settings
+        )
+        size_row.addWidget(self.paint_brush_size_spin, 1)
+        layout.addLayout(size_row)
 
         color_label = QLabel("그리기 색상")
         color_label.setObjectName("CompactSectionLabel")
@@ -4226,7 +4458,9 @@ class AdvancedEditorWindow(QMainWindow):
             quick_colors.addWidget(button, 1)
         self.custom_paint_color_button = QPushButton()
         self.custom_paint_color_button.setProperty("noAutoIcon", True)
-        self.custom_paint_color_button.setToolTip("마지막으로 직접 고른 색을 다시 사용합니다")
+        self.custom_paint_color_button.setToolTip(
+            "마지막으로 직접 고른 색을 다시 사용합니다"
+        )
         self.custom_paint_color_button.clicked.connect(
             lambda: self._set_paint_color(self.custom_paint_color)
         )
@@ -4236,7 +4470,7 @@ class AdvancedEditorWindow(QMainWindow):
 
         layout.addWidget(
             self._help_label(
-                "크기와 모양은 상단 도구 막대에서 조절합니다. 사용자 색상은 색 선택 창에서 "
+                "이 크기는 그리기 브러시와 그리기 지우개에만 적용됩니다. 사용자 색상은 색 선택 창에서 "
                 "마지막으로 고른 색을 기억합니다. 그리기 브러시는 선택한 색을 별도 레이어에 칠합니다. "
                 "그리기 지우개는 이 레이어만 지우며 원본 이미지는 손상시키지 않습니다."
             )
@@ -4342,9 +4576,13 @@ class AdvancedEditorWindow(QMainWindow):
         if hasattr(self, "detector_combo"):
             settings["detector"] = self.detector_combo.currentData()
         if hasattr(self, "detector_confidence_spin"):
-            settings["detector_confidence"] = float(self.detector_confidence_spin.value())
+            settings["detector_confidence"] = float(
+                self.detector_confidence_spin.value()
+            )
         if hasattr(self, "merge_detected_boxes_checkbox"):
-            settings["merge_detected_boxes"] = self.merge_detected_boxes_checkbox.isChecked()
+            settings["merge_detected_boxes"] = (
+                self.merge_detected_boxes_checkbox.isChecked()
+            )
         if hasattr(self, "ocr_model_combo"):
             settings["ocr_model"] = self.ocr_model_combo.currentData()
         if hasattr(self, "ocr_threshold_spin"):
@@ -4378,13 +4616,17 @@ class AdvancedEditorWindow(QMainWindow):
         if hasattr(self, "kontext_backend_combo"):
             settings["kontext_backend"] = self.kontext_backend_combo.currentData()
         if hasattr(self, "residual_threshold_spin"):
-            settings["residual_diff_threshold"] = float(self.residual_threshold_spin.value())
+            settings["residual_diff_threshold"] = float(
+                self.residual_threshold_spin.value()
+            )
         if hasattr(self, "opencv_radius_spin"):
             settings["opencv_radius"] = float(self.opencv_radius_spin.value())
         if hasattr(self, "opencv_algorithm_combo"):
             settings["opencv_algorithm"] = self.opencv_algorithm_combo.currentData()
         if hasattr(self, "editor_translation_source_combo"):
-            settings["translation_input_source"] = self.editor_translation_source_combo.currentData()
+            settings["translation_input_source"] = (
+                self.editor_translation_source_combo.currentData()
+            )
         if hasattr(self, "output_path_edit"):
             settings["custom_output_path"] = self.output_path_edit.text().strip()
         if hasattr(self, "overwrite_source_checkbox"):
@@ -4435,7 +4677,10 @@ class AdvancedEditorWindow(QMainWindow):
                 self.inpaint_steps_spin.setValue(int(preset["inpaint_steps"]))
             if hasattr(self, "inpaint_seed_spin"):
                 self.inpaint_seed_spin.setValue(int(preset["inpaint_seed"]))
-            if hasattr(self, "auto_inpaint_checkbox") and "auto_run_after_brush" in preset:
+            if (
+                hasattr(self, "auto_inpaint_checkbox")
+                and "auto_run_after_brush" in preset
+            ):
                 self.auto_inpaint_checkbox.setChecked(
                     bool(preset["auto_run_after_brush"])
                 )
@@ -4448,28 +4693,33 @@ class AdvancedEditorWindow(QMainWindow):
             if hasattr(self, "low_vram_checkbox") and "low_vram" in preset:
                 self.low_vram_checkbox.setChecked(bool(preset["low_vram"]))
             if hasattr(self, "luminance_checkbox") and "luminance_correction" in preset:
-                self.luminance_checkbox.setChecked(
-                    bool(preset["luminance_correction"])
-                )
-            if hasattr(self, "upscale_crop_checkbox") and "upscale_small_crops" in preset:
+                self.luminance_checkbox.setChecked(bool(preset["luminance_correction"]))
+            if (
+                hasattr(self, "upscale_crop_checkbox")
+                and "upscale_small_crops" in preset
+            ):
                 self.upscale_crop_checkbox.setChecked(
                     bool(preset["upscale_small_crops"])
                 )
-            if hasattr(self, "strict_clip_checkbox") and "strict_mask_clipping" in preset:
+            if (
+                hasattr(self, "strict_clip_checkbox")
+                and "strict_mask_clipping" in preset
+            ):
                 self.strict_clip_checkbox.setChecked(
                     bool(preset["strict_mask_clipping"])
                 )
             if hasattr(self, "force_torch_checkbox") and "force_torch" in preset:
                 self.force_torch_checkbox.setChecked(bool(preset["force_torch"]))
             if hasattr(self, "lama_precision_combo") and "precision" in preset:
-                self._set_combo_data(
-                    self.lama_precision_combo, preset["precision"]
-                )
+                self._set_combo_data(self.lama_precision_combo, preset["precision"])
             if hasattr(self, "kontext_backend_combo") and "kontext_backend" in preset:
                 self._set_combo_data(
                     self.kontext_backend_combo, preset["kontext_backend"]
                 )
-            if hasattr(self, "residual_threshold_spin") and "residual_diff_threshold" in preset:
+            if (
+                hasattr(self, "residual_threshold_spin")
+                and "residual_diff_threshold" in preset
+            ):
                 self.residual_threshold_spin.setValue(
                     float(preset["residual_diff_threshold"])
                 )
@@ -4479,7 +4729,10 @@ class AdvancedEditorWindow(QMainWindow):
                 self._set_combo_data(
                     self.opencv_algorithm_combo, preset["opencv_algorithm"]
                 )
-            if hasattr(self, "editor_translation_source_combo") and "translation_input_source" in preset:
+            if (
+                hasattr(self, "editor_translation_source_combo")
+                and "translation_input_source" in preset
+            ):
                 self._set_combo_data(
                     self.editor_translation_source_combo,
                     preset["translation_input_source"],
@@ -4495,9 +4748,7 @@ class AdvancedEditorWindow(QMainWindow):
                     bool(preset.get("show_restore_mask", True))
                 )
             if hasattr(self, "output_path_edit") and "custom_output_path" in preset:
-                self.output_path_edit.setText(
-                    str(preset["custom_output_path"] or "")
-                )
+                self.output_path_edit.setText(str(preset["custom_output_path"] or ""))
             if (
                 hasattr(self, "overwrite_source_checkbox")
                 and "overwrite_source_on_save" in preset
@@ -4530,9 +4781,7 @@ class AdvancedEditorWindow(QMainWindow):
         self._persist_output_settings()
         _save_editor_settings(self.editor_settings)
         save_session(self.session_path, self.session)
-        self.status_label.setText(
-            f"현재 설정값을 프리셋{preset_id}에 저장했습니다."
-        )
+        self.status_label.setText(f"현재 설정값을 프리셋{preset_id}에 저장했습니다.")
 
     @staticmethod
     def _standalone_spin(
@@ -4552,7 +4801,10 @@ class AdvancedEditorWindow(QMainWindow):
                 target = os.path.normcase(str(Path(str(value)).resolve()))
                 for item_index in range(combo.count()):
                     data = combo.itemData(item_index)
-                    if data and os.path.normcase(str(Path(str(data)).resolve())) == target:
+                    if (
+                        data
+                        and os.path.normcase(str(Path(str(data)).resolve())) == target
+                    ):
                         index = item_index
                         break
             except Exception:
@@ -4648,9 +4900,7 @@ class AdvancedEditorWindow(QMainWindow):
                 if path.is_file() and path.suffix.lower() in SUPPORTED_FONT_SUFFIXES:
                     return str(path.resolve())
                 if path.is_dir():
-                    selected = self._preferred_font_file(
-                        self._font_files_under(path)
-                    )
+                    selected = self._preferred_font_file(self._font_files_under(path))
                     if selected is not None:
                         return str(selected)
             except Exception:
@@ -4837,9 +5087,7 @@ class AdvancedEditorWindow(QMainWindow):
 
     def populate_font_combo(self) -> None:
         current = (
-            self.font_style_combo.currentData()
-            if self.font_style_combo.count()
-            else ""
+            self.font_style_combo.currentData() if self.font_style_combo.count() else ""
         )
         region = self.selected_region()
         if not current and region is not None:
@@ -4865,6 +5113,465 @@ class AdvancedEditorWindow(QMainWindow):
                 self._populate_font_style_combo(families[0][0])
         finally:
             self.font_family_combo.blockSignals(False)
+
+    def _font_catalog_entry_for_region(
+        self, region: dict[str, Any]
+    ) -> Optional[tuple[str, dict[str, str]]]:
+        target = self._font_combo_target(region.get("render", {}).get("font_dir", ""))
+        if not target:
+            return None
+        indexed = self._font_path_index.get(
+            os.path.normcase(str(Path(target).resolve()))
+        )
+        if indexed is None:
+            return None
+        family_key, indexed_path = indexed
+        normalized = os.path.normcase(str(Path(indexed_path).resolve()))
+        for item in self._font_catalog.get(family_key, {}).get("items", []):
+            if (
+                os.path.normcase(str(Path(str(item.get("path") or "")).resolve()))
+                == normalized
+            ):
+                return family_key, item
+        return None
+
+    def show_bulk_format_dialog(self) -> None:
+        if self._background_job_count > 0 or self._inpainting_running:
+            QMessageBox.information(
+                self,
+                "작업 진행 중",
+                "현재 작업이 끝난 뒤 일괄 서식을 적용해 주세요.",
+            )
+            return
+        self.commit_region_form(mark_dirty=False)
+        try:
+            save_session(self.session_path, self.session)
+        except Exception as exc:
+            QMessageBox.critical(self, "세션 저장 실패", str(exc))
+            return
+        current_font = ""
+        selected = self.selected_region()
+        if selected is not None:
+            current_font = str(selected.get("render", {}).get("font_dir") or "")
+        self._rebuild_font_catalog(current_font)
+        families = sorted(
+            self._font_catalog.items(),
+            key=lambda item: str(item[1].get("label") or "").casefold(),
+        )
+        if not families:
+            QMessageBox.information(self, "글꼴 없음", "사용 가능한 글꼴이 없습니다.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setObjectName("BulkFormatDialog")
+        dialog.setWindowTitle("폰트 및 서식 일괄 변경")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(560)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        hint = QLabel(
+            "선택한 적용 범위의 텍스트 영역에서 조건과 일치하는 항목만 변경합니다."
+        )
+        hint.setObjectName("BulkFormatHint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        apply_all_images = QCheckBox(
+            f"묶음 전체 이미지에 동시 적용 ({len(self.related_session_paths)}장)",
+            dialog,
+        )
+        apply_all_images.setObjectName("BulkFormatAllImages")
+        apply_all_images.setEnabled(len(self.related_session_paths) > 1)
+        apply_all_images.setToolTip(
+            "체크하면 현재 편집기 묶음에 연결된 모든 이미지에 같은 변경을 적용합니다."
+        )
+        layout.addWidget(apply_all_images)
+
+        find_title = QLabel("찾을 서식")
+        find_title.setObjectName("SectionTitle")
+        layout.addWidget(find_title)
+        find_grid = QGridLayout()
+        find_grid.setHorizontalSpacing(10)
+        find_grid.setVerticalSpacing(8)
+        source_family = FontGridComboBox(dialog)
+        source_style = ModernComboBox(dialog)
+        find_grid.addWidget(QLabel("글꼴 가족"), 0, 0)
+        find_grid.addWidget(source_family, 0, 1)
+        find_grid.addWidget(QLabel("굵기/스타일"), 1, 0)
+        find_grid.addWidget(source_style, 1, 1)
+        find_grid.setColumnStretch(1, 1)
+        layout.addLayout(find_grid)
+
+        change_title = QLabel("바꿀 서식")
+        change_title.setObjectName("SectionTitle")
+        layout.addWidget(change_title)
+        change_grid = QGridLayout()
+        change_grid.setHorizontalSpacing(10)
+        change_grid.setVerticalSpacing(8)
+        target_family = FontGridComboBox(dialog)
+        target_style = ModernComboBox(dialog)
+        change_grid.addWidget(QLabel("글꼴 가족"), 0, 0)
+        change_grid.addWidget(target_family, 0, 1)
+        change_grid.addWidget(QLabel("굵기/스타일"), 1, 0)
+        change_grid.addWidget(target_style, 1, 1)
+        change_grid.setColumnStretch(1, 1)
+        layout.addLayout(change_grid)
+
+        for family_key, family in families:
+            label = str(family.get("label") or family_key)
+            count = len(family.get("items") or [])
+            source_family.addItem(f"{label} ({count})", family_key)
+            target_family.addItem(f"{label} ({count})", family_key)
+
+        current_entry = (
+            self._font_catalog_entry_for_region(selected)
+            if selected is not None
+            else None
+        )
+        initial_family_key = current_entry[0] if current_entry else families[0][0]
+        source_index = source_family.findData(initial_family_key)
+        target_index = target_family.findData(initial_family_key)
+        source_family.setCurrentIndex(max(0, source_index))
+        target_family.setCurrentIndex(max(0, target_index))
+
+        adjust_title = QLabel("상대 조정")
+        adjust_title.setObjectName("SectionTitle")
+        layout.addWidget(adjust_title)
+        adjust_grid = QGridLayout()
+        adjust_grid.setHorizontalSpacing(10)
+        adjust_grid.setVerticalSpacing(8)
+
+        font_size_delta = QSpinBox(dialog)
+        font_size_delta.setRange(-998, 998)
+        font_size_delta.setSuffix(" px")
+        line_spacing_delta = QDoubleSpinBox(dialog)
+        line_spacing_delta.setRange(-3.8, 3.8)
+        line_spacing_delta.setDecimals(1)
+        line_spacing_delta.setSingleStep(0.1)
+        padding_delta = QDoubleSpinBox(dialog)
+        padding_delta.setRange(-80.0, 80.0)
+        padding_delta.setDecimals(1)
+        padding_delta.setSingleStep(0.5)
+        padding_delta.setSuffix(" px")
+        outline_delta = QDoubleSpinBox(dialog)
+        outline_delta.setRange(-20.0, 20.0)
+        outline_delta.setDecimals(1)
+        outline_delta.setSingleStep(0.5)
+        outline_delta.setSuffix(" px")
+        for spin in (
+            font_size_delta,
+            line_spacing_delta,
+            padding_delta,
+            outline_delta,
+        ):
+            spin.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+            def update_sign(value: float, control=spin) -> None:
+                control.setPrefix("+" if value > 0 else "")
+
+            spin.valueChanged.connect(update_sign)
+
+        adjust_grid.addWidget(QLabel("글자 크기"), 0, 0)
+        adjust_grid.addWidget(font_size_delta, 0, 1)
+        adjust_grid.addWidget(QLabel("줄 간격"), 0, 2)
+        adjust_grid.addWidget(line_spacing_delta, 0, 3)
+        adjust_grid.addWidget(QLabel("영역 여백"), 1, 0)
+        adjust_grid.addWidget(padding_delta, 1, 1)
+        adjust_grid.addWidget(QLabel("외곽선"), 1, 2)
+        adjust_grid.addWidget(outline_delta, 1, 3)
+        adjust_grid.setColumnStretch(1, 1)
+        adjust_grid.setColumnStretch(3, 1)
+        layout.addLayout(adjust_grid)
+
+        summary = QLabel("")
+        summary.setObjectName("BulkFormatSummary")
+        layout.addWidget(summary)
+
+        def populate_source_styles() -> None:
+            family = self._font_catalog.get(str(source_family.currentData() or ""), {})
+            previous = str(source_style.currentData() or "")
+            blocker = QSignalBlocker(source_style)
+            source_style.clear()
+            source_style.addItem("전체 굵기/스타일", "")
+            seen: set[str] = set()
+            for item in family.get("items", []):
+                style = str(item.get("style") or "Regular")
+                key = style.casefold()
+                if key not in seen:
+                    seen.add(key)
+                    source_style.addItem(style, style)
+            index = source_style.findData(previous)
+            source_style.setCurrentIndex(max(0, index))
+            del blocker
+
+        def populate_target_styles() -> None:
+            family = self._font_catalog.get(str(target_family.currentData() or ""), {})
+            blocker = QSignalBlocker(target_style)
+            target_style.clear()
+            target_style.addItem("가능하면 기존 굵기 유지", "")
+            style_counts: dict[str, int] = {}
+            for item in family.get("items", []):
+                key = str(item.get("style") or "Regular").casefold()
+                style_counts[key] = style_counts.get(key, 0) + 1
+            for item in family.get("items", []):
+                style = str(item.get("style") or "Regular")
+                label = style
+                if style_counts.get(style.casefold(), 0) > 1:
+                    label = f"{style} · {Path(str(item.get('path') or '')).name}"
+                target_style.addItem(label, str(item.get("path") or ""))
+            target_style.setCurrentIndex(0)
+            del blocker
+
+        current_session_key = os.path.normcase(str(self.session_path.resolve()))
+        cached_sessions: dict[str, dict[str, Any]] = {
+            current_session_key: self.session
+        }
+
+        def target_sessions() -> tuple[
+            list[tuple[Path, dict[str, Any]]], list[tuple[Path, Exception]]
+        ]:
+            paths = (
+                self.related_session_paths
+                if apply_all_images.isChecked()
+                else [self.session_path]
+            )
+            sessions: list[tuple[Path, dict[str, Any]]] = []
+            errors: list[tuple[Path, Exception]] = []
+            for path in paths:
+                resolved = Path(path).resolve()
+                key = os.path.normcase(str(resolved))
+                try:
+                    session = cached_sessions.get(key)
+                    if session is None:
+                        session = load_session(resolved)
+                        cached_sessions[key] = session
+                    sessions.append((resolved, session))
+                except Exception as exc:
+                    errors.append((resolved, exc))
+            return sessions, errors
+
+        def matching_regions(
+            session: dict[str, Any],
+        ) -> list[tuple[int, dict[str, Any], dict[str, str]]]:
+            family_key = str(source_family.currentData() or "")
+            style_filter = str(source_style.currentData() or "").casefold()
+            matches = []
+            for index, region in enumerate(session.get("regions", [])):
+                entry = self._font_catalog_entry_for_region(region)
+                if entry is None or entry[0] != family_key:
+                    continue
+                item = entry[1]
+                if (
+                    style_filter
+                    and str(item.get("style") or "Regular").casefold() != style_filter
+                ):
+                    continue
+                matches.append((index, region, item))
+            return matches
+
+        def matched_sessions() -> tuple[
+            list[
+                tuple[
+                    Path,
+                    dict[str, Any],
+                    list[tuple[int, dict[str, Any], dict[str, str]]],
+                ]
+            ],
+            list[tuple[Path, Exception]],
+        ]:
+            sessions, errors = target_sessions()
+            return [
+                (path, session, matching_regions(session))
+                for path, session in sessions
+            ], errors
+
+        def update_summary() -> None:
+            sessions, errors = matched_sessions()
+            count = sum(len(matches) for _path, _session, matches in sessions)
+            if apply_all_images.isChecked():
+                matched_image_count = sum(bool(matches) for _p, _s, matches in sessions)
+                text = (
+                    f"전체 {len(self.related_session_paths)}장 중 "
+                    f"{matched_image_count}개 이미지 · {count}개 텍스트 영역이 일치합니다."
+                )
+            else:
+                text = f"현재 이미지에서 {count}개 텍스트 영역이 일치합니다."
+            if errors:
+                text += f" · {len(errors)}개 세션 읽기 실패"
+            summary.setText(text)
+
+        source_family.currentIndexChanged.connect(
+            lambda _index: (populate_source_styles(), update_summary())
+        )
+        source_style.currentIndexChanged.connect(lambda _index: update_summary())
+        apply_all_images.toggled.connect(lambda _checked: update_summary())
+        target_family.currentIndexChanged.connect(
+            lambda _index: populate_target_styles()
+        )
+        populate_source_styles()
+        populate_target_styles()
+        update_summary()
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        cancel_button = QPushButton("취소", dialog)
+        apply_button = QPushButton("일괄 적용", dialog)
+        apply_button.setProperty("dialogRole", "primary")
+        cancel_button.clicked.connect(dialog.reject)
+
+        def accept_if_matched() -> None:
+            sessions, errors = matched_sessions()
+            if errors:
+                QMessageBox.critical(
+                    dialog,
+                    "세션 읽기 실패",
+                    "묶음 전체를 읽지 못해 적용을 중단했습니다.\n"
+                    + "\n".join(f"{path.name}: {error}" for path, error in errors[:5]),
+                )
+                return
+            if not any(matches for _path, _session, matches in sessions):
+                QMessageBox.information(
+                    dialog,
+                    "일치 항목 없음",
+                    "선택한 글꼴과 일치하는 텍스트 영역이 없습니다.",
+                )
+                return
+            dialog.accept()
+
+        apply_button.clicked.connect(accept_if_matched)
+        button_row.addWidget(cancel_button)
+        button_row.addWidget(apply_button)
+        layout.addLayout(button_row)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        sessions, errors = matched_sessions()
+        if errors:
+            QMessageBox.critical(
+                self,
+                "세션 읽기 실패",
+                "묶음 전체를 읽지 못해 적용을 중단했습니다.",
+            )
+            return
+        target_items = list(
+            self._font_catalog.get(str(target_family.currentData() or ""), {}).get(
+                "items", []
+            )
+        )
+        forced_target_path = str(target_style.currentData() or "")
+        prepared_sessions: list[tuple[Path, dict[str, Any], set[str]]] = []
+        changed_count = 0
+        for path, session, matches in sessions:
+            prepared = copy.deepcopy(session)
+            dirty_ids = {
+                str(region_id)
+                for region_id in prepared.get("editor_dirty_region_ids", []) or []
+                if str(region_id)
+            }
+            session_changed = False
+            for index, _region, source_item in matches:
+                target_item = None
+                if forced_target_path:
+                    target_item = next(
+                        (
+                            item
+                            for item in target_items
+                            if os.path.normcase(str(item.get("path") or ""))
+                            == os.path.normcase(forced_target_path)
+                        ),
+                        None,
+                    )
+                else:
+                    source_style_name = str(source_item.get("style") or "Regular")
+                    target_item = next(
+                        (
+                            item
+                            for item in target_items
+                            if str(item.get("style") or "Regular").casefold()
+                            == source_style_name.casefold()
+                        ),
+                        None,
+                    )
+                if target_item is None and target_items:
+                    target_item = min(
+                        target_items,
+                        key=lambda item: _font_style_sort_key(
+                            str(item.get("style") or "Regular")
+                        ),
+                    )
+                if target_item is None:
+                    continue
+                region = prepared.get("regions", [])[index]
+                changed = _apply_region_format_adjustments(
+                    prepared,
+                    region,
+                    index + 1,
+                    font_path=str(target_item.get("path") or ""),
+                    font_size_delta=font_size_delta.value(),
+                    line_spacing_delta=line_spacing_delta.value(),
+                    padding_delta=padding_delta.value(),
+                    outline_delta=outline_delta.value(),
+                )
+                if not changed:
+                    continue
+                session_changed = True
+                changed_count += 1
+                region_id = str(region.get("id") or "")
+                if region_id:
+                    dirty_ids.add(region_id)
+            if session_changed:
+                prepared["editor_dirty_region_ids"] = sorted(dirty_ids)
+                prepared_sessions.append((path, prepared, dirty_ids))
+
+        if changed_count == 0:
+            QMessageBox.information(
+                self,
+                "변경 사항 없음",
+                "선택한 조건과 조정값으로 달라지는 항목이 없습니다.",
+            )
+            return
+
+        all_images = apply_all_images.isChecked()
+        history_label = "묶음 일괄 서식 변경" if all_images else "일괄 서식 변경"
+        try:
+            self._push_history(
+                history_label,
+                include_related_sessions=all_images,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "일괄 서식 실패", str(exc))
+            return
+        before_state = self.history[-1]
+        try:
+            for path, prepared, _dirty_ids in prepared_sessions:
+                save_session(path, prepared)
+        except Exception as exc:
+            self.history.pop()
+            try:
+                self._restore_state(before_state)
+            except Exception as restore_exc:
+                exc = RuntimeError(f"{exc}\n변경 복구도 실패했습니다: {restore_exc}")
+            self._refresh_history_menu()
+            QMessageBox.critical(self, "일괄 서식 실패", str(exc))
+            return
+
+        for path, prepared, dirty_ids in prepared_sessions:
+            if os.path.normcase(str(path.resolve())) == current_session_key:
+                self.session = prepared
+                self._dirty_region_ids = dirty_ids
+                break
+        self.reload_display_image()
+        self.refresh_region_list()
+        self.load_selected_region_to_form()
+        self.canvas.update()
+        self.schedule_exact_preview()
+        self.status_label.setText(
+            f"일괄 서식 변경 완료: {len(prepared_sessions)}개 이미지 · "
+            f"{changed_count}개 영역"
+        )
 
     def update_zoom_display(self, scale: float) -> None:
         if hasattr(self, "zoom_label"):
@@ -4896,9 +5603,7 @@ class AdvancedEditorWindow(QMainWindow):
                 )
                 vertical.setRange(0, max(0, int(vertical_max)))
                 vertical.setPageStep(max(1, self.canvas.height()))
-                vertical.setValue(
-                    max(0, min(vertical.maximum(), int(vertical_value)))
-                )
+                vertical.setValue(max(0, min(vertical.maximum(), int(vertical_value))))
                 horizontal.setEnabled(horizontal.maximum() > 0)
                 vertical.setEnabled(vertical.maximum() > 0)
             finally:
@@ -4999,10 +5704,22 @@ class AdvancedEditorWindow(QMainWindow):
 
     def _set_render_status(self, state: str) -> None:
         label, tooltip = {
-            "pending": ("렌더 대기", "변경 사항이 정밀 미리보기에 반영되기를 기다리고 있습니다."),
-            "running": ("렌더링 중", "현재 변경 사항을 실제 출력과 같은 방식으로 렌더링하고 있습니다."),
-            "error": ("렌더 실패", "정밀 미리보기에 실패했습니다. 아래 상태 메시지를 확인하세요."),
-            "ready": ("렌더 최신", "현재 화면에 최신 정밀 렌더링 결과가 반영되었습니다."),
+            "pending": (
+                "렌더 대기",
+                "변경 사항이 정밀 미리보기에 반영되기를 기다리고 있습니다.",
+            ),
+            "running": (
+                "렌더링 중",
+                "현재 변경 사항을 실제 출력과 같은 방식으로 렌더링하고 있습니다.",
+            ),
+            "error": (
+                "렌더 실패",
+                "정밀 미리보기에 실패했습니다. 아래 상태 메시지를 확인하세요.",
+            ),
+            "ready": (
+                "렌더 최신",
+                "현재 화면에 최신 정밀 렌더링 결과가 반영되었습니다.",
+            ),
         }.get(state, ("렌더 상태", "정밀 미리보기 상태입니다."))
         self.render_status_label.setText(label)
         self.render_status_widget.setToolTip(tooltip)
@@ -5052,8 +5769,7 @@ class AdvancedEditorWindow(QMainWindow):
                 self._set_render_status("ready")
                 if errors:
                     self.status_label.setText(
-                        "일부 영역 미리보기 렌더링 경고:\n"
-                        + "\n".join(errors[:3])
+                        "일부 영역 미리보기 렌더링 경고:\n" + "\n".join(errors[:3])
                     )
             finally:
                 _finish_preview()
@@ -5117,9 +5833,7 @@ class AdvancedEditorWindow(QMainWindow):
         def _worker() -> None:
             try:
                 result = (
-                    task(signals.progress.emit)
-                    if on_progress is not None
-                    else task()
+                    task(signals.progress.emit) if on_progress is not None else task()
                 )
                 signals.finished.emit(result)
             except Exception:
@@ -5128,8 +5842,19 @@ class AdvancedEditorWindow(QMainWindow):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_brush_size_changed(self, value: int) -> None:
-        self.brush_size = int(value)
+        self.mask_brush_size = int(value)
         self.canvas.update()
+
+    def _on_paint_brush_size_changed(self, value: int) -> None:
+        self.paint_brush_size = int(value)
+        self.canvas.update()
+
+    def brush_size_for_tool(self, tool: str) -> int:
+        return (
+            self.paint_brush_size
+            if tool in {"paint_brush", "paint_eraser"}
+            else self.mask_brush_size
+        )
 
     def _on_region_combo_changed(self, index: int) -> None:
         if self._syncing:
@@ -5204,7 +5929,10 @@ class AdvancedEditorWindow(QMainWindow):
             and self.selected_region() is not None
             and not (
                 event.modifiers()
-                & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)
+                & (
+                    Qt.KeyboardModifier.ControlModifier
+                    | Qt.KeyboardModifier.AltModifier
+                )
             )
         ):
             dx, dy = arrow_deltas[event.key()]
@@ -5257,7 +5985,9 @@ class AdvancedEditorWindow(QMainWindow):
                     text = text[:34] + "..."
                 region_type = str(region.get("type") or "region")
                 type_label = REGION_TYPE_LABELS.get(region_type, region_type)
-                self.region_combo.addItem(f"{index}. {type_label} | {text or '(비어 있음)'}")
+                self.region_combo.addItem(
+                    f"{index}. {type_label} | {text or '(비어 있음)'}"
+                )
             if self.selected_index is not None:
                 self.region_combo.setCurrentIndex(self.selected_index)
         finally:
@@ -5305,7 +6035,9 @@ class AdvancedEditorWindow(QMainWindow):
             self.source_edit.setPlainText(str(region.get("source_text") or ""))
             self.translation_edit.setPlainText(str(region.get("translation") or ""))
             self.enabled_checkbox.setChecked(bool(region.get("enabled", True)))
-            self.vertical_checkbox.setChecked(self._region_effective_vertical_stack(region))
+            self.vertical_checkbox.setChecked(
+                self._region_effective_vertical_stack(region)
+            )
             self.x_spin.setValue(int(round(x1)))
             self.y_spin.setValue(int(round(y1)))
             self.w_spin.setValue(max(1, int(round(x2 - x1))))
@@ -5324,7 +6056,8 @@ class AdvancedEditorWindow(QMainWindow):
             self.transform_perspective_spin.setValue(perspective_y * 100.0)
             spacing_value = (
                 render.get("vertical_line_spacing_mult")
-                if region.get("vertical_stack", False) and render.get("vertical_line_spacing_mult") is not None
+                if region.get("vertical_stack", False)
+                and render.get("vertical_line_spacing_mult") is not None
                 else render.get("line_spacing_mult")
             )
             self.line_spacing_spin.setValue(float(spacing_value or 1.0))
@@ -5523,13 +6256,13 @@ class AdvancedEditorWindow(QMainWindow):
     def run_ocr_for_selected_region(self) -> None:
         region = self.selected_region()
         if region is None:
-            QMessageBox.warning(self, "OCR", "OCR을 실행할 텍스트 영역을 선택해 주세요.")
+            QMessageBox.warning(
+                self, "OCR", "OCR을 실행할 텍스트 영역을 선택해 주세요."
+            )
             return
         self.run_ocr_for_roi(_bbox(region), replace_selected=True)
 
-    def run_ocr_for_roi(
-        self, roi: list[float], *, replace_selected: bool
-    ) -> None:
+    def run_ocr_for_roi(self, roi: list[float], *, replace_selected: bool) -> None:
         settings = self._ocr_settings()
         image = self._load_ocr_image()
         selected_index = self.selected_index
@@ -5555,7 +6288,9 @@ class AdvancedEditorWindow(QMainWindow):
             template = (
                 copy.deepcopy(regions[target_index])
                 if target_index is not None
-                else copy.deepcopy(regions[-1]) if regions else {"render": {}}
+                else copy.deepcopy(regions[-1])
+                if regions
+                else {"render": {}}
             )
             inserted_indices = []
             for result_index, result in enumerate(results):
@@ -5599,7 +6334,8 @@ class AdvancedEditorWindow(QMainWindow):
 
     def _translation_settings(self) -> dict[str, Any]:
         settings = {
-            "input_source": self.editor_translation_source_combo.currentData() or "source",
+            "input_source": self.editor_translation_source_combo.currentData()
+            or "source",
         }
         self.session["editor_translation_settings"] = dict(settings)
         self._remember_settings("translation", settings)
@@ -5609,7 +6345,9 @@ class AdvancedEditorWindow(QMainWindow):
         if not self._syncing:
             self._translation_settings()
 
-    def _region_translation_input(self, region: dict[str, Any], input_source: str) -> str:
+    def _region_translation_input(
+        self, region: dict[str, Any], input_source: str
+    ) -> str:
         if input_source == "translation":
             return str(region.get("translation") or "").strip()
         source_text = str(region.get("source_text") or "").strip()
@@ -5643,9 +6381,7 @@ class AdvancedEditorWindow(QMainWindow):
                 regions[index]["render_tag"] = tag
             self._mark_region_dirty(regions[index])
         self.session["editor_translation_settings"] = {
-            key: value
-            for key, value in settings.items()
-            if key != "api_key_override"
+            key: value for key, value in settings.items() if key != "api_key_override"
         }
         save_session(self.session_path, self.session)
         self.refresh_region_list()
@@ -5673,7 +6409,9 @@ class AdvancedEditorWindow(QMainWindow):
             return translate_texts([source_text], settings)
 
         def _success(results: list[str]) -> None:
-            self._apply_editor_translations([selected_index], results, settings=settings)
+            self._apply_editor_translations(
+                [selected_index], results, settings=settings
+            )
 
         self._run_background(
             _task,
@@ -5901,7 +6639,9 @@ class AdvancedEditorWindow(QMainWindow):
 
     def _store_brush_settings(self, *_args) -> None:
         self.editor_settings["brush"] = {
-            "size": int(self.brush_size),
+            "size": int(self.mask_brush_size),
+            "paint_size": int(self.paint_brush_size),
+            "mask_size": int(self.mask_brush_size),
             "color": self.paint_color,
             "custom_color": self.custom_paint_color,
             "shape": self.brush_shape,
@@ -5939,16 +6679,30 @@ class AdvancedEditorWindow(QMainWindow):
             and hasattr(self, "auto_inpaint_checkbox")
             and self.auto_inpaint_checkbox.isChecked()
         ):
-            self.status_label.setText("인페인팅 브러시 마스크를 수정했습니다. 자동 인페인팅을 실행합니다.")
+            self.status_label.setText(
+                "인페인팅 브러시 마스크를 수정했습니다. 자동 인페인팅을 실행합니다."
+            )
             QTimer.singleShot(120, self.run_inpainting_task)
 
-    def _stroke_mask(self, points: list[tuple[int, int]]) -> np.ndarray:
+    def _stroke_mask(
+        self, points: list[tuple[int, int]], brush_size: Optional[int] = None
+    ) -> np.ndarray:
         width, height = self.image_size
         stroke = np.zeros((height, width), dtype=np.uint8)
-        radius = max(1, int(round(self.brush_size / 2)))
-        thickness = max(1, int(round(self.brush_size)))
+        size = max(1, int(brush_size if brush_size is not None else self.brush_size))
+        if size <= 1:
+            if len(points) == 1:
+                x, y = points[0]
+                if 0 <= x < width and 0 <= y < height:
+                    stroke[y, x] = 255
+            else:
+                for start, end in zip(points, points[1:]):
+                    cv2.line(stroke, start, end, 255, thickness=1, lineType=cv2.LINE_8)
+            return stroke
+        radius = max(1, int(round(size / 2)))
+        thickness = max(1, int(round(size)))
         if self.brush_shape == "square":
-            half = max(1, int(round(self.brush_size / 2)))
+            half = max(1, int(round(size / 2)))
 
             def stamp_square(point: tuple[int, int]) -> None:
                 x, y = point
@@ -5976,12 +6730,23 @@ class AdvancedEditorWindow(QMainWindow):
                             )
                         )
         elif len(points) == 1:
-            cv2.circle(stroke, points[0], radius, 255, thickness=-1, lineType=cv2.LINE_8)
+            cv2.circle(
+                stroke, points[0], radius, 255, thickness=-1, lineType=cv2.LINE_8
+            )
         else:
             for index in range(1, len(points)):
-                cv2.line(stroke, points[index - 1], points[index], 255, thickness=thickness, lineType=cv2.LINE_8)
+                cv2.line(
+                    stroke,
+                    points[index - 1],
+                    points[index],
+                    255,
+                    thickness=thickness,
+                    lineType=cv2.LINE_8,
+                )
             for point in points:
-                cv2.circle(stroke, point, radius, 255, thickness=-1, lineType=cv2.LINE_8)
+                cv2.circle(
+                    stroke, point, radius, 255, thickness=-1, lineType=cv2.LINE_8
+                )
         return stroke
 
     def _apply_inpaint_mask_stroke(
@@ -5996,7 +6761,7 @@ class AdvancedEditorWindow(QMainWindow):
             or assets_dir / "inpaint_brush_mask.png"
         )
         mask = _load_mask(mask_path, self.image_size)
-        stroke = self._stroke_mask(points)
+        stroke = self._stroke_mask(points, self.brush_size_for_tool(tool))
         if tool == "inpaint_brush":
             mask[stroke > 0] = 255
         else:
@@ -6025,8 +6790,12 @@ class AdvancedEditorWindow(QMainWindow):
             self.session.get("restore_mask_path")
             or assets_dir / "original_restore_mask.png"
         )
-        mask = _load_mask(mask_path, self.image_size)
-        stroke = self._stroke_mask(points)
+        mask = (
+            _load_mask(mask_path, self.image_size)
+            if self.session.get("restore_mask_path")
+            else np.zeros((self.image_size[1], self.image_size[0]), dtype=np.uint8)
+        )
+        stroke = self._stroke_mask(points, self.brush_size_for_tool(tool))
         if tool == "restore_brush":
             mask[stroke > 0] = 255
             message = "칠한 부분을 번역 전 원본으로 복구했습니다."
@@ -6038,10 +6807,15 @@ class AdvancedEditorWindow(QMainWindow):
         self.status_label.setText(message)
 
     def _apply_paint_stroke(self, tool: str, points: list[tuple[int, int]]) -> None:
-        assets_dir = Path(self.session.get("assets_dir") or self.session_path.with_name(f"{self.session_path.stem}_assets"))
-        overlay_path = Path(self.session.get("paint_overlay_path") or assets_dir / "paint_overlay.png")
+        assets_dir = Path(
+            self.session.get("assets_dir")
+            or self.session_path.with_name(f"{self.session_path.stem}_assets")
+        )
+        overlay_path = Path(
+            self.session.get("paint_overlay_path") or assets_dir / "paint_overlay.png"
+        )
         overlay = _overlay_to_array(overlay_path, self.image_size)
-        stroke = self._stroke_mask(points)
+        stroke = self._stroke_mask(points, self.brush_size_for_tool(tool))
         pixels = stroke > 0
         if tool == "paint_brush":
             r, g, b = _rgb_from_hex(self.paint_color, (255, 255, 255))
@@ -6073,9 +6847,7 @@ class AdvancedEditorWindow(QMainWindow):
             "auto_run_after_brush": self.auto_inpaint_checkbox.isChecked(),
             "precision": self.lama_precision_combo.currentData() or "bf16",
             "kontext_backend": self.kontext_backend_combo.currentData(),
-            "residual_diff_threshold": float(
-                self.residual_threshold_spin.value()
-            ),
+            "residual_diff_threshold": float(self.residual_threshold_spin.value()),
             "opencv_radius": float(self.opencv_radius_spin.value()),
             "opencv_algorithm": self.opencv_algorithm_combo.currentData(),
         }
@@ -6116,7 +6888,8 @@ class AdvancedEditorWindow(QMainWindow):
     def _inpainting_failed(self, _message: str) -> None:
         self._inpainting_running = False
         self._set_inpainting_progress(
-            "failed", "처리를 완료하지 못했습니다. 오류 내용을 확인한 뒤 다시 실행하세요."
+            "failed",
+            "처리를 완료하지 못했습니다. 오류 내용을 확인한 뒤 다시 실행하세요.",
         )
 
     def run_inpainting_task(self) -> None:
@@ -6188,12 +6961,34 @@ class AdvancedEditorWindow(QMainWindow):
         self._push_history("인페인팅 마스크 비우기")
         path = Path(mask_path)
         if path.exists():
-            _save_mask(path, np.zeros((self.image_size[1], self.image_size[0]), dtype=np.uint8))
+            _save_mask(
+                path, np.zeros((self.image_size[1], self.image_size[0]), dtype=np.uint8)
+            )
         self.session["inpaint_mask_path"] = str(path.resolve())
         save_session(self.session_path, self.session)
         self.canvas.clear_mask_overlay_cache()
         self.canvas.update()
         self.status_label.setText("인페인팅 브러시 마스크를 비웠습니다.")
+
+    def clear_restore_mask(self) -> None:
+        mask_path = self.session.get("restore_mask_path")
+        if not mask_path or not Path(mask_path).is_file():
+            self.status_label.setText("지울 원본 복구 마스크가 없습니다.")
+            return
+        self._push_history("원본 복구 마스크 비우기")
+        try:
+            _save_mask(
+                Path(mask_path),
+                np.zeros((self.image_size[1], self.image_size[0]), dtype=np.uint8),
+            )
+            save_session(self.session_path, self.session)
+        except Exception as exc:
+            QMessageBox.warning(self, "원본 복구 마스크 지우기 실패", str(exc))
+            return
+        self.canvas.clear_mask_overlay_cache()
+        self.reload_display_image()
+        self.schedule_exact_preview()
+        self.status_label.setText("현재 이미지의 원본 복구 마스크를 모두 지웠습니다.")
 
     def reset_inpainting_result(self) -> None:
         self._push_history("인페인팅 결과 초기화")
@@ -6205,7 +7000,10 @@ class AdvancedEditorWindow(QMainWindow):
         self.status_label.setText("인페인팅 결과를 초기화했습니다.")
 
     def _region_changed_for_fast_preview(self, region: dict[str, Any]) -> bool:
-        return str(region.get("id") or "") in self._dirty_region_ids
+        return (
+            str(region.get("id") or "") in self._dirty_region_ids
+            or not _region_is_baseline(region)
+        )
 
     def fast_preview_regions(self) -> list[dict[str, Any]]:
         return []
@@ -6288,7 +7086,9 @@ class AdvancedEditorWindow(QMainWindow):
             image.alpha_composite(overlay)
         return image
 
-    def _flatten_fast_editor_layers_after_save(self, saved_background_path: Path) -> None:
+    def _flatten_fast_editor_layers_after_save(
+        self, saved_background_path: Path
+    ) -> None:
         restore_mask_path = Path(self.session.get("restore_mask_path") or "")
         inpainted_path = Path(self.session.get("inpainted_image_path") or "")
         if restore_mask_path.is_file():
@@ -6299,7 +7099,10 @@ class AdvancedEditorWindow(QMainWindow):
                 or self.session_path.with_name(f"{self.session_path.stem}_assets")
             )
             assets_dir.mkdir(parents=True, exist_ok=True)
-            baked_path = assets_dir / "baked_inpaint_source.png"
+            baked_path = (
+                assets_dir
+                / f"baked_inpaint_source_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
+            )
             background.convert("RGBA").save(baked_path)
             self.session["inpaint_source_path"] = str(baked_path.resolve())
         elif (
@@ -6322,7 +7125,21 @@ class AdvancedEditorWindow(QMainWindow):
         background_path, source_kind = self._editor_background_source()
         if background_path is not None:
             image = Image.open(background_path).convert("RGBA")
-            return self._apply_paint_overlay_to(image)
+            image = self._apply_paint_overlay_to(image)
+            has_stale_text = source_kind in {"rendered", "translated", "edited"} or (
+                source_kind == "inpainted"
+                and not self.session.get("inpainted_background_text_free")
+            )
+            has_changed_regions = any(
+                self._region_changed_for_fast_preview(region)
+                for region in self.session.get("regions", [])
+            )
+            if has_changed_regions and has_stale_text:
+                image = self._paste_clean_regions_for_fast_edit(
+                    image,
+                    include_dirty_regions=True,
+                )
+            return image
 
         image = self._load_base_image().copy()
         return self._apply_paint_overlay_to(image)
@@ -6360,7 +7177,11 @@ class AdvancedEditorWindow(QMainWindow):
                 return image.convert("RGBA")
         except Exception:
             pass
-        for key in ("rendered_snapshot_path", "translated_image_path", "edited_image_path"):
+        for key in (
+            "rendered_snapshot_path",
+            "translated_image_path",
+            "edited_image_path",
+        ):
             value = self.session.get(key)
             if value and Path(value).is_file():
                 return _load_rgba(value, self.image_size)
@@ -6406,7 +7227,9 @@ class AdvancedEditorWindow(QMainWindow):
             mask = mask[..., 0]
         width, height = result.size
         if mask.shape[:2] != (height, width):
-            mask = cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
+            mask = cv2.resize(
+                mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST
+            )
         mask = np.where(mask > 0, 255, 0).astype(np.uint8)
         mask = cv2.dilate(mask, np.ones((5, 5), dtype=np.uint8), iterations=1)
 
@@ -6414,7 +7237,10 @@ class AdvancedEditorWindow(QMainWindow):
         base_arr = np.asarray(clean_base, dtype=np.uint8)
         result_arr = np.asarray(result, dtype=np.uint8).copy()
         diff = np.max(
-            np.abs(source_arr[..., :3].astype(np.int16) - base_arr[..., :3].astype(np.int16)),
+            np.abs(
+                source_arr[..., :3].astype(np.int16)
+                - base_arr[..., :3].astype(np.int16)
+            ),
             axis=2,
         )
         text_pixels = diff > 30
@@ -6426,6 +7252,10 @@ class AdvancedEditorWindow(QMainWindow):
         return Image.fromarray(result_arr, mode="RGBA")
 
     def _clean_base_image(self) -> Image.Image:
+        for key in ("inpainted_image_path", "inpaint_source_path"):
+            value = self.session.get(key)
+            if value and Path(value).is_file():
+                return Image.open(value).convert("RGBA")
         base_path = self.session.get("base_image_path")
         if base_path and Path(base_path).exists():
             return Image.open(base_path).convert("RGBA")
@@ -6438,18 +7268,24 @@ class AdvancedEditorWindow(QMainWindow):
         path = Path(str(value))
         fonts = self._font_files_under(path)
         if fonts:
+
             def score(item: Path) -> tuple[int, str]:
                 name = item.stem.lower()
                 if "regular" in name or "normal" in name:
                     return (0, item.name.casefold())
-                if not any(token in name for token in ("bold", "italic", "oblique", "black")):
+                if not any(
+                    token in name for token in ("bold", "italic", "oblique", "black")
+                ):
                     return (1, item.name.casefold())
                 return (2, item.name.casefold())
+
             return sorted(fonts, key=score)[0]
         return None
 
     def _qfont_family_for_region(self, region: dict[str, Any]) -> str:
-        render = region.get("render", {}) if isinstance(region.get("render"), dict) else {}
+        render = (
+            region.get("render", {}) if isinstance(region.get("render"), dict) else {}
+        )
         font_file = self._font_file_for_render(render)
         if font_file is None:
             return "Malgun Gothic"
@@ -6466,7 +7302,9 @@ class AdvancedEditorWindow(QMainWindow):
         return "Malgun Gothic"
 
     def _qfont_style_for_region(self, region: dict[str, Any], family: str) -> str:
-        render = region.get("render", {}) if isinstance(region.get("render"), dict) else {}
+        render = (
+            region.get("render", {}) if isinstance(region.get("render"), dict) else {}
+        )
         font_file = self._font_file_for_render(render)
         if font_file is None:
             return ""
@@ -6501,14 +7339,12 @@ class AdvancedEditorWindow(QMainWindow):
         text = self._preview_text(region)
         if not text:
             return
-        render = region.get("render", {}) if isinstance(region.get("render"), dict) else {}
+        render = (
+            region.get("render", {}) if isinstance(region.get("render"), dict) else {}
+        )
         fixed_font_size = max(
             1,
-            int(
-                render.get("font_size")
-                or render.get("max_font_size")
-                or 24
-            ),
+            int(render.get("font_size") or render.get("max_font_size") or 24),
         )
         pixel_size = max(1, int(round(fixed_font_size * scale)))
         font_family = self._qfont_family_for_region(region)
@@ -6541,7 +7377,9 @@ class AdvancedEditorWindow(QMainWindow):
             else render.get("line_spacing_mult")
         )
         try:
-            line_spacing_mult = float(spacing_value if spacing_value is not None else 1.0)
+            line_spacing_mult = float(
+                spacing_value if spacing_value is not None else 1.0
+            )
         except Exception:
             line_spacing_mult = 1.0
         line_spacing_mult = max(0.05, min(6.0, line_spacing_mult))
@@ -6556,7 +7394,10 @@ class AdvancedEditorWindow(QMainWindow):
                 current = ""
                 for char in paragraph:
                     candidate = current + char
-                    if current and metrics.horizontalAdvance(candidate) > available_width:
+                    if (
+                        current
+                        and metrics.horizontalAdvance(candidate) > available_width
+                    ):
                         lines.append(current.rstrip())
                         current = char.lstrip()
                     else:
@@ -6571,8 +7412,12 @@ class AdvancedEditorWindow(QMainWindow):
         outline_rgb = render.get("outline_color_rgb")
         outline = QColor(255, 255, 255)
         if isinstance(outline_rgb, (list, tuple)) and len(outline_rgb) >= 3:
-            outline = QColor(int(outline_rgb[0]), int(outline_rgb[1]), int(outline_rgb[2]))
-        outline_width = max(0, int(round(float(render.get("outline_width") or 0.0) * scale)))
+            outline = QColor(
+                int(outline_rgb[0]), int(outline_rgb[1]), int(outline_rgb[2])
+            )
+        outline_width = max(
+            0, int(round(float(render.get("outline_width") or 0.0) * scale))
+        )
 
         painter.save()
         center = rect.center()
@@ -6612,7 +7457,11 @@ class AdvancedEditorWindow(QMainWindow):
             draw_rect = rect.adjusted(padding, padding, -padding, -padding)
 
         painter.setFont(font)
-        painter.setClipRect(draw_rect.adjusted(-outline_width, -outline_width, outline_width, outline_width))
+        painter.setClipRect(
+            draw_rect.adjusted(
+                -outline_width, -outline_width, outline_width, outline_width
+            )
+        )
         metrics = QFontMetrics(font)
         line_step = max(1.0, metrics.height() * line_spacing_mult)
 
@@ -6635,7 +7484,9 @@ class AdvancedEditorWindow(QMainWindow):
                 total_h = metrics.height() + line_step * max(0, len(chars) - 1)
                 y = draw_rect.center().y() - total_h / 2.0
                 for ch in chars:
-                    char_rect = QRectF(draw_rect.left(), y, draw_rect.width(), metrics.height())
+                    char_rect = QRectF(
+                        draw_rect.left(), y, draw_rect.width(), metrics.height()
+                    )
                     draw_text_with_outline(char_rect, Qt.AlignmentFlag.AlignCenter, ch)
                     y += line_step
         else:
@@ -6644,7 +7495,9 @@ class AdvancedEditorWindow(QMainWindow):
             y = draw_rect.center().y() - total_h / 2.0
             flags = horizontal_alignment | Qt.AlignmentFlag.AlignTop
             for line in lines:
-                line_rect = QRectF(draw_rect.left(), y, draw_rect.width(), metrics.height())
+                line_rect = QRectF(
+                    draw_rect.left(), y, draw_rect.width(), metrics.height()
+                )
                 draw_text_with_outline(line_rect, flags, line)
                 y += line_step
         painter.restore()
@@ -6714,7 +7567,9 @@ class AdvancedEditorWindow(QMainWindow):
         if hasattr(self, "default_output_dir_edit"):
             current = self.default_output_dir_edit.text().strip()
         if not current:
-            current = str(Path(self.session.get("edited_image_path") or self.session_path).parent)
+            current = str(
+                Path(self.session.get("edited_image_path") or self.session_path).parent
+            )
         directory = QFileDialog.getExistingDirectory(
             self,
             "기본 저장 폴더 선택",
@@ -6770,7 +7625,9 @@ class AdvancedEditorWindow(QMainWindow):
             if suffix not in SUPPORTED_IMAGE_SUFFIXES:
                 suffix = ".png"
             return f"edited_{stem}{suffix}"
-        stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", self.session_path.stem).strip(" ._")
+        stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", self.session_path.stem).strip(
+            " ._"
+        )
         return f"edited_{stem or 'image'}.png"
 
     def _safe_relative_output_parts(self, value: Any) -> list[str]:
@@ -6880,15 +7737,18 @@ class AdvancedEditorWindow(QMainWindow):
             )
         archive_path = Path(archive_value).expanduser().resolve()
         if not archive_path.is_file():
-            raise FileNotFoundError(f"연결한 원본 ZIP을 찾을 수 없습니다: {archive_path}")
+            raise FileNotFoundError(
+                f"연결한 원본 ZIP을 찾을 수 없습니다: {archive_path}"
+            )
         try:
             with zipfile.ZipFile(archive_path, "r") as archive:
                 normalized_names = {
-                    name.replace("\\", "/").strip("/")
-                    for name in archive.namelist()
+                    name.replace("\\", "/").strip("/") for name in archive.namelist()
                 }
         except zipfile.BadZipFile as exc:
-            raise ValueError(f"연결한 원본 ZIP이 손상되었습니다: {archive_path}") from exc
+            raise ValueError(
+                f"연결한 원본 ZIP이 손상되었습니다: {archive_path}"
+            ) from exc
         if member not in normalized_names:
             raise FileNotFoundError(
                 f"원본 ZIP에서 덮어쓸 이미지를 찾을 수 없습니다: {member}"
@@ -6955,7 +7815,9 @@ class AdvancedEditorWindow(QMainWindow):
                             target_archive.writestr(info, replacement)
                             replaced = True
                         else:
-                            target_archive.writestr(info, source_archive.read(info.filename))
+                            target_archive.writestr(
+                                info, source_archive.read(info.filename)
+                            )
             if not replaced:
                 raise FileNotFoundError(
                     f"원본 ZIP에서 덮어쓸 이미지를 찾을 수 없습니다: {member}"
@@ -7024,10 +7886,14 @@ class AdvancedEditorWindow(QMainWindow):
             ).strip()
             if translated_path:
                 return Path(translated_path).expanduser().resolve()
-        return Path(
-            self.session.get("edited_image_path")
-            or self.session_path.with_name(f"{self.session_path.stem}_edited.png")
-        ).expanduser().resolve()
+        return (
+            Path(
+                self.session.get("edited_image_path")
+                or self.session_path.with_name(f"{self.session_path.stem}_edited.png")
+            )
+            .expanduser()
+            .resolve()
+        )
 
     @staticmethod
     def _unique_export_target(target: Path, used: set[Path]) -> Path:
@@ -7090,15 +7956,15 @@ class AdvancedEditorWindow(QMainWindow):
             succeeded = False
             try:
                 session = load_session(session_path)
-                relative_path = self._session_export_relative_path(session_path, session)
+                relative_path = self._session_export_relative_path(
+                    session_path, session
+                )
                 display_name = relative_path.as_posix()
                 if progress is not None:
                     progress(index, total, f"{display_name} 렌더링 중")
                 image, render_errors = render_session_image(session)
                 target = (
-                    destination
-                    if single_file
-                    else destination / relative_path
+                    destination if single_file else destination / relative_path
                 ).resolve()
                 if not single_file:
                     target = self._unique_export_target(target, used)
@@ -7159,9 +8025,7 @@ class AdvancedEditorWindow(QMainWindow):
                 )
                 QTimer.singleShot(1100, progress_dialog.close)
             if exported:
-                destination_text = (
-                    exported[0] if single_file else destination.resolve()
-                )
+                destination_text = exported[0] if single_file else destination.resolve()
                 self.status_label.setText(
                     f"{len(exported)}개 이미지 내보내기 완료: {destination_text}"
                 )
@@ -7220,16 +8084,31 @@ class AdvancedEditorWindow(QMainWindow):
                     + "\n".join(render_errors[:5])
                 )
             if package_warnings:
-                message += (
-                    "\nEditor package embedding warnings:\n"
-                    + "\n".join(package_warnings[:3])
+                message += "\nEditor package embedding warnings:\n" + "\n".join(
+                    package_warnings[:3]
                 )
             self.status_label.setText(message)
             self._show_save_toast(f"{output_path.name} 저장 완료")
         except Exception as exc:
             QMessageBox.critical(self, "렌더링 실패", str(exc))
 
-    def _capture_state(self) -> dict[str, Any]:
+    def _capture_related_sessions(self) -> dict[str, dict[str, Any]]:
+        current_key = os.path.normcase(str(self.session_path.resolve()))
+        snapshots: dict[str, dict[str, Any]] = {}
+        for path in self.related_session_paths:
+            resolved = Path(path).resolve()
+            if (
+                resolved.suffix.lower() != ".json"
+                or os.path.normcase(str(resolved)) == current_key
+                or not resolved.is_file()
+            ):
+                continue
+            snapshots[str(resolved)] = copy.deepcopy(load_session(resolved))
+        return snapshots
+
+    def _capture_state(
+        self, *, include_related_sessions: bool = False
+    ) -> dict[str, Any]:
         masks: dict[str, bytes] = {}
         for region in self.session.get("regions", []):
             path = region.get("mask_path")
@@ -7247,15 +8126,31 @@ class AdvancedEditorWindow(QMainWindow):
             if overlay_path and Path(overlay_path).exists()
             else None
         )
-        return {
+        state = {
             "session": copy.deepcopy(self.session),
             "masks": masks,
             "overlay_path": overlay_path,
             "overlay": overlay,
             "selected_index": self.selected_index,
         }
+        if include_related_sessions:
+            state["related_sessions"] = self._capture_related_sessions()
+        return state
 
     def _restore_state(self, state: dict[str, Any]) -> None:
+        allowed_related_paths = {
+            os.path.normcase(str(Path(path).resolve())): Path(path).resolve()
+            for path in getattr(self, "related_session_paths", [self.session_path])
+            if Path(path).resolve() != self.session_path.resolve()
+            and Path(path).resolve().suffix.lower() == ".json"
+            and Path(path).resolve().is_file()
+        }
+        for path, session in state.get("related_sessions", {}).items():
+            target = allowed_related_paths.get(
+                os.path.normcase(str(Path(path).resolve()))
+            )
+            if target is not None and isinstance(session, dict):
+                save_session(target, copy.deepcopy(session))
         self.session = copy.deepcopy(state["session"])
         self._dirty_region_ids = {
             str(region_id)
@@ -7285,8 +8180,14 @@ class AdvancedEditorWindow(QMainWindow):
         self.load_selected_region_to_form()
         self.schedule_exact_preview()
 
-    def _push_history(self, label: str = "편집") -> None:
-        state = self._capture_state()
+    def _push_history(
+        self, label: str = "편집", *, include_related_sessions: bool = False
+    ) -> None:
+        state = (
+            self._capture_state(include_related_sessions=True)
+            if include_related_sessions
+            else self._capture_state()
+        )
         state["history_label"] = str(label or "편집")
         self.history.append(state)
         if len(self.history) > 80:
@@ -7310,9 +8211,7 @@ class AdvancedEditorWindow(QMainWindow):
             empty_action.setEnabled(False)
 
         undo_label = (
-            str(self.history[-1].get("history_label") or "편집")
-            if self.history
-            else ""
+            str(self.history[-1].get("history_label") or "편집") if self.history else ""
         )
         redo_label = (
             str(self.redo_stack[-1].get("history_label") or "편집")
@@ -7340,14 +8239,22 @@ class AdvancedEditorWindow(QMainWindow):
         if steps <= 0:
             return
         current = self._capture_state()
+        related_current: Optional[dict[str, dict[str, Any]]] = None
         undone_labels: list[str] = []
         for _ in range(steps):
             previous = self.history.pop()
+            if "related_sessions" in previous:
+                if related_current is None:
+                    related_current = self._capture_related_sessions()
+                current["related_sessions"] = related_current
+                related_current = previous["related_sessions"]
             label = str(previous.get("history_label") or "편집")
             current["history_label"] = label
             self.redo_stack.append(current)
             current = previous
             undone_labels.append(label)
+        if related_current is not None:
+            current["related_sessions"] = related_current
         self._restore_state(current)
         self._refresh_history_menu()
         if steps == 1:
@@ -7363,6 +8270,8 @@ class AdvancedEditorWindow(QMainWindow):
         state = self.redo_stack.pop()
         label = str(state.get("history_label") or "편집")
         current = self._capture_state()
+        if "related_sessions" in state:
+            current["related_sessions"] = self._capture_related_sessions()
         current["history_label"] = label
         self.history.append(current)
         self._restore_state(state)

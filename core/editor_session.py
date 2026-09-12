@@ -2100,14 +2100,11 @@ def resolve_region_font_size(
 
 
 def _editor_base_image_path(session: Dict[str, Any]) -> Path:
-    base_path = Path(
-        session.get("inpainted_image_path")
-        or session.get("base_image_path")
-        or ""
-    )
-    if not base_path.exists():
-        raise FileNotFoundError(f"Editor base image not found: {base_path}")
-    return base_path
+    for key in ("inpainted_image_path", "inpaint_source_path", "base_image_path"):
+        value = session.get(key)
+        if value and Path(value).is_file():
+            return Path(value)
+    raise FileNotFoundError(f"Editor base image not found: {session.get('base_image_path')}")
 
 
 def _apply_paint_overlay(image: Image.Image, session: Dict[str, Any]) -> Image.Image:
