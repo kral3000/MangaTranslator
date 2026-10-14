@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
@@ -37,7 +38,12 @@ from utils.model_metadata import (
     supports_xai_reasoning_parameter,
 )
 
-from .settings_manager import DEFAULT_SETTINGS, PROVIDER_MODELS, get_saved_settings
+from .settings_manager import (
+    DEFAULT_SETTINGS,
+    PROVIDER_MODELS,
+    _codex_models,
+    get_saved_settings,
+)
 
 
 def get_available_providers(ocr_method: str) -> List[str]:
@@ -100,6 +106,12 @@ def get_available_font_packs(fonts_base_dir: Path) -> Tuple[List[str], Optional[
 
 def validate_api_key(api_key: str, provider: str) -> tuple[bool, str]:
     """Validate API key format based on provider."""
+    if provider == "Codex":
+        npm_shim = Path(os.environ.get("APPDATA", "")) / "npm" / "codex.cmd"
+        if shutil.which("codex") or npm_shim.is_file():
+            return True, "Codex CLI is available."
+        return False, "Codex CLI was not found. Install Codex CLI and sign in first."
+
     env_var_map = {
         "Google": "GOOGLE_API_KEY",
         "OpenAI": "OPENAI_API_KEY",
@@ -357,6 +369,8 @@ def is_reasoning_model(provider: str, model_name: Optional[str]) -> bool:
             return False
     elif provider == "OpenAI-Compatible":
         return is_openai_compatible_reasoning_model(model_name)
+    elif provider == "Codex":
+        return True
     else:
         return False
 
@@ -563,6 +577,12 @@ def get_reasoning_effort_config(
 
     lm = model_name.lower()
 
+    if provider == "Codex":
+        from utils.endpoints.codex import codex_reasoning_options
+
+        choices, default = codex_reasoning_options(model_name)
+        return bool(choices), list(reversed(choices)), default
+
     if provider == "Google":
         is_reasoning = is_reasoning_model(provider, model_name)
         if not is_reasoning:
@@ -728,6 +748,9 @@ def get_sampling_interactivity_for_effort(
     For DeepSeek reasoning models: only allowed when effort is 'none'.
     Returns (temp_interactive, top_p_interactive).
     """
+    if provider == "Codex":
+        return False, False
+
     if provider == "DeepSeek" and is_deepseek_reasoning_model(model_name):
         allow = reasoning_effort == "none"
         return allow, allow
@@ -808,7 +831,16 @@ def update_translation_ui(provider: str, _current_temp: float, ocr_method: str =
     )
     remembered_model = provider_models_dict.get(provider)
 
-    models = PROVIDER_MODELS.get(provider, [])
+    models = (
+        _codex_models(refresh=True)
+        if provider == "Codex"
+        else PROVIDER_MODELS.get(provider, [])
+    )
+    if provider == "Codex":
+        PROVIDER_MODELS[provider] = models
+
+    if provider == "Codex" and not remembered_model and models:
+        remembered_model = models[0]
 
     if provider == "Z.ai" and ocr_method == "LLM":
         models = [m for m in models if "v" in m]
@@ -859,6 +891,7 @@ def update_translation_ui(provider: str, _current_temp: float, ocr_method: str =
         "DeepSeek",
         "Z.ai",
         "Moonshot AI",
+        "Codex",
     )
     top_p_interactive = provider != "Anthropic"
     temp_interactive, sampling_ok = get_sampling_interactivity_for_effort(
@@ -888,7 +921,11 @@ def update_translation_ui(provider: str, _current_temp: float, ocr_method: str =
         remembered_model
     )
 
-    enable_web_search_visible = provider not in ("OpenAI-Compatible", "DeepSeek")
+    enable_web_search_visible = provider not in (
+        "OpenAI-Compatible",
+        "DeepSeek",
+        "Codex",
+    )
     enable_web_search_label, enable_web_search_info = (
         get_enable_web_search_label_and_info(provider)
     )
@@ -1032,7 +1069,7 @@ def update_params_for_model(
         temp_max = 1.0
         top_k_interactive = False
         top_p_interactive = False
-    elif provider in ("OpenAI", "xAI", "DeepSeek", "Moonshot AI"):
+    elif provider in ("OpenAI", "xAI", "DeepSeek", "Moonshot AI", "Codex"):
         top_k_interactive = False
     elif provider == "OpenRouter":
         is_openai_model = model_name and (
@@ -1089,7 +1126,11 @@ def update_params_for_model(
     )
 
     # Web search checkbox is visible for Google, OpenRouter, OpenAI, Anthropic, and xAI providers
-    enable_web_search_visible = provider not in ("OpenAI-Compatible", "DeepSeek")
+    enable_web_search_visible = provider not in (
+        "OpenAI-Compatible",
+        "DeepSeek",
+        "Codex",
+    )
 
     enable_web_search_label, enable_web_search_info = (
         get_enable_web_search_label_and_info(provider)
@@ -1411,6 +1452,14 @@ def initial_dynamic_fetch(provider: str, url: str, key: Optional[str]):
         return fetch_and_update_openrouter_models()
     elif provider == "OpenAI-Compatible":
         return fetch_and_update_compatible_models(url, key)
+    elif provider == "Codex":
+        models = _codex_models(refresh=True)
+        PROVIDER_MODELS[provider] = models
+        remembered = get_saved_settings().get("provider_models", {}).get(provider)
+        return gr.update(
+            choices=models,
+            value=remembered if remembered in models else (models[0] if models else None),
+        )
     return gr.update()
 
 

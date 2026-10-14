@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import torch
 from PIL import Image
-from scipy.ndimage import distance_transform_edt
+from scipy.ndimage import distance_transform_edt, maximum_filter
 
 from core.caching import get_cache
 from core.config import DEFAULT_FLUX_KLEIN_PROMPT, DEFAULT_FLUX_KONTEXT_PROMPT
@@ -25,6 +25,15 @@ MAX_BLUR_RADIUS = 10  # Maximum blur radius in pixels
 FLUX_GUIDANCE_SCALE = 2.5  # Flux Kontext guidance scale
 CONTEXT_PADDING_RATIO = 0.5  # Context padding is 50% of detection size
 MAX_CONTEXT_PADDING = 80  # Context padding capped at 80 pixels
+
+
+def _klein_clipped_composite_alpha(mask: np.ndarray) -> np.ndarray:
+    """Feather inside the mask by two pixels without fading thin brush marks."""
+    mask = np.asarray(mask, dtype=bool)
+    distance = distance_transform_edt(np.pad(mask, 1))[1:-1, 1:-1]
+    local_depth = maximum_filter(distance, size=5, mode="constant", cval=0)
+    width = np.clip(local_depth, 1.0, 2.0)
+    return np.minimum(distance / width, 1.0).astype(np.float32)
 
 
 def _prompt_value_to_cpu(value):
@@ -1555,6 +1564,12 @@ class FluxKleinInpainter:
                     :, start_y:end_y, start_x:end_x
                 ]
                 mask_for_composite = clipped_mask
+
+        if strict_mask_clipping:
+            # Feather after clipping so bbox protection also keeps a soft inner edge.
+            mask_for_composite = torch.from_numpy(
+                _klein_clipped_composite_alpha(mask_for_composite[0].cpu().numpy() > 0)
+            )[None, ...]
 
         patch_pil = cached_patch
 

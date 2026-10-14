@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 import zipfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -25,6 +26,7 @@ from core.validation import (
     validate_mutually_exclusive_modes,
     validate_zip_file,
 )
+from core.workspace_cleanup import workspace_job
 from utils.exceptions import CancellationError, ValidationError
 from utils.token_usage import format_usage
 
@@ -350,9 +352,28 @@ def handle_browse_image_editor_folder(current_value: str) -> gr.update:
     return gr.update(value=current_value)
 
 
+@lru_cache(maxsize=4096)
+def _read_editor_session_summary(path: Path, modified_ns: int, size: int) -> Dict[str, Any]:
+    """Cache only list metadata; a file revision invalidates its entry."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("invalid session")
+    summary = {
+        key: data.get(key)
+        for key in (
+            "source_display_path", "translated_image_path", "source_image_path",
+            "editor_session_group", "editor_character_profile_name",
+            "editor_source_folder_name",
+        )
+    }
+    summary["region_count"] = len(data.get("regions") or [])
+    return summary
+
+
 def _discover_existing_editor_sessions(
     repo_root: Optional[Path] = None,
-) -> tuple[List[Tuple[str, str]], int]:
+    *, include_members: bool = False,
+) -> tuple[List[Tuple[str, str]], int] | tuple[List[Tuple[str, str]], int, List[Dict[str, Any]]]:
     from core.editor_session import (
         editor_session_context_label,
         related_edit_session_paths,
@@ -373,9 +394,8 @@ def _discover_existing_editor_sessions(
     invalid_count = 0
     for path in session_paths.values():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                raise ValueError("invalid session")
+            stat = path.stat()
+            data = _read_editor_session_summary(path, stat.st_mtime_ns, stat.st_size)
             display_name = str(data.get("source_display_path") or "").strip()
             if not display_name:
                 source = str(
@@ -384,7 +404,7 @@ def _discover_existing_editor_sessions(
                     or ""
                 ).strip()
                 display_name = Path(source).name if source else path.stem
-            modified = path.stat().st_mtime
+            modified = stat.st_mtime
             sessions[str(path).casefold()] = (path, data, modified, display_name)
         except Exception:
             invalid_count += 1
@@ -412,13 +432,17 @@ def _discover_existing_editor_sessions(
                 {member: index for index, member in enumerate(stored_group)},
             )
             continue
-        cache_key = (str(path).casefold(),)
-        if cache_key not in related_cache:
-            related_cache[cache_key] = [
-                candidate
-                for candidate in related_edit_session_paths(path, data)
-                if str(candidate).casefold() in sessions
-            ]
+        # Legacy imports share one directory; discovering it per page rereads
+        # every member for sorting, turning a large import into quadratic I/O.
+        collection = path.parent if path.parent.name.startswith("imported_") else path
+        cache_key = (str(collection).casefold(),)
+        if cache_key in related_cache:
+            continue
+        related_cache[cache_key] = [
+            candidate
+            for candidate in related_edit_session_paths(path, data)
+            if str(candidate).casefold() in sessions
+        ]
         related = related_cache[cache_key]
         key = tuple(str(candidate).casefold() for candidate in related) or (
             str(path).casefold(),
@@ -426,6 +450,7 @@ def _discover_existing_editor_sessions(
         groups.setdefault(key, related or [path])
 
     choices: List[Tuple[float, str, str]] = []
+    cleanup_records = {}
     for key, paths in groups.items():
         positions = group_positions.get(key)
         if positions:
@@ -448,7 +473,7 @@ def _discover_existing_editor_sessions(
         else:
             path, data, _modified, display_name = records[0]
             label = (
-                f"{display_name}  ·  영역 {len(data.get('regions') or [])}개"
+                f"{display_name}  ·  영역 {data['region_count']}개"
                 f"  ·  {modified_text}"
             )
         context = next(
@@ -462,9 +487,17 @@ def _discover_existing_editor_sessions(
         if context:
             label += f"  ·  〔{context}〕"
         choices.append((modified, label, str(paths[0])))
+        if include_members:
+            cleanup_records[str(paths[0])] = dict(
+                id=str(paths[0]), label=label,
+                paths=[str(path) for path in paths], modified=modified,
+            )
 
     choices.sort(key=lambda item: (-item[0], item[1].casefold()))
-    return [(label, path) for _modified, label, path in choices], invalid_count
+    result = [(label, path) for _modified, label, path in choices]
+    if include_members:
+        return result, invalid_count, [cleanup_records[path] for _label, path in result]
+    return result, invalid_count
 
 
 def handle_refresh_existing_editor_sessions() -> Tuple[gr.update, gr.update, gr.update]:
@@ -1607,6 +1640,7 @@ def _format_batch_success_message(
     return ko("".join(msg_parts))
 
 
+@workspace_job
 def handle_translate_click(
     *args: Any,
     models_dir: Path,
@@ -2251,6 +2285,7 @@ def handle_editor_rerender(
         return None, _status_update(cleaned), _download_file_update(), None
 
 
+@workspace_job
 def handle_batch_click(
     *args: Any,
     models_dir: Path,

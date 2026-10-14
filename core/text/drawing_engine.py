@@ -440,15 +440,16 @@ def pil_to_skia_surface(pil_image: Image.Image) -> skia.Surface:
     try:
         if pil_image.mode != "RGBA":
             pil_image = pil_image.convert("RGBA")
-        skia_image = skia.Image.frombytes(
-            pil_image.tobytes(), pil_image.size, skia.kRGBA_8888_ColorType
-        )
-        if skia_image is None:
-            log_message("PIL to Skia conversion failed", always_print=True)
-            raise RenderingError("Failed to create Skia image from PIL")
         surface = skia.Surface(pil_image.width, pil_image.height)
-        with surface as canvas:
-            canvas.drawImage(skia_image, 0, 0)
+        info = skia.ImageInfo.Make(
+            pil_image.width, pil_image.height,
+            skia.kRGBA_8888_ColorType, skia.kUnpremul_AlphaType,
+        )
+        # Copy background pixels directly; no image sampling or blending is needed.
+        if not surface.getCanvas().writePixels(
+            info, pil_image.tobytes(), pil_image.width * 4
+        ):
+            raise RenderingError("Failed to write PIL pixels to Skia surface")
         return surface
     except Exception as e:
         log_message(f"PIL to Skia conversion error: {e}", always_print=True)

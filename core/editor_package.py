@@ -15,7 +15,6 @@ from uuid import uuid4
 
 from utils.logging import log_message
 
-
 PACKAGE_VERSION = 1
 TRAILER_MAGIC = b"\nMANGATRANSLATOR_EDITOR_PACKAGE_V1\n"
 TRAILER_LENGTH_SIZE = 8
@@ -39,7 +38,7 @@ SESSION_FILE_KEYS = (
     "paint_overlay_path",
     "restore_mask_path",
 )
-REGION_FILE_KEYS = ("mask_path",)
+REGION_FILE_KEYS = ("mask_path", "ai_original_path", "ai_processed_path", "ai_mask_path")
 OUTPUT_REFERENCE_KEYS = (
     "translated_image_path",
     "overwrite_target_path",

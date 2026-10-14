@@ -17,6 +17,60 @@ from ui.logic import _batch_source_folder_name
 
 
 class ExistingEditorSessionDiscoveryTest(TestCase):
+    def test_unchanged_list_metadata_is_cached_and_file_changes_are_visible(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            path = root / "editor_sessions" / "one_edit_session.json"
+            path.parent.mkdir(parents=True)
+            data = {"source_display_path": "one.png", "regions": [{}],
+                    "editor_session_group": [str(path)]}
+            path.write_text(json.dumps(data), encoding="utf-8")
+            read_text = Path.read_text
+            with patch.object(Path, "read_text",
+                              side_effect=read_text, autospec=True) as read:
+                first = _discover_existing_editor_sessions(root)
+                self.assertEqual(_discover_existing_editor_sessions(root), first)
+                choices, invalid, records = _discover_existing_editor_sessions(
+                    root, include_members=True
+                )
+                self.assertEqual((choices, invalid), first)
+                self.assertEqual(records[0]["paths"], [str(path.resolve())])
+                self.assertEqual(read.call_count, 1)
+                original_stat = path.stat()
+                data["source_display_path"] = "two.png"
+                path.write_text(json.dumps(data), encoding="utf-8")
+                os.utime(path, ns=(original_stat.st_atime_ns,
+                                  original_stat.st_mtime_ns + 1_000_000_000))
+                updated, invalid = _discover_existing_editor_sessions(root)
+                self.assertIn("two.png", updated[0][0])
+                self.assertEqual(invalid, 0)
+                self.assertEqual(read.call_count, 2)
+                path.unlink()
+                self.assertEqual(_discover_existing_editor_sessions(root), ([], 0))
+
+    def test_legacy_import_is_discovered_once_per_folder(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for folder_name in ("imported_first", "imported_second"):
+                folder = root / "editor_imports" / folder_name
+                folder.mkdir(parents=True)
+                for number in (10, 2, 1):
+                    (folder / f"{number}_edit_session.json").write_text(
+                        json.dumps({"source_display_path": f"{number}.png", "regions": []}),
+                        encoding="utf-8",
+                    )
+                (folder / "broken_edit_session.json").write_text("broken", encoding="utf-8")
+            with patch("core.editor_session.related_edit_session_paths",
+                       wraps=related_edit_session_paths) as discover:
+                choices, invalid_count = _discover_existing_editor_sessions(root)
+            self.assertEqual(discover.call_count, 2)
+            self.assertEqual(len(choices), 2)
+            self.assertEqual(invalid_count, 2)
+            for label, value in choices:
+                self.assertIn("1.png → 10.png", label)
+                self.assertIn("묶음 3장", label)
+                self.assertEqual(Path(value).name, "1_edit_session.json")
+
     def test_batch_folder_picker_always_starts_from_mana(self) -> None:
         selected = DEFAULT_MANA_DIRECTORY / "테스트 만화"
         with patch(

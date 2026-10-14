@@ -3,6 +3,7 @@ from unittest import TestCase
 from unittest.mock import Mock
 
 import numpy as np
+from PyQt6.QtCore import QPointF
 
 from advanced_editor.launcher import AdvancedEditorWindow, SPEECH_BALLOON_REPAIR_PROMPT
 
@@ -150,6 +151,25 @@ class ToolContextTest(TestCase):
         self.assertEqual(
             AdvancedEditorWindow.brush_size_for_tool(window, "restore_brush"), 24
         )
+
+    def test_dragging_box_against_image_edge_preserves_its_size(self) -> None:
+        region = {"bbox": [70.0, 20.0, 100.0, 50.0]}
+        window = SimpleNamespace(
+            image_size=(100, 100),
+            selected_region=lambda: region,
+            _mark_region_dirty=Mock(),
+            load_selected_region_to_form=Mock(),
+        )
+
+        AdvancedEditorWindow.update_selected_bbox_from_drag(
+            window,
+            "move",
+            [70.0, 20.0, 100.0, 50.0],
+            QPointF(80.0, 30.0),
+            QPointF(95.0, 30.0),
+        )
+
+        self.assertEqual(region["bbox"], [70.0, 20.0, 100.0, 50.0])
 
     def test_inpainting_progress_exposes_running_and_complete_states(self) -> None:
         state_label = Mock()

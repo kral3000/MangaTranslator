@@ -651,3 +651,83 @@
     outline: 2px solid var(--primary-500) !important;
     outline-offset: 2px !important;
 }
+
+/* Shared cleanup list: native checkboxes, compact rows and a quiet review step. */
+.cleanup-panel { margin-top: 12px !important; max-width: 960px !important; width: 100%; }
+.cleanup-panel .cleanup-description p { margin: 0 0 8px; }
+.cleanup-panel .cleanup-period .wrap:not(.hide) { display: flex !important; flex-wrap: wrap !important; gap: 4px !important; }
+.cleanup-panel > div > .column { gap: 10px !important; }
+.cleanup-panel .cleanup-period label {
+    margin: 0 !important; padding: 6px 10px !important;
+    border: 1px solid var(--border-color-primary) !important;
+    border-radius: var(--button-small-radius, 4px) !important;
+    background: transparent !important; cursor: pointer;
+}
+.cleanup-panel .cleanup-period label input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.cleanup-panel .cleanup-period label:has(input:checked) {
+    border-color: var(--primary-500) !important;
+    background: color-mix(in srgb, var(--primary-500) 12%, var(--block-background-fill)) !important;
+}
+.cleanup-panel .cleanup-period label:focus-within { outline: 2px solid var(--primary-500); outline-offset: 2px; }
+.cleanup-panel .cleanup-filters { align-items: center !important; gap: 8px !important; }
+.cleanup-panel .cleanup-filters button { flex: 0 0 auto !important; }
+.cleanup-panel .cleanup-dates { gap: 8px !important; max-width: 480px !important; }
+.cleanup-panel .cleanup-filters textarea { overflow: hidden !important; resize: none !important; }
+.cleanup-panel .cleanup-filters textarea::placeholder { color: var(--body-text-color-subdued); opacity: 1; }
+.cleanup-panel .cleanup-picker [data-testid="checkbox-group"] {
+    display: flex !important;
+    flex-direction: column !important;
+    flex-wrap: nowrap !important;
+    gap: 0 !important;
+    max-height: clamp(256px, calc(100dvh - 360px), 512px);
+    overflow: auto;
+    scrollbar-gutter: stable;
+    overscroll-behavior: contain;
+    scrollbar-color: var(--border-color-primary) var(--block-background-fill);
+}
+.cleanup-panel:has(.cleanup-dates) .cleanup-picker [data-testid="checkbox-group"] {
+    max-height: clamp(224px, calc(100dvh - 428px), 444px);
+}
+.cleanup-panel .cleanup-picker [data-testid="checkbox-group"] label {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0 !important;
+    padding: 5px 8px !important;
+    min-height: 32px;
+    border: 0 !important;
+    border-bottom: 1px solid var(--border-color-primary) !important;
+    border-radius: 0 !important;
+    background: transparent;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.4;
+    align-items: center !important;
+}
+.cleanup-panel .cleanup-picker label:has(input:checked) {
+    background: color-mix(in srgb, var(--primary-500) 10%, var(--block-background-fill)) !important;
+}
+.cleanup-panel .cleanup-picker label:hover {
+    background: color-mix(in srgb, var(--body-text-color) 5%, var(--block-background-fill)) !important;
+}
+.cleanup-panel .cleanup-picker label:has(input:checked):hover {
+    background: color-mix(in srgb, var(--primary-500) 16%, var(--block-background-fill)) !important;
+}
+.cleanup-panel .cleanup-picker label:focus-within {
+    outline: 2px solid var(--primary-500);
+    outline-offset: -2px;
+}
+.cleanup-panel .cleanup-picker input { flex-shrink: 0; cursor: pointer; }
+.cleanup-panel .cleanup-picker label > span { user-select: text; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cleanup-panel .cleanup-actions { justify-content: flex-end !important; gap: 8px !important; }
+.cleanup-panel .cleanup-actions button { flex: 0 0 auto !important; min-width: 100px !important; }
+.cleanup-panel .cleanup-hint p { font-size: 0.9em; color: var(--body-text-color-subdued); }
+.cleanup-panel .cleanup-summary p { margin: 0; }
+.cleanup-panel .cleanup-confirm { padding: 14px !important; }
+@media (max-width: 640px) {
+    .cleanup-panel .cleanup-filters { flex-wrap: wrap !important; }
+    .cleanup-panel .cleanup-actions { flex-wrap: wrap !important; }
+    .cleanup-panel .cleanup-picker [data-testid="checkbox-group"] { max-height: 50vh; }
+    .cleanup-panel:has(.cleanup-dates) .cleanup-picker [data-testid="checkbox-group"] { max-height: 50vh; }
+}
+@media (pointer: coarse) {
+    .cleanup-panel .cleanup-picker [data-testid="checkbox-group"] label { min-height: 44px; }
+}

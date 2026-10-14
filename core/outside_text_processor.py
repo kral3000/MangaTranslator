@@ -12,11 +12,12 @@ import numpy as np
 from PIL import Image
 from sklearn.cluster import KMeans
 
-from core.config import MangaTranslatorConfig
+from core.config import MangaTranslatorConfig, normalize_outside_text_processing_mode
 from core.image.image_utils import cv2_to_pil, pil_to_cv2, process_bubble_image_cached
 from core.image.inpainting import FluxKleinInpainter, FluxKontextInpainter
 from core.image.ocr_detection import OutsideTextDetector, extract_text_with_manga_ocr
 from core.ml.model_manager import get_model_manager
+from utils.exceptions import CancellationError, TranslationError
 from utils.logging import log_message
 
 # OSB Expansion Parameters
@@ -2043,11 +2044,16 @@ def process_outside_text(
     bubble_data: Optional[List[Dict[str, Any]]] = None,
     text_free_boxes: Optional[List[List[float]]] = None,
     panels: Optional[List[Tuple[int, int, int, int]]] = None,
-    pre_inpaint_data_callback: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
+    pre_inpaint_data_callback: Optional[
+        Callable[[List[Dict[str, Any]]], Optional[set]]
+    ] = None,
     injected_outside_text_regions: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[Image.Image, List[Dict[str, Any]]]:
     """
     Process outside text detection, inpainting, and prepare data for translation.
+
+    In prose mode the callback returns selected original bboxes. Missing
+    classification preserves all outside text; it never authorizes a fill.
 
     This function handles the complete outside text processing pipeline:
     1. Detects text outside speech bubbles using OCR
@@ -2067,7 +2073,9 @@ def process_outside_text(
         - processed_pil_image: The image after outside text inpainting
         - outside_text_data: List of dicts with outside text information for translation
     """
-    if not config.outside_text.enabled:
+    if not config.outside_text.enabled or normalize_outside_text_processing_mode(
+        config.outside_text.processing_mode
+    ) == "off":
         return pil_image, []
 
     log_message("Detecting text outside speech bubbles...", verbose=verbose)
@@ -2510,7 +2518,12 @@ def process_outside_text(
                 verbose=verbose,
             )
 
-        if pre_inpaint_data_callback is not None:
+        selective = normalize_outside_text_processing_mode(
+            config.outside_text.processing_mode
+        ) == "prose"
+        selected_bboxes = set() if selective else None
+        pre_inpaint_outside_text_data = []
+        if pre_inpaint_data_callback is not None or selective:
             try:
                 pre_inpaint_outside_text_data = _build_outside_text_translation_data(
                     pil_image=pil_image,
@@ -2528,12 +2541,51 @@ def process_outside_text(
                     edge_sfx_full_glyph_bboxes=edge_sfx_expanded_bboxes,
                     injected_metadata_by_bbox=injected_metadata_by_bbox,
                 )
-                pre_inpaint_data_callback(pre_inpaint_outside_text_data)
+                if pre_inpaint_data_callback is not None:
+                    selection = pre_inpaint_data_callback(pre_inpaint_outside_text_data)
+                    if selective:
+                        if selection is None:
+                            raise TranslationError(
+                                "Outside text classification returned no selection."
+                            )
+                        selected_bboxes = set(selection)
+            except CancellationError:
+                raise
             except Exception as e:
+                if selective:
+                    raise TranslationError(
+                        f"Outside text classification failed; inpainting skipped: {e}"
+                    ) from e
                 log_message(
                     f"Warning: Failed to prepare pre-inpaint OSB translation data: {e}",
                     always_print=True,
                 )
+
+        selected_indices = [
+            i for i, result in enumerate(raw_outside_text_results)
+            # Crop metadata truncates YOLO float coordinates to integer pixels.
+            # Compare using that same key so valid prose is not silently skipped.
+            if selected_bboxes is None
+            or tuple(int(c) for c in result[0]) in selected_bboxes
+        ]
+        preserve_mask = np.zeros((img_h, img_w), dtype=bool)
+        for i, (coords, _) in enumerate(outside_text_results):
+            if (
+                selected_bboxes is not None
+                and tuple(int(c) for c in raw_outside_text_results[i][0])
+                not in selected_bboxes
+            ):
+                x1, y1, x2, y2 = [int(c) for c in coords]
+                preserve_mask[
+                    max(0, y1):min(img_h, y2), max(0, x1):min(img_w, x2)
+                ] = True
+        if not selected_indices:
+            for item in pre_inpaint_outside_text_data:
+                item.update(
+                    skip_render=True, skip_reason="outside_text_processing_mode",
+                    outside_text_preserve_bbox=item["bbox"],
+                )
+            return pil_image, pre_inpaint_outside_text_data
 
         log_message("Inpainting outside text regions...", verbose=verbose)
 
@@ -2624,9 +2676,12 @@ def process_outside_text(
             text_box_proximity_ratio=config.outside_text.text_box_proximity_ratio,
             verbose=verbose,
             image_override=pil_image,
-            existing_results=raw_outside_text_results,
+            existing_results=[raw_outside_text_results[i] for i in selected_indices],
         )
         for group in mask_groups or []:
+            group["mask_indices"] = [
+                selected_indices[i] for i in group.get("mask_indices", [])
+            ]
             bbox_dict = group.get("original_bbox") or group.get("bbox") or {}
             try:
                 group_bbox = (
@@ -2642,6 +2697,8 @@ def process_outside_text(
 
         injected_masks_by_index: Dict[int, Any] = {}
         for idx, raw_res in enumerate(raw_outside_text_results):
+            if idx not in selected_indices:
+                continue
             try:
                 raw_bbox_tuple = tuple(int(c) for c in raw_res[0])
             except Exception:
@@ -2907,6 +2964,7 @@ def process_outside_text(
                         combined_mask = np.logical_and(
                             raw_combined_mask, np.logical_not(total_bubble_mask)
                         )
+                    combined_mask = np.logical_and(combined_mask, ~preserve_mask)
                     if not np.any(combined_mask):
                         log_message(
                             "Skipping outside text region after bubble masking (no remaining area)",
@@ -3294,6 +3352,9 @@ def process_outside_text(
                                     )
                                 else:
                                     region_mask = combined_mask[py0:py1, px0:px1]
+                                region_mask = np.logical_and(
+                                    region_mask, ~preserve_mask[py0:py1, px0:px1]
+                                )
                                 if np.any(region_mask):
                                     mask_pil = Image.fromarray(
                                         (region_mask * 255).astype(np.uint8),
@@ -3424,7 +3485,10 @@ def process_outside_text(
                                     rect_mask, np.logical_not(total_bubble_mask)
                                 )
 
-                            region_mask = rect_mask[p_y0:p_y1, p_x0:p_x1]
+                            region_mask = np.logical_and(
+                                rect_mask[p_y0:p_y1, p_x0:p_x1],
+                                ~preserve_mask[p_y0:p_y1, p_x0:p_x1],
+                            )
                             if np.any(region_mask):
                                 mask_pil = Image.fromarray(
                                     (region_mask * 255).astype(np.uint8), mode="L"
@@ -3719,8 +3783,23 @@ def process_outside_text(
             injected_metadata_by_bbox=injected_metadata_by_bbox,
         )
 
+        if np.any(preserve_mask):
+            # Last shared compositor guard covers grouped Flux and every fallback.
+            preserved = np.asarray(current_image.convert(pil_image.mode)).copy()
+            source = np.asarray(pil_image)
+            preserved[preserve_mask] = source[preserve_mask]
+            current_image = Image.fromarray(preserved)
+        if selected_bboxes is not None:
+            for item in outside_text_data:
+                if tuple(item["original_bbox"]) not in selected_bboxes:
+                    item.update(
+                        skip_render=True, skip_reason="outside_text_processing_mode",
+                        outside_text_preserve_bbox=item["bbox"],
+                    )
         return current_image, outside_text_data
 
+    except (TranslationError, CancellationError):
+        raise
     except Exception as e:
         log_message(
             f"Error during outside text detection/inpainting: {e}",

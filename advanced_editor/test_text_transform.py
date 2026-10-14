@@ -2,10 +2,22 @@ import unittest
 
 import numpy as np
 
-from core.editor_session import _region_text_transform_matrix
+from core.editor_session import _region_text_transform, _region_text_transform_matrix
 
 
 class TextTransformTest(unittest.TestCase):
+    def test_hy_pop_width_compensation_preserves_display_value(self):
+        for weight in ("L", "M", "B"):
+            region = {"bbox": [0, 0, 100, 100], "render": {
+                "font_dir": f"fonts/HY_POP/HY피오피{weight}.TTF"
+            }}
+            self.assertEqual(_region_text_transform(region)[:2], (1.0, 1.0))
+            self.assertAlmostEqual(_region_text_transform_matrix(region)[0, 0], 0.9)
+            region["render"]["transform_scale_x"] = 0.9
+            self.assertAlmostEqual(_region_text_transform_matrix(region)[0, 0], 0.81)
+        region["render"] = {"font_dir": "other.ttf"}
+        self.assertAlmostEqual(_region_text_transform_matrix(region)[0, 0], 1.0)
+
     def test_projective_transform_keeps_box_center_fixed(self):
         region = {
             "bbox": [10, 20, 110, 220],

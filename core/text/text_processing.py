@@ -330,6 +330,23 @@ WRAPPED_SYMBOL_CLOSERS = (
 )
 
 
+def strip_translation_terminal_periods(text: str) -> str:
+    """Remove sentence-ending full stops while retaining ellipses and OCR effects."""
+    def replace(match: re.Match) -> str:
+        prefix = text[:match.start()].rsplit("\n", 1)[-1]
+        visible = re.sub(r"</?[A-Z][A-Z0-9]*>", "", prefix).rstrip()
+        if visible.endswith((".", "。", "．", "…", "⋯", "‥")):
+            return match.group()
+        return "" if any(char.isalnum() for char in visible) else match.group()
+
+    return re.sub(
+        r"(?<![.。．…⋯‥])[.。．](?=[ \t]*(?:[\"'”’」』】）》〉\]\)*_][ \t]*)*(?:</[A-Z][A-Z0-9]*>|\r?$))",
+        replace,
+        text,
+        flags=re.MULTILINE,
+    )
+
+
 def is_detached_trailing_punctuation(token: str) -> bool:
     return bool(DETACHED_TRAILING_PUNCT_RE.match(token))
 

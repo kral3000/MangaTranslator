@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import re
+import shutil
 import threading
 import time
 from collections import OrderedDict
@@ -17,6 +18,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from core.ai_image_region import AI_FILE_KEYS
 from core.config import MangaTranslatorConfig, RenderingConfig
 from core.image.image_utils import save_image_with_compression, upscale_image
 from core.text.text_processing import extract_translation_tag
@@ -476,6 +478,18 @@ def repair_session_assets(
         session["base_image_path"] = str(base_path.resolve())
 
     for index, region in enumerate(session.get("regions", []), start=1):
+        for key in AI_FILE_KEYS:
+            stored = _resolve_stored_path(path, region.get(key))
+            if stored is not None and stored.is_file():
+                image_id = re.sub(r"[^a-zA-Z0-9_-]", "", str((region.get("ai_image") or {}).get("id") or region.get("id")))[:80]
+                target = assets_dir / f"ai_{image_id}_{key[3:]}.png"
+                try:
+                    if stored.resolve() != target.resolve() and not target.is_file():
+                        shutil.copy2(stored, target)
+                    region[key] = str(target.resolve())
+                except OSError as exc:
+                    warnings.append(f"Could not preserve AI lettering {index}: {exc}")
+                    region[key] = str(stored.resolve())
         mask_path = _resolve_stored_path(path, region.get("mask_path"))
         if mask_path is None or not mask_path.exists():
             continue
@@ -549,6 +563,8 @@ def _region_render_signature(region: Dict[str, Any]) -> Dict[str, Any]:
         "mask_digest": _mask_digest(region.get("mask_path")) if region.get("use_mask") else "",
         "render": _jsonable(render),
     }
+    if region.get("ai_image"):
+        signature["ai_image"] = {key: _jsonable(region["ai_image"].get(key)) for key in ("id", "box")}
     return signature
 
 
@@ -861,7 +877,9 @@ def _safe_int_bbox(bbox: Any, image_size: Tuple[int, int]) -> Tuple[int, int, in
     return left, top, right, bottom
 
 
-def _region_text_transform(region: Dict[str, Any]) -> Tuple[float, float, float, float]:
+def _region_text_transform(
+    region: Dict[str, Any], *, apply_font_compensation: bool = False
+) -> Tuple[float, float, float, float]:
     """Return the editable text-layer scale, skew and perspective values."""
     render = region.get("render", {})
     if not isinstance(render, dict):
@@ -874,8 +892,10 @@ def _region_text_transform(region: Dict[str, Any]) -> Tuple[float, float, float,
             value = default
         return max(minimum, min(maximum, value))
 
+    font_name = Path(str(render.get("font_dir") or "")).stem.casefold()
+    width_factor = 0.9 if apply_font_compensation and font_name.startswith("hy피오피") else 1.0
     return (
-        number("transform_scale_x", 1.0, 0.1, 4.0),
+        number("transform_scale_x", 1.0, 0.1, 4.0) * width_factor,
         number("transform_scale_y", 1.0, 0.1, 4.0),
         number("transform_skew_x_deg", 0.0, -60.0, 60.0),
         number("transform_perspective_y", 0.0, -0.8, 0.8),
@@ -890,7 +910,7 @@ def _region_text_transform_matrix(
     height = max(1.0, float(y2) - float(y1))
     center_x = (float(x1) + float(x2)) / 2.0
     center_y = (float(y1) + float(y2)) / 2.0
-    scale_x, scale_y, skew_deg, perspective_y = _region_text_transform(region)
+    scale_x, scale_y, skew_deg, perspective_y = _region_text_transform(region, apply_font_compensation=True)
     rotation = math.radians(float(region.get("rotation_deg") or 0.0))
     cosine, sine = math.cos(rotation), math.sin(rotation)
     translate_to_origin = np.array(
@@ -1933,9 +1953,13 @@ def add_region(session_path: Any) -> Tuple[Dict[str, Any], str, Image.Image]:
         template = {"render": deepcopy(session.get("default_render", {}))}
     template.pop("render_baseline", None)
     for key in list(template):
-        if str(key).startswith("_editor_"):
+        if str(key).startswith(("_editor_", "ai_")):
             template.pop(key, None)
-    region_id = f"r{new_index:03d}"
+    existing_ids = {str(region.get("id") or "") for region in session.get("regions", [])}
+    next_number = new_index
+    while f"r{next_number:03d}" in existing_ids:
+        next_number += 1
+    region_id = f"r{next_number:03d}"
     template.update(
         {
             "id": region_id,
@@ -2206,14 +2230,14 @@ def _editor_overflow_bboxes(
     candidates: List[Tuple[int, int, int, int]] = []
     original = _safe_int_bbox([x1, y1, x2, y2], image_size)
     for width, height in dimensions:
-        candidate = _safe_int_bbox(
-            [
+        candidate = tuple(
+            int(round(value))
+            for value in (
                 center_x - width / 2.0,
                 center_y - height / 2.0,
                 center_x + width / 2.0,
                 center_y + height / 2.0,
-            ],
-            image_size,
+            )
         )
         if candidate != original and candidate not in candidates:
             candidates.append(candidate)
@@ -2226,7 +2250,7 @@ def _render_region_onto(
     index: int,
     errors: List[str],
 ) -> Image.Image:
-    if not region.get("enabled", True):
+    if region.get("ai_image") or not region.get("enabled", True):
         return image
     text = str(region.get("translation") or "")
     if not text.strip():
@@ -2249,7 +2273,7 @@ def _render_region_onto(
     vertical_stack = bool(region.get("vertical_stack", False))
     text_color_rgb = _normalize_rgb(region.get("font_color"))
 
-    scale_x, scale_y, skew_deg, perspective_y = _region_text_transform(region)
+    scale_x, scale_y, skew_deg, perspective_y = _region_text_transform(region, apply_font_compensation=True)
     use_text_warp = (
         abs(scale_x - 1.0) > 1e-4
         or abs(scale_y - 1.0) > 1e-4
@@ -2304,25 +2328,6 @@ def _render_region_onto(
         return image
 
 
-def _remove_baseline_region_pixels(
-    image: Image.Image,
-    clean_base: Image.Image,
-    base_identity: str,
-    region: Dict[str, Any],
-    index: int,
-) -> Image.Image:
-    baseline_region = _baseline_region(region)
-    if baseline_region is None or not baseline_region.get("enabled", True):
-        return image
-    image_arr = np.asarray(image.convert("RGBA"), dtype=np.uint8).copy()
-    clean_arr = np.asarray(clean_base.convert("RGBA"), dtype=np.uint8)
-    left, top, right, bottom = _expanded_union_bbox(region, image.size)
-    if right <= left or bottom <= top:
-        return image
-    image_arr[top:bottom, left:right] = clean_arr[top:bottom, left:right]
-    return Image.fromarray(image_arr, mode="RGBA")
-
-
 def _apply_region_patch(
     image: Image.Image,
     clean_base: Image.Image,
@@ -2331,6 +2336,8 @@ def _apply_region_patch(
     index: int,
     errors: List[str],
 ) -> Image.Image:
+    if region.get("ai_image"):
+        return image
     patch, patch_errors = _cached_region_patch(
         clean_base,
         base_identity,
@@ -2340,11 +2347,13 @@ def _apply_region_patch(
     errors.extend(patch_errors)
     if patch is None:
         return image
-    (left, top, right, bottom), patch_mask, pixels = patch
-    image_arr = np.asarray(image.convert("RGBA"), dtype=np.uint8).copy()
-    image_crop = image_arr[top:bottom, left:right]
-    image_crop[patch_mask] = pixels[patch_mask]
-    return Image.fromarray(image_arr, mode="RGBA")
+    box, patch_mask, pixels = patch
+    result = image.convert("RGBA")
+    result.paste(
+        Image.fromarray(pixels), box,
+        Image.fromarray(patch_mask.astype(np.uint8) * 255),
+    )
+    return result
 
 
 def _boxes_intersect(
@@ -2374,7 +2383,9 @@ def _expand_int_box(
     )
 
 
-def render_session_image(session: Dict[str, Any]) -> Tuple[Image.Image, List[str]]:
+def _render_session_text_image(
+    session: Dict[str, Any], *, include_text: bool = True,
+) -> Tuple[Image.Image, List[str]]:
     """Render an editor session in memory using the exact export renderer."""
     _ensure_region_baselines(session)
     base_path = _editor_base_image_path(session)
@@ -2397,15 +2408,17 @@ def render_session_image(session: Dict[str, Any]) -> Tuple[Image.Image, List[str
     changed_region_indexes = [
         index
         for index, region in enumerate(session.get("regions", []), start=1)
-        if str(region.get("id") or "") in dirty_region_ids or not _region_is_baseline(region)
+        if (not include_text and not region.get("ai_image"))
+        or str(region.get("id") or "") in dirty_region_ids or not _region_is_baseline(region)
     ]
     if background_path.is_file():
         image = Image.open(background_path).convert("RGBA")
         image = _apply_paint_overlay(image, session)
         if text_free_inpainted_background:
             errors: List[str] = []
-            for index, region in enumerate(session.get("regions", []), start=1):
-                image = _render_region_onto(image, region, index, errors)
+            if include_text:
+                for index, region in enumerate(session.get("regions", []), start=1):
+                    image = _render_region_onto(image, region, index, errors)
             return _apply_original_restore(image, session), errors
         if not changed_region_indexes and not deleted_boxes:
             return _apply_original_restore(image, session), []
@@ -2413,56 +2426,50 @@ def render_session_image(session: Dict[str, Any]) -> Tuple[Image.Image, List[str
         if clean_base.size != image.size:
             clean_base = clean_base.resize(image.size, Image.Resampling.LANCZOS)
         base_identity = _image_cache_identity(base_path, image.size)
-        changed_baseline_boxes: List[Tuple[int, int, int, int]] = []
+        clean_base = _apply_paint_overlay(clean_base, session)
+        overlay_path = Path(session.get("paint_overlay_path") or "")
+        if overlay_path.is_file():
+            base_identity += "|" + _image_cache_identity(overlay_path, image.size)
+        erase_boxes: List[Tuple[int, int, int, int]] = []
         for box in deleted_boxes:
             try:
                 erase_box = _safe_int_bbox(box, image.size)
             except Exception:
                 continue
             expanded_erase_box = _expand_int_box(erase_box, image.size)
-            image.paste(clean_base.crop(expanded_erase_box), expanded_erase_box)
-            changed_baseline_boxes.append(expanded_erase_box)
+            erase_boxes.append(expanded_erase_box)
         for index in changed_region_indexes:
             region = session.get("regions", [])[index - 1]
             baseline_region = _baseline_region(region)
             if baseline_region is not None:
                 try:
-                    changed_baseline_boxes.append(
+                    erase_boxes.append(
                         _expanded_union_bbox(region, image.size)
                     )
                 except Exception:
                     pass
-            image = _remove_baseline_region_pixels(
-                image,
-                clean_base,
-                base_identity,
-                region,
-                index,
-            )
-        errors: List[str] = []
-        changed_index_set = set(changed_region_indexes)
-        for index, region in enumerate(session.get("regions", []), start=1):
-            if index in changed_index_set or not region.get("enabled", True):
-                continue
-            try:
+        affected_indexes = set(changed_region_indexes)
+        # Erasing part of a neighbor requires clearing its entire old text before
+        # redrawing. Include subsequent neighbors before applying any text patches.
+        # ponytail: repeated scans; use spatial indexing only for very dense pages.
+        while include_text:
+            added = False
+            for index, region in enumerate(session.get("regions", []), start=1):
+                if index in affected_indexes or not region.get("enabled", True):
+                    continue
                 region_box = _safe_int_bbox(region.get("bbox"), image.size)
-            except Exception:
+                if any(_boxes_intersect(region_box, box) for box in erase_boxes):
+                    affected_indexes.add(index)
+                    erase_boxes.append(_expanded_union_bbox(region, image.size))
+                    added = True
+            if not added:
+                break
+        for erase_box in erase_boxes:
+            image.paste(clean_base.crop(erase_box), erase_box)
+        errors: List[str] = []
+        for index, region in enumerate(session.get("regions", []), start=1):
+            if not include_text or index not in affected_indexes:
                 continue
-            if not any(
-                _boxes_intersect(region_box, changed_box)
-                for changed_box in changed_baseline_boxes
-            ):
-                continue
-            image = _apply_region_patch(
-                image,
-                clean_base,
-                base_identity,
-                region,
-                index,
-                errors,
-            )
-        for index in changed_region_indexes:
-            region = session.get("regions", [])[index - 1]
             image = _apply_region_patch(
                 image,
                 clean_base,
@@ -2477,10 +2484,54 @@ def render_session_image(session: Dict[str, Any]) -> Tuple[Image.Image, List[str
     image = _apply_paint_overlay(image, session)
     errors: List[str] = []
 
-    for index, region in enumerate(session.get("regions", []), start=1):
-        image = _render_region_onto(image, region, index, errors)
+    if include_text:
+        for index, region in enumerate(session.get("regions", []), start=1):
+            image = _render_region_onto(image, region, index, errors)
 
     return _apply_original_restore(image, session), errors
+
+
+def render_session_background(
+    session: Dict[str, Any], *, include_ai: bool = True, errors: Optional[List[str]] = None,
+) -> Image.Image:
+    """Compose current artwork and brush layers without editable text."""
+    from core.ai_image_region import apply_ai_image_regions
+
+    image, background_errors = _render_session_text_image(session, include_text=False)
+    if errors is not None:
+        errors.extend(background_errors)
+    if include_ai:
+        image = apply_ai_image_regions(image, session, errors)
+    elif any(region.get("ai_image") for region in session.get("regions", [])):
+        # A saved flattened page can contain AI pixels; keep the baked artwork independent.
+        clean_base = Image.open(_editor_base_image_path(session)).convert("RGBA")
+        if clean_base.size != image.size:
+            clean_base = clean_base.resize(image.size, Image.Resampling.LANCZOS)
+        clean_base = _apply_paint_overlay(clean_base, session)
+        for region in session.get("regions", []):
+            if not region.get("ai_image"):
+                continue
+            box = tuple(int(v) for v in region["ai_image"]["box"])
+            with Image.open(region["ai_mask_path"]) as opened:
+                mask = opened.convert("L").point(lambda value: 255 if value else 0)
+            image.paste(clean_base.crop(box), box, mask)
+    return _apply_original_restore(image, session)
+
+
+def render_session_image(session: Dict[str, Any]) -> Tuple[Image.Image, List[str]]:
+    layered = any(region.get("ai_image") for region in session.get("regions", [])) or Path(
+        session.get("restore_mask_path") or ""
+    ).is_file()
+    if not layered:
+        return _render_session_text_image(session)
+    errors: List[str] = []
+    background = render_session_background(session, errors=errors)
+    image = background.copy()
+    # Cache against actual lower-layer pixels, including AI toggles and brush changes.
+    base_identity = "layered|" + hashlib.sha256(background.tobytes()).hexdigest()
+    for index, region in enumerate(session.get("regions", []), start=1):
+        image = _apply_region_patch(image, background, base_identity, region, index, errors)
+    return image, errors
 
 
 def rerender_session(session_path: Any) -> Tuple[Image.Image, Path, List[str]]:

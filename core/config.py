@@ -252,7 +252,7 @@ class OutsideTextConfig:
 
 
 OUTSIDE_TEXT_PROCESSING_MODES = {"off", "prose", "all"}
-OUTSIDE_TEXT_PROSE_EXCLUDED_TAGS = {"OT", "OH", "SFX", "SFXI", "SFXS"}
+OUTSIDE_TEXT_PROSE_TAGS = {"BN", "BE", "BT", "BW", "ON", "OM", "OD", "OE"}
 
 
 def normalize_outside_text_processing_mode(value: Any, enabled: bool = False) -> str:
@@ -270,7 +270,7 @@ def should_process_outside_text_tag(mode: Any, render_tag: Any) -> bool:
         return False
     if normalized_mode == "all":
         return True
-    return str(render_tag or "").strip().upper() not in OUTSIDE_TEXT_PROSE_EXCLUDED_TAGS
+    return str(render_tag or "").strip().upper() in OUTSIDE_TEXT_PROSE_TAGS
 
 
 @dataclass

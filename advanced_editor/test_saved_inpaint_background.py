@@ -32,7 +32,7 @@ class SavedInpaintBackgroundTest(TestCase):
             stroke[1, 1] = 255
             window = SimpleNamespace(session=session, image_size=(12, 12),
                 session_path=root / 'session.json', _stroke_mask=Mock(return_value=stroke),
-                status_label=Mock(), _dirty_region_ids=set())
+                status_label=Mock(), _dirty_region_ids=set(), brush_size_for_tool=Mock(return_value=5))
             self.assertEqual(AdvancedEditorWindow._clean_base_image(window).getpixel((6, 6)), (0, 0, 255, 255))
             AdvancedEditorWindow._apply_restore_mask_stroke(window, 'restore_brush', [])
             with Image.open(mask) as result:

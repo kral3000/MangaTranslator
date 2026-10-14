@@ -8,6 +8,7 @@ from core.config import normalize_outside_text_processing_mode
 from core.tag_styles import TAG_DEFINITIONS, TAG_STYLE_COLUMNS, tag_styles_to_table
 
 from . import callbacks, character_profiles, korean, settings_manager, utils
+from .cleanup import build_cleanup_panel
 
 korean.install_gradio_korean(gr)
 
@@ -922,6 +923,7 @@ def create_layout(
                                 "가져온 이미지 편집하기",
                                 visible=False,
                             )
+                session_cleanup_event = build_cleanup_panel("sessions")
                 image_editor_status = gr.Textbox(
                     label="상태",
                     interactive=False,
@@ -3150,6 +3152,7 @@ def create_layout(
                                 visible=False,
                                 interactive=True,
                             )
+                            build_cleanup_panel("outputs", output_directory)
                             disable_auto_save = gr.Checkbox(
                                 label="번역 자동저장 안함",
                                 value=bool(
@@ -4649,6 +4652,12 @@ def create_layout(
             outputs=[image_editor_status],
             queue=False,
         )
+        session_cleanup_event.then(
+            fn=callbacks.handle_refresh_existing_editor_sessions,
+            inputs=[],
+            outputs=[existing_editor_session_select, existing_editor_open_button, image_editor_status],
+            queue=False,
+        )
 
         image_editor_create_button.click(
             fn=functools.partial(
@@ -4912,5 +4921,7 @@ def create_layout(
             queue=False,
         )
         app.load(fn=None, inputs=None, outputs=None, js=js_folder_upload, queue=False)
+        app.load(fn=None, inputs=None, outputs=None,
+                 js=Path(__file__).with_name("cleanup.js").read_text(encoding="utf-8"), queue=False)
 
     return app

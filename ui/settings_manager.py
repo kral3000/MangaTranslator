@@ -16,7 +16,21 @@ CONFIG_FILE = (
     / "config.json"
 )
 
+
+def _codex_models(refresh: bool = False) -> List[str]:
+    """Use the account's model catalog without a hard-coded generation list."""
+    from utils.endpoints.codex import cached_codex_catalog, codex_catalog
+
+    try:
+        models = codex_catalog(refresh=refresh)
+    except Exception as exc:
+        log_message(f"Could not refresh Codex models: {exc}", always_print=True)
+        models = cached_codex_catalog()
+    return list(dict.fromkeys(m["model"] for m in models if not m.get("hidden")))
+
+
 PROVIDER_MODELS: Dict[str, List[str]] = {
+    "Codex": _codex_models(),
     "Google": [
         "gemini-3.5-flash",
         "gemini-3.1-pro-preview",
@@ -132,6 +146,7 @@ DEFAULT_SETTINGS = {
         else None
     ),  # Default active model
     "provider_models": {
+        "Codex": PROVIDER_MODELS["Codex"][0] if PROVIDER_MODELS["Codex"] else None,
         "Google": PROVIDER_MODELS["Google"][0] if PROVIDER_MODELS["Google"] else None,
         "OpenAI": PROVIDER_MODELS["OpenAI"][0] if PROVIDER_MODELS["OpenAI"] else None,
         "Anthropic": (

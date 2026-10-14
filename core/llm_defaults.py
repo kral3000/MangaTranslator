@@ -8,6 +8,7 @@ from typing import Dict, Optional
 DEFAULT_LLM_PROVIDER = "Google"
 
 _PROVIDER_SAMPLING_DEFAULTS: Dict[str, Dict[str, float | int]] = {
+    "Codex": {"temperature": 0.1, "top_p": 1.0, "top_k": 0},
     "Google": {"temperature": 0.1, "top_p": 0.95, "top_k": 64},
     "OpenAI": {"temperature": 0.1, "top_p": 1.0, "top_k": 0},
     "Anthropic": {"temperature": 0.1, "top_p": 1.0, "top_k": 0},

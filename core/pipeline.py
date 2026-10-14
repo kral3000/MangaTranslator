@@ -23,6 +23,7 @@ from core.config import (
     MangaTranslatorConfig,
     PreprocessingConfig,
     RenderingConfig,
+    normalize_outside_text_processing_mode,
     should_process_outside_text_tag,
 )
 from core.scaling import scale_area, scale_font_size, scale_length, scale_scalar
@@ -62,6 +63,7 @@ from .services.translation import (
     call_translation_api_batch,
     prepare_bubble_images_for_translation,
 )
+from .text.font_manager import find_font_variants
 from .text.placeholders import generate_test_placeholders
 from .text.text_processing import extract_translation_tag, is_latin_style_language
 from .text.text_renderer import render_text_skia
@@ -1492,7 +1494,13 @@ def _apply_tag_style_overrides(
 
     tag_font_dir = _get_tag_style_value(style, "font_dir")
     if tag_font_dir:
-        font_dir = str(tag_font_dir)
+        if Path(tag_font_dir).exists() and find_font_variants(str(tag_font_dir)).get("regular"):
+            font_dir = str(tag_font_dir)
+        else:
+            log_message(
+                f"Tag font unavailable for <{tag_name}>: {tag_font_dir}; using {font_dir}",
+                always_print=True,
+            )
 
     tag_min_font = _get_tag_style_value(style, "min_font_size")
     tag_max_font = _get_tag_style_value(style, "max_font_size")
@@ -2973,7 +2981,7 @@ def _merge_overlapping_speech_edge_split_translations(
 
     merged_count = 0
     for split_index, split_item in enumerate(sorted_items):
-        if not split_item.get("speech_edge_split"):
+        if not split_item.get("speech_edge_split") or split_item.get("skip_render"):
             continue
         target_index = _speech_edge_merge_target_index(
             split_item, sorted_items, split_index
@@ -10945,6 +10953,79 @@ def _apply_pre_upscale_if_needed(
     return upscaled, factor
 
 
+def _select_outside_text_for_inpainting(items, translations, mode, provider):
+    """Only classified, valid translations may authorize destructive OSB cleanup."""
+    if len(items) != len(translations):
+        raise TranslationError(
+            "Cannot select outside text: incomplete translation results."
+        )
+    selected = set()
+    excluded = set()
+    for item, translation in zip(items, translations):
+        if not item.get("is_outside_text"):
+            continue
+        bbox = tuple(item.get("original_bbox") or item["bbox"])
+        if not _is_invalid_translation_text(
+            translation, provider
+        ) and should_process_outside_text_tag(
+            mode, extract_translation_tag(translation)[0]
+        ):
+            selected.add(bbox)
+        else:
+            excluded.add(bbox)
+    return selected - excluded
+
+
+def _restore_excluded_outside_text(
+    image, original, items, translations, mode, verbose=False
+):
+    """Restore skipped OSB before snapshotting the editor background or rendering."""
+    excluded = {
+        index
+        for index, item in enumerate(items)
+        if item.get("is_outside_text", False)
+        and (
+            item.get("skip_reason") == "outside_text_processing_mode"
+            or (
+                not item.get("skip_render")
+                and not should_process_outside_text_tag(
+                    mode, extract_translation_tag(translations[index])[0]
+                )
+            )
+        )
+    }
+    protected = [
+        bbox
+        for index, item in enumerate(items)
+        if index not in excluded and not item.get("skip_render")
+        for bbox in [_text_region_restore_protection_bbox(item, image.size)]
+        if bbox is not None
+    ]
+    for index in sorted(excluded):
+        item = items[index]
+        preserve_bbox = item.get("outside_text_preserve_bbox")
+        bbox = preserve_bbox or (
+            item.get("original_bbox") if item.get("edge_sfx_full_glyph") else None
+        )
+        if bbox is None:
+            bbox = _osb_layout_bbox(item, image.size)
+        image, _ = _restore_original_region_excluding_bboxes(
+            image,
+            original,
+            tuple(int(round(float(v))) for v in bbox),
+            [] if preserve_bbox is not None else protected,
+            None,
+        )
+        item["skip_render"] = True
+        item["skip_reason"] = "outside_text_processing_mode"
+        log_message(
+            f"Restored original outside text {bbox} - excluded by {mode} mode",
+            verbose=verbose,
+            always_print=True,
+        )
+    return image
+
+
 def _should_overlap_inpaint_translation(config: MangaTranslatorConfig) -> bool:
     """Optionally overlap remote LLM calls with local inpainting work."""
     return (
@@ -11283,7 +11364,12 @@ def translate_and_render(
 
     _panels_detected_early = panels
 
-    overlap_inpaint_translation = _should_overlap_inpaint_translation(config)
+    select_before_inpaint = (
+        config.outside_text.enabled
+        and normalize_outside_text_processing_mode(config.outside_text.processing_mode) == "prose"
+        and not config.test_mode and not config.cleaning_only
+    )
+    overlap_inpaint_translation = select_before_inpaint or _should_overlap_inpaint_translation(config)
     speech_edge_split_data: List[Dict[str, Any]] = []
     if bool(getattr(config.outside_text, "enabled", False)):
         speech_edge_split_data = _detect_speech_edge_text_splits(
@@ -11294,7 +11380,7 @@ def translate_and_render(
             getattr(config.translation, "osb_min_side_pixels", SPEECH_EDGE_SPLIT_MIN_SIDE_PIXELS),
             verbose,
         )
-        if speech_edge_split_data and overlap_inpaint_translation:
+        if speech_edge_split_data and overlap_inpaint_translation and not select_before_inpaint:
             overlap_inpaint_translation = False
             log_message(
                 "Parallel inpaint/LLM translation disabled: separated "
@@ -11311,6 +11397,8 @@ def translate_and_render(
 
     if overlap_inpaint_translation:
         log_message(
+            "Selective outside text: classifying before inpainting"
+            if select_before_inpaint else
             "Parallel inpaint/LLM translation enabled: preparing request before inpainting",
             always_print=True,
         )
@@ -11348,6 +11436,8 @@ def translate_and_render(
             if upscale_model is not None:
                 get_model_manager().clear_cache()
         except Exception as e:
+            if select_before_inpaint:
+                raise TranslationError("Could not prepare text classification before inpainting.") from e
             overlap_inpaint_translation = False
             async_prepared_bubble_data = None
             log_message(
@@ -11388,7 +11478,7 @@ def translate_and_render(
             prepared_bubbles = async_prepared_bubble_data or []
             valid_bubbles = [b for b in prepared_bubbles if b.get("image_b64")]
             candidate_outside_text_data = candidate_outside_text_data or []
-            if _has_bubble_overlap_rescue_osb(candidate_outside_text_data):
+            if _has_bubble_overlap_rescue_osb(candidate_outside_text_data) and not select_before_inpaint:
                 overlap_inpaint_translation = False
                 async_prepared_bubble_data = None
                 log_message(
@@ -11450,11 +11540,34 @@ def translate_and_render(
                 _translation_worker
             )
             log_message(
+                f"Started LLM translation before inpainting ({len(bubble_images_b64)} items)"
+                if select_before_inpaint else
                 f"Started LLM translation request while inpainting ({len(bubble_images_b64)} items)",
                 always_print=True,
             )
 
-    # Process outside text detection and inpainting (bubble-aware)
+    def _select_before_outside_inpaint(candidate_outside_text_data):
+        if cancellation_manager and cancellation_manager.is_cancelled():
+            raise CancellationError("Process cancelled by user.")
+        if not candidate_outside_text_data:
+            return set()
+        _start_inpaint_translation_overlap(candidate_outside_text_data)
+        if async_translation_future is None:
+            raise TranslationError("Outside text classification did not start; image preserved.")
+        try:
+            translated, _, source_items = async_translation_future.result()
+            if cancellation_manager and cancellation_manager.is_cancelled():
+                raise CancellationError("Process cancelled by user.")
+            return _select_outside_text_for_inpainting(
+                source_items, translated, config.outside_text.processing_mode,
+                config.translation.provider,
+            )
+        except Exception:
+            if async_translation_executor is not None:
+                async_translation_executor.shutdown(wait=False)
+            raise
+
+    # Classify selective OSB before any fill, mask expansion, or model loading.
     pil_image_processed, outside_text_data = process_outside_text(
         pil_image_processed,
         config,
@@ -11465,12 +11578,14 @@ def translate_and_render(
         text_free_boxes=text_free_boxes,
         panels=panels,
         pre_inpaint_data_callback=(
-            _start_inpaint_translation_overlap if overlap_inpaint_translation else None
+            _select_before_outside_inpaint if select_before_inpaint else
+            (_start_inpaint_translation_overlap if overlap_inpaint_translation else None)
         ),
         injected_outside_text_regions=speech_edge_split_data,
     )
     if (
         overlap_inpaint_translation
+        and not select_before_inpaint
         and async_translation_future is None
         and _has_bubble_overlap_rescue_osb(outside_text_data)
     ):
@@ -11644,6 +11759,11 @@ def translate_and_render(
 
         # Check for Cleaning Only Mode
         if config.cleaning_only:
+            pil_cleaned_image = _restore_excluded_outside_text(
+                pil_cleaned_image, original_restore_image, outside_text_data,
+                [""] * len(outside_text_data), config.outside_text.processing_mode, verbose,
+            )
+            final_image_to_save = pil_cleaned_image
             log_message("Cleaning only mode - skipping translation", always_print=True)
         else:
             main_min_font = scale_font_size(
@@ -12020,6 +12140,8 @@ def translate_and_render(
                             )
                             if async_translation_future is not None:
                                 log_message(
+                                    "Reusing classification completed before inpainting"
+                                    if select_before_inpaint else
                                     "Waiting for LLM translation request started during inpainting",
                                     always_print=True,
                                 )
@@ -12168,6 +12290,11 @@ def translate_and_render(
                 }
                 log_message("Rendering translations...", verbose=verbose)
                 if len(translated_texts) == len(sorted_bubble_data):
+                    pil_cleaned_image = _restore_excluded_outside_text(
+                        pil_cleaned_image, original_restore_image, sorted_bubble_data,
+                        translated_texts, config.outside_text.processing_mode, verbose,
+                    )
+                    final_image_to_save = pil_cleaned_image
                     editor_session_base_image = (
                         pil_cleaned_image.copy() if edit_session_path is not None else None
                     )
@@ -12692,8 +12819,8 @@ def translate_and_render(
                         bbox = bubble["bbox"]
                         if bubble.get("skip_render"):
                             log_message(
-                                "Skipping merged speech-edge text "
-                                f"{bbox}; rendered with {bubble.get('merged_into_bbox')}",
+                                f"Skipping text {bbox}: "
+                                f"{bubble.get('skip_reason') or 'merged speech-edge text'}",
                                 verbose=verbose,
                             )
                             continue
@@ -12810,40 +12937,6 @@ def translate_and_render(
                             )
                             if protected_index != i and protected_bbox is not None
                         ]
-
-                        if is_outside_text and not should_process_outside_text_tag(
-                            config.outside_text.processing_mode,
-                            render_tag,
-                        ):
-                            restore_bbox = tuple(
-                                int(round(float(value)))
-                                for value in osb_position_bbox
-                            )
-                            (
-                                pil_cleaned_image,
-                                blocked_restore_pixels,
-                            ) = _restore_original_region_excluding_bboxes(
-                                pil_cleaned_image,
-                                original_restore_image,
-                                restore_bbox,
-                                other_restore_protection_bboxes,
-                                None,
-                            )
-                            final_image_to_save = pil_cleaned_image
-                            bubble["skip_render"] = True
-                            log_message(
-                                "Restored original outside text "
-                                f"{bbox} - <{render_tag or 'UNTAGGED'}> excluded by "
-                                f"{config.outside_text.processing_mode} mode"
-                                + (
-                                    f" ({blocked_restore_pixels} protected px)"
-                                    if blocked_restore_pixels > 0
-                                    else ""
-                                ),
-                                verbose=verbose,
-                                always_print=True,
-                            )
-                            continue
 
                         if (
                             not text

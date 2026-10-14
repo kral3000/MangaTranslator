@@ -728,9 +728,14 @@ Use natural manga localization wording and keep sound effects concise.{special_i
         debug=bool(settings.get("debug", False)),
         system_prompt=system_prompt,
     )
-    return _parse_llm_response_unified(
-        response,
-        len(cleaned_texts),
-        f"{config.provider}-EditorTranslate",
-        debug=bool(settings.get("debug", False)),
-    )
+    from core.text.text_processing import strip_translation_terminal_periods
+
+    return [
+        strip_translation_terminal_periods(text)
+        for text in _parse_llm_response_unified(
+            response,
+            len(cleaned_texts),
+            f"{config.provider}-EditorTranslate",
+            debug=bool(settings.get("debug", False)),
+        )
+    ]

@@ -16,10 +16,11 @@ from core.image.ocr_detection import (
     extract_text_with_manga_ocr,
     extract_text_with_paddle_ocr_vl,
 )
-from core.text.text_processing import TRANSLATION_TAGS
+from core.text.text_processing import TRANSLATION_TAGS, strip_translation_terminal_periods
 from utils.token_usage import accumulate_usage
 from utils.endpoints import (
     call_anthropic_endpoint,
+    call_codex_endpoint,
     call_deepseek_endpoint,
     call_gemini_endpoint,
     call_moonshot_endpoint,
@@ -960,6 +961,7 @@ def _build_system_prompt_translation(
 - **Fidelity:** Focus on intent; translate functionally rather than literally.
 - **Conciseness:** Keep translations idiomatic and concise.
 - **Punctuation:** Replace ellipses (e.g., "…") with consecutive periods (e.g., "...").
+- **Sentence Endings:** Do not end translated dialogue, monologue, narration, or sound effects with a single period (`.`, `。`, or `．`). Preserve question marks, exclamation marks, ellipses, decimal points, and punctuation-only items. This applies only to translations; preserve the original punctuation in OCR transcriptions.
 - **Quotes:** Do not wrap the translated text in quotation marks unless they are explicitly present in the source text.
 {ruby_rule}
 - **Text Types:**
@@ -1333,6 +1335,8 @@ def _build_generation_config(
             is_reasoning = openrouter_is_reasoning_model(model_name, debug)
         elif provider == "OpenAI-Compatible":
             is_reasoning = is_openai_compatible_reasoning_model(model_name)
+        elif provider == "Codex":
+            is_reasoning = True
         elif provider == "DeepSeek":
             is_reasoning = is_deepseek_reasoning_model(model_name)
         elif provider == "Z.ai":
@@ -1596,6 +1600,9 @@ def _build_generation_config(
             "max_tokens": max_tokens_value,
         }
 
+    elif provider == "Codex":
+        return {"reasoning_effort": config.reasoning_effort}
+
     else:
         raise TranslationError(f"Unknown provider for generation config: {provider}")
 
@@ -1765,6 +1772,18 @@ def _call_llm_endpoint(
                 generation_config=generation_config,
                 system_prompt=system_prompt,
                 debug=debug,
+            )
+        elif provider == "Codex":
+            generation_config = _build_generation_config(
+                provider, model_name, config, debug
+            )
+            return call_codex_endpoint(
+                model_name=model_name,
+                parts=api_parts,
+                system_prompt=system_prompt,
+                debug=debug,
+                reasoning_effort=generation_config.get("reasoning_effort"),
+                usage_output=call_usage,
             )
         else:
             raise TranslationError(
@@ -2274,6 +2293,7 @@ def _perform_llm_ocr(
     input_language: Optional[str],
     reading_direction: str,
     debug: bool = False,
+    usage_output: Optional[Dict[str, int]] = None,
 ) -> List[str]:
     """Perform OCR using vision LLM.
 
@@ -2415,11 +2435,20 @@ def call_translation_api_batch(
     hints = []
     if dialogue_indices:
         dialogue_list_str = ", ".join(map(str, dialogue_indices))
-        hints.append(f"Items [{dialogue_list_str}] contain spoken dialogue.")
+        hints.append(
+            f"Items [{dialogue_list_str}] are INSIDE speech bubbles; "
+            "use inside-bubble or SFX tag rules when tags are requested."
+            if provider == "Codex"
+            else f"Items [{dialogue_list_str}] contain spoken dialogue."
+        )
     if osb_indices:
         osb_list_str = ", ".join(map(str, osb_indices))
         hints.append(
-            f"Items [{osb_list_str}] contain sound effects, mimetic effects, narration, or internal monologues."
+            f"Items [{osb_list_str}] are OUTSIDE speech bubbles; "
+            "use outside-bubble or SFX tag rules when tags are requested. "
+            "Never use inside-bubble dialogue tags for these items."
+            if provider == "Codex"
+            else f"Items [{osb_list_str}] contain sound effects, mimetic effects, narration, or internal monologues."
         )
 
     context_hints = ""
@@ -2439,7 +2468,7 @@ def call_translation_api_batch(
         log_message("  - Using cached translation", verbose=debug)
         if ocr_texts_output is not None and cached_ocr_texts is not None:
             ocr_texts_output.extend(cached_ocr_texts)
-        return cached_translation
+        return [strip_translation_terminal_periods(text) for text in cached_translation]
 
     model_name = config.model_name
     is_local_gemma = (
@@ -2521,6 +2550,7 @@ Apply your OCR transcription rules to each image provided.{special_instructions_
                     input_language,
                     reading_direction,
                     debug,
+                    usage_output=usage_output,
                 )
 
             log_message("Starting translation step", verbose=debug)
@@ -2709,7 +2739,7 @@ Do not repeat the source text and do not add labels or explanations.
                         )
                         combined_results.append("[OCR FAILED]")
                 else:
-                    combined_results.append(final_translations[i])
+                    combined_results.append(strip_translation_terminal_periods(final_translations[i]))
 
             cache.set_translation(
                 cache_key, combined_results, ocr_texts=extracted_texts
@@ -2861,6 +2891,7 @@ after `||`.
                         ocr_texts.append("[OCR FAILED]")
                         translations.append(line)
 
+            translations = [strip_translation_terminal_periods(text) for text in translations]
             cache.set_translation(cache_key, translations, ocr_texts=ocr_texts)
             if ocr_texts_output is not None:
                 ocr_texts_output.extend(ocr_texts)

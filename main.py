@@ -64,6 +64,7 @@ def main():
         type=str,
         default="Google",
         choices=[
+            "Codex",
             "Google",
             "OpenAI",
             "Anthropic",
@@ -827,7 +828,9 @@ def main():
     api_key_env_var = ""
     compatible_url = None
 
-    if provider == "Google":
+    if provider == "Codex":
+        default_model = "gpt-5.6-luna"
+    elif provider == "Google":
         api_key = args.google_api_key or os.environ.get("GOOGLE_API_KEY")
         api_key_arg_name = "--google-api-key"
         api_key_env_var = "GOOGLE_API_KEY"
@@ -877,7 +880,7 @@ def main():
         default_model = "default"
 
     if (
-        provider != "OpenAI-Compatible"
+        provider not in ("OpenAI-Compatible", "Codex")
         and not api_key
         and not args.cleaning_only
         and not args.test_mode

@@ -1,5 +1,6 @@
 {
   "provider_models": {
+    "Codex": "gpt-5.6-luna",
     "Anthropic": "claude-opus-4-7",
     "DeepSeek": "deepseek-v4-pro",
     "Google": "gemini-3-flash-preview",

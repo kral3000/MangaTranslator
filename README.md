@@ -39,6 +39,20 @@ Gradio-based web application for automating the translation of manga/comic page 
 - **Interfaces**: Web UI (Gradio) and CLI
 - **Automation**: One-click translation; no intervention required
 
+### Advanced editor: AI sound-effect lettering
+
+Select an existing text box or draw one with the ordinary text-box tool. **AI 식자** and **재번역** stay at the top right of the inspector's existing tabs, keeping their labels and positions while either job runs; both are disabled during a job. The text field supplies optional Korean wording; an empty field or the new-box placeholder lets the model read the Japanese effect. Generation uses the current edited crop and full-page artwork, excluding editable text overlays, with an original crop added when needed to read the effect. The right side of the canvas zoom toolbar shows the job type, target page and region, actual stage, elapsed time, and text-only **중단**. In a narrow canvas, a compact button opens the same feedback in a popup. Completion exposes **비교·적용** without automatically opening a preview; click it to compare the original and proposed result before applying it. Opening a prepared result returns to its target page and region. Closing the feedback preserves the prepared result.
+
+Applied results are fixed image regions: the existing render toggle becomes **식자 표시**, switching between the stored result and the original Japanese. The existing text field becomes **다음 생성에 사용할 문구**; changing it leaves the current image intact until a new preview is explicitly applied. Geometry and font controls are disabled for these fixed image regions. The canvas toolbar's **결과 보기** reopens comparison of a saved applied result. Generation runs in the background; **중단** prevents its result from being applied, although an already submitted request may continue on the server. A failed or stopped regeneration preserves the previous result. Changed region content or artwork cannot receive stale results. Undo, reopening sessions and portable image exports retain the original/result assets.
+
+This uses the locally signed-in Codex CLI's native image-generation tool, in a separate connection from translation. Image generation consumes Codex usage; toggling, saving and exporting do not regenerate images. A working image-generation-capable Codex login is required. The generated crop is aligned and composited around the selected lettering to limit background changes; inspect the preview because reconstruction and lettering quality can vary.
+
+The first reference contains exactly the selected box, inside a square canvas with white padding; surrounding artwork is provided separately as page context. Coordinate instructions use the actual 1024×1024 reference pixels. Long, narrow regions are restored to that exact selected extent after generation. Output adding strokes beyond the box is rejected before compositing rather than silently clipping the text. Small output aspect-ratio differences are fitted uniformly with padding instead of stretching the lettering. Larger framing mismatches remain unapplied. If a generated image is rejected, **결과 보기** opens a read-only comparison with **결과 폴더 열기**; the generated image, references and `failure.json` are retained in that request's assets folder. The failure report includes requested and returned dimensions and the rejection reason. Failed output has no apply action. Cancelled requests still clean their temporary files.
+
+### Advanced editor: translation reroll
+
+Select an ordinary text region with source text and click **재번역** beside **AI 식자** at the inspector's top right for a natural rewrite from the original. Its dropdown offers **경상도 사투리** or **요청해서 재번역…** for a one-off direction. Requests use the saved translation provider, model and work rules. Progress, elapsed time, and **중단** appear on the right side of the canvas zoom toolbar. When the proposal is ready, click **비교·적용** to return to its target page and region and open the comparison. Compare the current sentence with the editable proposal, then explicitly choose **이 문장 적용** to apply and save it; undo restores the previous sentence. Changed source text or translation invalidates the proposal. The existing header slots and text-field positions are preserved.
+
 ## Requirements
 
 - Python 3.10+
@@ -162,8 +176,9 @@ fonts/
 
 ### LLM setup
 
-- Providers: Google, OpenAI, Anthropic, xAI, DeepSeek, Z.ai, Moonshot AI, Xiaomi MiMo, OpenRouter, OpenAI-Compatible
+- Providers: Codex (local ChatGPT sign-in), Google, OpenAI, Anthropic, xAI, DeepSeek, Z.ai, Moonshot AI, Xiaomi MiMo, OpenRouter, OpenAI-Compatible
 - Web UI: configure provider/model/key in the Config tab (stored locally)
+- Codex: install the latest `@openai/codex` CLI and run `codex login` with ChatGPT. Available models and reasoning levels load from your account. Translation reuses one App Server connection with independent ephemeral requests and in-memory images; coding tools, plugins, hooks, and skills are disabled for this connection. ChatGPT usage limits still apply.
 - CLI: pass keys/URLs as flags or via env vars
 - Env vars: `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `MOONSHOT_API_KEY`, `MIMO_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`
 - OpenAI-compatible default URL: `http://localhost:8080/v1`
