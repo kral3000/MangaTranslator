@@ -368,6 +368,7 @@ def _normalize_session_paths(
         "assets_dir",
         "paint_overlay_path",
         "restore_mask_path",
+        "text_cover_mask_path",
     )
     for key in path_keys:
         resolved = _resolve_stored_path(session_path, session.get(key))
@@ -2149,8 +2150,10 @@ def _apply_paint_overlay(image: Image.Image, session: Dict[str, Any]) -> Image.I
     return image
 
 
-def _apply_original_restore(image: Image.Image, session: Dict[str, Any]) -> Image.Image:
-    mask_path = Path(session.get("restore_mask_path") or "")
+def _apply_original_restore(
+    image: Image.Image, session: Dict[str, Any], *, mask_key: str = "restore_mask_path"
+) -> Image.Image:
+    mask_path = Path(session.get(mask_key) or "")
     if not mask_path.is_file():
         return image
     source_path = Path(
@@ -2522,6 +2525,7 @@ def render_session_image(session: Dict[str, Any]) -> Tuple[Image.Image, List[str
     layered = any(region.get("ai_image") for region in session.get("regions", [])) or Path(
         session.get("restore_mask_path") or ""
     ).is_file()
+    layered = layered or Path(session.get("text_cover_mask_path") or "").is_file()
     if not layered:
         return _render_session_text_image(session)
     errors: List[str] = []
@@ -2531,7 +2535,8 @@ def render_session_image(session: Dict[str, Any]) -> Tuple[Image.Image, List[str
     base_identity = "layered|" + hashlib.sha256(background.tobytes()).hexdigest()
     for index, region in enumerate(session.get("regions", []), start=1):
         image = _apply_region_patch(image, background, base_identity, region, index, errors)
-    return image, errors
+    # Intentional occlusion is a separate top layer; ordinary restore stays below text.
+    return _apply_original_restore(image, session, mask_key="text_cover_mask_path"), errors
 
 
 def rerender_session(session_path: Any) -> Tuple[Image.Image, Path, List[str]]:

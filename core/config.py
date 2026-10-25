@@ -252,7 +252,7 @@ class OutsideTextConfig:
 
 
 OUTSIDE_TEXT_PROCESSING_MODES = {"off", "prose", "all"}
-OUTSIDE_TEXT_PROSE_TAGS = {"BN", "BE", "BT", "BW", "ON", "OM", "OD", "OE"}
+OUTSIDE_TEXT_PROSE_TAGS = {"BN", "BE", "BS", "BT", "BW", "ON", "OM", "OD", "OE"}
 
 
 def normalize_outside_text_processing_mode(value: Any, enabled: bool = False) -> str:

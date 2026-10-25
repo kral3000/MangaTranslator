@@ -37,6 +37,7 @@ SESSION_FILE_KEYS = (
     "edited_image_path",
     "paint_overlay_path",
     "restore_mask_path",
+    "text_cover_mask_path",
 )
 REGION_FILE_KEYS = ("mask_path", "ai_original_path", "ai_processed_path", "ai_mask_path")
 OUTPUT_REFERENCE_KEYS = (

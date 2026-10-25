@@ -122,7 +122,7 @@ from core.editor_session import (
     save_session,
     set_region_font_size,
 )
-from core.text.font_manager import font_size_multiplier
+from core.text.font_manager import font_size_multiplier, is_default_yoon_font, yoon_font_variant
 from core.text.text_processing import extract_translation_tag
 
 DEFAULT_EXPORT_DIRECTORY = Path(r"C:\Users\dongw\Documents\Mana")
@@ -149,6 +149,8 @@ TOOLS = {
     "paint_eraser": "그리기 지우개",
     "restore_brush": "원본 복구 브러시",
     "restore_eraser": "원본 복구 지우개",
+    "text_cover_brush": "글씨 덮기 브러시",
+    "text_cover_eraser": "글씨 덮기 지우개",
 }
 
 TOOL_RAIL_LABELS = {
@@ -160,6 +162,8 @@ TOOL_RAIL_LABELS = {
     "paint_eraser": "그리기 지우개",
     "restore_brush": "원본 복구 브러시",
     "restore_eraser": "원본 복구 지우개",
+    "text_cover_brush": "글씨 덮기 브러시",
+    "text_cover_eraser": "글씨 덮기 지우개",
 }
 
 EDITOR_ICON_PATHS = {
@@ -205,6 +209,8 @@ EDITOR_ICON_PATHS = {
     "paint_eraser": '<path d="M13 4l7 7-8 8H7l-4-4zM9 19h11"/>',
     "restore_brush": '<path d="M12 10l7-7 3 3-7 7z"/><path d="M12 10l3 3-5 6H5v-5zM4 21c3 0 4-1 4-3"/><path d="M5 2v4M3 4h4"/><circle cx="9" cy="3" r=".8" fill="currentColor" stroke="none"/>',
     "restore_eraser": '<path d="M13 7l7 7-6 6H8l-5-5 8-8zM9 20h11"/><path d="M6 2v4M4 4h4"/><circle cx="10" cy="3" r=".8" fill="currentColor" stroke="none"/>',
+    "text_cover_brush": '<path d="M3 4h10M8 4v8M3 12h6"/><path d="M12 14l6-9 4 3-6 9-6 2zM12 14l4 3M3 21h13"/>',
+    "text_cover_eraser": '<path d="M3 4h10M8 4v8M3 12h6"/><path d="M13 10l8 7-5 5h-6l-5-4zM10 22h11"/>',
     "metric_x": '<path d="M4 12h16M4 12l3-3M4 12l3 3M20 12l-3-3M20 12l-3 3"/>',
     "metric_y": '<path d="M12 4v16M12 4l-3 3M12 4l3 3M12 20l-3-3M12 20l3-3"/>',
     "metric_width": '<path d="M4 7v10M20 7v10M4 12h16M7 9l-3 3 3 3M17 9l3 3-3 3"/>',
@@ -716,6 +722,9 @@ def _font_name_record(font: TTFont, name_ids: tuple[int, ...]) -> str:
 
 def _split_font_filename(stem: str) -> tuple[str, str]:
     original = str(stem or "").strip()
+    numbered = yoon_font_variant(original)
+    if numbered:
+        return numbered
     spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", original)
     spaced = re.sub(r"[_-]+", " ", spaced)
     spaced = re.sub(r"\s+", " ", spaced).strip()
@@ -829,6 +838,8 @@ def _font_descriptor(path: Path, fonts_root: Path) -> dict[str, str]:
         family = filename_family
     family = re.sub(r"\s+", " ", family).strip() or filename_family
     style = _normalized_font_style(style, filename_style)
+    if yoon_font_variant(path):
+        family, style = filename_family, filename_style
     try:
         relative = str(path.resolve().relative_to(fonts_root.resolve()))
     except Exception:
@@ -847,7 +858,8 @@ def _font_style_sort_key(style: str) -> tuple[int, int, str]:
     text = str(style or "Regular")
     base = re.sub(r"\s+(?:Italic|Oblique)$", "", text, flags=re.IGNORECASE)
     italic = int(bool(re.search(r"(?:Italic|Oblique)$", text, flags=re.IGNORECASE)))
-    return FONT_STYLE_ORDER.get(base, 1000), italic, text.casefold()
+    weight = int(base) if base in {"320", "330", "340", "350", "360"} else FONT_STYLE_ORDER.get(base, 1000)
+    return weight, italic, text.casefold()
 
 
 def _apply_region_format_adjustments(
@@ -1421,9 +1433,9 @@ class EditorCanvas(QWidget):
             color = QColor(0, 190, 255, 175)
         elif self.tool == "inpaint_eraser":
             color = QColor(255, 255, 255, 145)
-        elif self.tool == "restore_brush":
+        elif self.tool in {"restore_brush", "text_cover_brush"}:
             color = QColor(76, 217, 100, 190)
-        elif self.tool == "restore_eraser":
+        elif self.tool in {"restore_eraser", "text_cover_eraser"}:
             color = QColor(255, 214, 10, 180)
         else:
             color = QColor(0, 150, 255, 150)
@@ -1462,6 +1474,8 @@ class EditorCanvas(QWidget):
             "paint_eraser",
             "restore_brush",
             "restore_eraser",
+            "text_cover_brush",
+            "text_cover_eraser",
         }:
             return
         center = self.image_to_view(self.hover_image_pos)
@@ -1531,6 +1545,8 @@ class EditorCanvas(QWidget):
             "paint_eraser",
             "restore_brush",
             "restore_eraser",
+            "text_cover_brush",
+            "text_cover_eraser",
         }:
             self.stroke_points = [
                 (int(round(image_pos.x())), int(round(image_pos.y())))
@@ -1584,6 +1600,8 @@ class EditorCanvas(QWidget):
             "paint_eraser",
             "restore_brush",
             "restore_eraser",
+            "text_cover_brush",
+            "text_cover_eraser",
         }:
             point = (int(round(image_pos.x())), int(round(image_pos.y())))
             if point != self.stroke_points[-1]:
@@ -1597,6 +1615,8 @@ class EditorCanvas(QWidget):
             "paint_eraser",
             "restore_brush",
             "restore_eraser",
+            "text_cover_brush",
+            "text_cover_eraser",
         }:
             self.update()
 
@@ -1690,7 +1710,7 @@ class AdvancedEditorWindow(QMainWindow):
         except (TypeError, ValueError):
             saved_mask_brush_size = saved_brush_size
         self.paint_brush_size = max(1, min(200, saved_paint_brush_size))
-        self.mask_brush_size = max(5, min(200, saved_mask_brush_size))
+        self.mask_brush_size = max(1, min(200, saved_mask_brush_size))
         saved_paint_color = QColor(str(brush_settings.get("color", "#ffffff")))
         self.paint_color = (
             saved_paint_color.name() if saved_paint_color.isValid() else "#ffffff"
@@ -1855,12 +1875,15 @@ class AdvancedEditorWindow(QMainWindow):
             "paint_eraser": "paint_eraser",
             "restore_brush": "restore_brush",
             "restore_eraser": "restore_eraser",
+            "text_cover_brush": "text_cover_brush",
+            "text_cover_eraser": "text_cover_eraser",
         }
         tool_groups = (
             ("기본", ("select", "textbox")),
             ("인페인팅", ("inpaint_brush", "inpaint_eraser")),
             ("그리기", ("paint_brush", "paint_eraser")),
             ("원본 복구", ("restore_brush", "restore_eraser")),
+            ("글씨 덮기", ("text_cover_brush", "text_cover_eraser")),
         )
         for group_index, (group_label, tool_keys) in enumerate(tool_groups):
             if group_index:
@@ -1875,7 +1898,10 @@ class AdvancedEditorWindow(QMainWindow):
                 action = QAction(
                     _editor_icon(tool_icons[key]), TOOL_RAIL_LABELS[key], self
                 )
-                action.setToolTip(TOOLS[key])
+                action.setToolTip({
+                    "text_cover_brush": "텍스트 위에 원본 그림을 올려 칠한 부분의 글씨를 가립니다.",
+                    "text_cover_eraser": "글씨 덮기 마스크를 지워 텍스트를 다시 표시합니다.",
+                }.get(key, TOOLS[key]))
                 action.setCheckable(True)
                 action.triggered.connect(
                     lambda checked=False, tool=key: self.set_tool(tool)
@@ -1942,7 +1968,7 @@ class AdvancedEditorWindow(QMainWindow):
         action_toolbar.addWidget(brush_label)
         self.brush_slider = QSlider(Qt.Orientation.Horizontal)
         self.brush_slider.setObjectName("TopBarBrushSlider")
-        self.brush_slider.setRange(5, 200)
+        self.brush_slider.setRange(1, 200)
         self.brush_slider.setValue(self.mask_brush_size)
         self.brush_slider.setFixedWidth(120)
         self.brush_slider.valueChanged.connect(self._on_brush_size_changed)
@@ -1950,7 +1976,7 @@ class AdvancedEditorWindow(QMainWindow):
         action_toolbar.addWidget(self.brush_slider)
         self.brush_size_spin = QSpinBox()
         self.brush_size_spin.setObjectName("TopBarMetricSpin")
-        self.brush_size_spin.setRange(5, 200)
+        self.brush_size_spin.setRange(1, 200)
         self.brush_size_spin.setSuffix(" px")
         self.brush_size_spin.setValue(self.mask_brush_size)
         self.brush_size_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
@@ -4495,6 +4521,11 @@ class AdvancedEditorWindow(QMainWindow):
         )
         clear_restore_button.clicked.connect(self.clear_restore_mask)
         layout.addWidget(clear_restore_button)
+        clear_cover_button = QPushButton("글씨 덮기 전체 지우기")
+        clear_cover_button.setToolTip("원본 그림으로 글씨를 덮은 부분을 모두 지웁니다. 실행 취소할 수 있습니다.")
+        clear_cover_button.clicked.connect(lambda: self.clear_restore_mask(text_cover=True))
+        layout.addWidget(clear_cover_button)
+        layout.addWidget(self._help_label("글씨 덮기는 텍스트 위에 원본 그림을 올립니다.\n왼쪽의 글씨 덮기 지우개로 부분 취소할 수 있습니다."))
 
         layout.addWidget(
             self._help_label(
@@ -4966,7 +4997,7 @@ class AdvancedEditorWindow(QMainWindow):
         def score(path: Path) -> tuple[int, int, str]:
             _family, style = _split_font_filename(path.stem)
             style_score = _font_style_sort_key(style)
-            regular_priority = 0 if style in {"Regular", "Normal", "Roman"} else 1
+            regular_priority = 0 if style in {"Regular", "Normal", "Roman"} or is_default_yoon_font(path) else 1
             return regular_priority, style_score[0], path.name.casefold()
 
         return sorted(paths, key=score)[0]
@@ -5157,6 +5188,7 @@ class AdvancedEditorWindow(QMainWindow):
                         0
                         if str(items[index].get("style") or "")
                         in {"Regular", "Normal", "Roman"}
+                        or is_default_yoon_font(str(items[index].get("path") or ""))
                         else 1,
                         _font_style_sort_key(
                             str(items[index].get("style") or "Regular")
@@ -5649,8 +5681,9 @@ class AdvancedEditorWindow(QMainWindow):
                 if target_item is None and target_items:
                     target_item = min(
                         target_items,
-                        key=lambda item: _font_style_sort_key(
-                            str(item.get("style") or "Regular")
+                        key=lambda item: (
+                            0 if is_default_yoon_font(str(item.get("path") or "")) else 1,
+                            _font_style_sort_key(str(item.get("style") or "Regular")),
                         ),
                     )
                 if target_item is None:
@@ -5807,6 +5840,8 @@ class AdvancedEditorWindow(QMainWindow):
             "paint_eraser": (1, 3),
             "restore_brush": (1, 4),
             "restore_eraser": (1, 4),
+            "text_cover_brush": (1, 4),
+            "text_cover_eraser": (1, 4),
             "pan": (None, None),
         }
         section_index, settings_index = contexts.get(tool, (None, None))
@@ -7324,12 +7359,14 @@ class AdvancedEditorWindow(QMainWindow):
             "paint_eraser": "그리기 지우개",
             "restore_brush": "원본 복구 브러시",
             "restore_eraser": "원본 복구 지우개",
+            "text_cover_brush": "글씨 덮기",
+            "text_cover_eraser": "글씨 덮기 지우기",
         }
         self._push_history(stroke_labels.get(tool, "브러시 편집"))
         try:
             if tool in {"inpaint_brush", "inpaint_eraser"}:
                 self._apply_inpaint_mask_stroke(tool, points)
-            elif tool in {"restore_brush", "restore_eraser"}:
+            elif tool in {"restore_brush", "restore_eraser", "text_cover_brush", "text_cover_eraser"}:
                 self._apply_restore_mask_stroke(tool, points)
             else:
                 self._apply_paint_stroke(tool, points)
@@ -7338,7 +7375,7 @@ class AdvancedEditorWindow(QMainWindow):
             return
         self.save_current_session(push_history=False)
         self.reload_display_image()
-        if tool in {"paint_brush", "paint_eraser", "restore_brush", "restore_eraser"}:
+        if tool in {"paint_brush", "paint_eraser", "restore_brush", "restore_eraser", "text_cover_brush", "text_cover_eraser"}:
             self.schedule_exact_preview()
         if (
             tool == "inpaint_brush"
@@ -7439,6 +7476,8 @@ class AdvancedEditorWindow(QMainWindow):
     def _apply_restore_mask_stroke(
         self, tool: str, points: list[tuple[int, int]]
     ) -> None:
+        cover = tool.startswith("text_cover_")
+        mask_key = "text_cover_mask_path" if cover else "restore_mask_path"
         original_path = Path(
             self.session.get("original_snapshot_path")
             or self.session.get("source_image_path")
@@ -7453,23 +7492,23 @@ class AdvancedEditorWindow(QMainWindow):
             or self.session_path.with_name(f"{self.session_path.stem}_assets")
         )
         mask_path = Path(
-            self.session.get("restore_mask_path")
-            or assets_dir / "original_restore_mask.png"
+            self.session.get(mask_key)
+            or assets_dir / ("text_cover_mask.png" if cover else "original_restore_mask.png")
         )
         mask = (
             _load_mask(mask_path, self.image_size)
-            if self.session.get("restore_mask_path")
+            if self.session.get(mask_key)
             else np.zeros((self.image_size[1], self.image_size[0]), dtype=np.uint8)
         )
         stroke = self._stroke_mask(points, self.brush_size_for_tool(tool))
-        if tool == "restore_brush":
+        if tool in {"restore_brush", "text_cover_brush"}:
             mask[stroke > 0] = 255
-            message = "칠한 부분을 번역 전 원본으로 복구했습니다."
+            message = "칠한 부분의 글씨를 원본 그림으로 덮었습니다." if cover else "칠한 부분을 번역 전 원본으로 복구했습니다."
         else:
             mask[stroke > 0] = 0
-            message = "칠한 부분의 원본 복구를 취소했습니다."
+            message = "칠한 부분의 글씨 덮기를 지웠습니다." if cover else "칠한 부분의 원본 복구를 취소했습니다."
         _save_mask(mask_path, mask)
-        self.session["restore_mask_path"] = str(mask_path.resolve())
+        self.session[mask_key] = str(mask_path.resolve())
         self.status_label.setText(message)
 
     def _apply_paint_stroke(self, tool: str, points: list[tuple[int, int]]) -> None:
@@ -7636,12 +7675,13 @@ class AdvancedEditorWindow(QMainWindow):
         self.canvas.update()
         self.status_label.setText("인페인팅 브러시 마스크를 비웠습니다.")
 
-    def clear_restore_mask(self) -> None:
-        mask_path = self.session.get("restore_mask_path")
+    def clear_restore_mask(self, *, text_cover: bool = False) -> None:
+        label = "글씨 덮기" if text_cover else "원본 복구"
+        mask_path = self.session.get("text_cover_mask_path" if text_cover else "restore_mask_path")
         if not mask_path or not Path(mask_path).is_file():
-            self.status_label.setText("지울 원본 복구 마스크가 없습니다.")
+            self.status_label.setText(f"지울 {label} 마스크가 없습니다.")
             return
-        self._push_history("원본 복구 마스크 비우기")
+        self._push_history(f"{label} 마스크 비우기")
         try:
             _save_mask(
                 Path(mask_path),
@@ -7649,12 +7689,12 @@ class AdvancedEditorWindow(QMainWindow):
             )
             save_session(self.session_path, self.session)
         except Exception as exc:
-            QMessageBox.warning(self, "원본 복구 마스크 지우기 실패", str(exc))
+            QMessageBox.warning(self, f"{label} 마스크 지우기 실패", str(exc))
             return
         self.canvas.clear_mask_overlay_cache()
         self.reload_display_image()
         self.schedule_exact_preview()
-        self.status_label.setText("현재 이미지의 원본 복구 마스크를 모두 지웠습니다.")
+        self.status_label.setText(f"현재 이미지의 {label} 마스크를 모두 지웠습니다.")
 
     def clear_paint_overlay(self) -> None:
         overlay_path = self.session.get("paint_overlay_path")
@@ -7776,7 +7816,7 @@ class AdvancedEditorWindow(QMainWindow):
         background = None
         if any(region.get("ai_image") for region in self.session.get("regions", [])) or Path(
             self.session.get("paint_overlay_path") or ""
-        ).is_file():
+        ).is_file() or Path(self.session.get("text_cover_mask_path") or "").is_file():
             background = render_session_background(self.session, include_ai=False)
         elif restore_mask_path.is_file():
             background = self._inpainting_source_image(include_paint_overlay=False)
@@ -7812,7 +7852,7 @@ class AdvancedEditorWindow(QMainWindow):
     def _preview_background_image(self) -> Image.Image:
         if any(region.get("ai_image") for region in self.session.get("regions", [])) or Path(
             self.session.get("restore_mask_path") or ""
-        ).is_file():
+        ).is_file() or Path(self.session.get("text_cover_mask_path") or "").is_file():
             return render_session_image(self.session)[0]
         background_path, source_kind = self._editor_background_source()
         if background_path is not None:
@@ -7962,6 +8002,9 @@ class AdvancedEditorWindow(QMainWindow):
         if fonts:
 
             def score(item: Path) -> tuple[int, str]:
+                numbered = yoon_font_variant(item)
+                if numbered:
+                    return (0 if is_default_yoon_font(item) else 1, item.name.casefold())
                 name = item.stem.lower()
                 if "regular" in name or "normal" in name:
                     return (0, item.name.casefold())
@@ -8005,6 +8048,8 @@ class AdvancedEditorWindow(QMainWindow):
             return self._font_style_cache[key]
         fonts_root = Path(__file__).resolve().parents[1] / "fonts"
         desired = str(_font_descriptor(font_file, fonts_root).get("style") or "")
+        if yoon_font_variant(font_file):
+            desired = "Regular"  # Legacy files each expose a separate Qt family.
         desired_key = "".join(char for char in desired.casefold() if char.isalnum())
         matched = ""
         for style in QFontDatabase.styles(family):
@@ -8823,6 +8868,9 @@ class AdvancedEditorWindow(QMainWindow):
         restore_mask_path = self.session.get("restore_mask_path")
         if restore_mask_path and Path(restore_mask_path).exists():
             masks[str(restore_mask_path)] = Path(restore_mask_path).read_bytes()
+        cover_mask_path = self.session.get("text_cover_mask_path")
+        if cover_mask_path and Path(cover_mask_path).is_file():
+            masks[str(cover_mask_path)] = Path(cover_mask_path).read_bytes()
         overlay_path = self.session.get("paint_overlay_path")
         overlay = (
             Path(overlay_path).read_bytes()

@@ -1,6 +1,7 @@
 import io
 import hashlib
 import os
+import re
 from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -67,7 +68,20 @@ def font_size_multiplier(font_path: str) -> float:
     return 1.0
 
 
+def yoon_font_variant(font_path: str | Path) -> Optional[tuple[str, str]]:
+    match = re.fullmatch(r"(윤고딕|윤명조)(3[2-6]0)", Path(font_path).stem)
+    return match.groups() if match else None
+
+
+def is_default_yoon_font(font_path: str | Path) -> bool:
+    numbered = yoon_font_variant(font_path)
+    return bool(numbered and numbered[1] == {"윤고딕": "330", "윤명조": "340"}[numbered[0]])
+
+
 def _filename_style_flags(font_file: Path) -> tuple[bool, bool, bool]:
+    numbered = yoon_font_variant(font_file)
+    if numbered:
+        return is_default_yoon_font(font_file), numbered[1] == "360", False
     stem_lower = font_file.stem.lower()
     is_regular = any(kw in stem_lower for kw in FONT_KEYWORDS["regular"])
     is_bold = (

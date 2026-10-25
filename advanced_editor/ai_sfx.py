@@ -46,7 +46,7 @@ def prepare_request(session, region, directory, *, current_page=None):
     x1, y1, x2, y2 = max(0, x1), max(0, y1), min(page.width, x2), min(page.height, y2)
     if x2 - x1 < 8 or y2 - y1 < 8:
         raise ValueError("식자할 글자 전체를 포함하도록 영역을 조금 넓혀 주세요.")
-    # The editable box is the output extent; context belongs in the second image.
+    # Only selected pixels are sent; the full page remains local.
     box = (x1, y1, x2, y2)
     crop = page.crop(box)
     original_crop = original_page.crop(box)
@@ -60,9 +60,7 @@ def prepare_request(session, region, directory, *, current_page=None):
     canvas.paste(crop, (left, top))
     reference = canvas.resize((1024, 1024), Image.Resampling.LANCZOS)
     reference.save(directory / "reference.png")
-    page.thumbnail((1800, 1800), Image.Resampling.LANCZOS)
-    page.save(directory / "page.png")
-    references = [str(directory / "reference.png"), str(directory / "page.png")]
+    references = [str(directory / "reference.png")]
     original_hint = ""
     if crop.tobytes() != original_crop.tobytes():
         source_reference = original_page.crop((x1, y1, x2, y2))
@@ -70,11 +68,11 @@ def prepare_request(session, region, directory, *, current_page=None):
         source_reference.save(directory / "source_reference.png")
         references.append(str(directory / "source_reference.png"))
         original_hint = (
-            "The THIRD image is the original crop, ONLY to read the Japanese effect and its "
+            "The SECOND image is the original crop, ONLY to read the Japanese effect and its "
             "lettering style. It is NOT the background to reconstruct. Keep the FIRST image's "
             "current edited background, repaired boundaries and brush work authoritative; "
             "never restore old lines, erased artwork or an earlier Korean rendering from "
-            "the third image. "
+            "the second image. "
         )
     wording = re.sub(
         r"</?[^>]+>|\*",
@@ -88,8 +86,7 @@ def prepare_request(session, region, directory, *, current_page=None):
     canvas_target = [local[0] + left, local[1] + top, local[2] + left, local[3] + top]
     reference_target = [round(value * 1024 / side) for value in canvas_target]
     prompt = (
-        "Edit the FIRST image (current editor crop); the SECOND image is the current "
-        "edited full-page CONTEXT ONLY. "
+        "Edit the FIRST image, which contains only the selected editor region. "
         + original_hint
         + "Preserve the current edited background and boundaries from the FIRST image. "
         "Editable dialogue/text layers are intentionally excluded from these artwork "
@@ -310,7 +307,7 @@ def generate_sfx_patch(
         request = prepare_request(session, region, directory, current_page=current_page)
         if cancel.is_set():
             raise GenerationCancelled()
-        progress("페이지를 참고해 식자하고 있습니다…")
+        progress("선택 영역을 식자하고 있습니다…")
         generated = generate_image(
             request["prompt"],
             request["references"],

@@ -918,6 +918,7 @@ def find_optimal_breaks_dp(
 TRANSLATION_TAGS = {
     "BN",
     "BE",
+    "BS",
     "BT",
     "BW",
     "ON",

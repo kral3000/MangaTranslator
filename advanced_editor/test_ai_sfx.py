@@ -255,7 +255,8 @@ class AiSfxTest(unittest.TestCase):
         Image.fromarray(original).save(page_path)
         source_bytes = page_path.read_bytes()
         current = np.full_like(original, 210)
-        current[:, 20:22] = (20, 40, 180)  # A manually repaired boundary.
+        current[:, 30:32] = (20, 40, 180)  # A manually repaired boundary.
+        current[:10, :10] = (17, 83, 139)  # Outside the selection: must never be sent.
         request = prepare_request(
             {"source_image_path": str(page_path)},
             {"bbox": [25, 25, 60, 65], "ai_sfx_wording": "쿵"},
@@ -264,13 +265,18 @@ class AiSfxTest(unittest.TestCase):
         )
         box = tuple(request["box"])
         for name, expected in (
-            ("page.png", current),
             ("working.png", np.array(Image.fromarray(current).crop(box))),
             ("original.png", np.array(Image.fromarray(original).crop(box))),
         ):
             with Image.open(Path(request["directory"]) / name) as image:
                 np.testing.assert_array_equal(np.array(image), expected)
-        self.assertEqual(len(request["references"]), 3)
+        self.assertEqual({Path(p).name for p in request["references"]}, {"reference.png", "source_reference.png"})
+        self.assertFalse((Path(request["directory"]) / "page.png").exists())
+        for path in request["references"]:
+            with Image.open(path) as reference:
+                self.assertFalse(np.any(np.all(np.array(reference) == (17, 83, 139), axis=2)))
+        with Image.open(Path(request["directory"]) / "source_reference.png") as image:
+            np.testing.assert_array_equal(np.array(image), original[25:65, 25:60])
         self.assertEqual(page_path.read_bytes(), source_bytes)
 
     def test_compositing_uses_working_background_without_reintroducing_old_boundary(self):
@@ -472,8 +478,9 @@ class AiSfxTest(unittest.TestCase):
             {"source_image_path": str(page_path)}, {"bbox": [20, 20, 50, 60]},
             self.root / "unchanged_request", current_page=page,
         )
-        self.assertEqual(len(request["references"]), 2)
+        self.assertEqual(len(request["references"]), 1)
         self.assertFalse((Path(request["directory"]) / "source_reference.png").exists())
+        self.assertFalse((Path(request["directory"]) / "page.png").exists())
 
     def test_editable_text_is_above_ai_and_restore_layers_in_both_region_orders(self):
         base = self.root / "layer_base.png"
@@ -533,9 +540,11 @@ class AiSfxTest(unittest.TestCase):
         self.assertEqual(result.getpixel((92, 92)), (0, 128, 0, 255))
         request = prepare_request(session, {"bbox": [20, 20, 60, 65]},
                                   self.root / "no_text_request", current_page=result)
-        with Image.open(Path(request["directory"]) / "page.png") as page:
-            self.assertEqual(page.getpixel((42, 42)), (255, 255, 255))
-            self.assertEqual(page.getpixel((44, 44)), (0, 0, 255))
+        with Image.open(Path(request["directory"]) / "working.png") as crop:
+            self.assertEqual(crop.size, (40, 45))
+            self.assertEqual(crop.getpixel((22, 22)), (255, 255, 255))
+            self.assertEqual(crop.getpixel((24, 24)), (0, 0, 255))
+        self.assertFalse((Path(request["directory"]) / "page.png").exists())
 
     def test_save_keeps_text_free_brush_background_for_reopening_and_ai_context(self):
         base = self.root / "save_base.png"

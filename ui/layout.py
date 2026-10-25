@@ -2434,7 +2434,7 @@ def create_layout(
                                 wrap=True,
                             )
                             gr.Markdown(
-                                "지원 태그: `<BN>`, `<BE>`, `<BT>`, `<BW>`, `<ON>`, `<OT>`, `<OM>`, "
+                                "지원 태그: `<BN>`, `<BE>`, `<BS>`, `<BT>`, `<BW>`, `<ON>`, `<OT>`, `<OM>`, "
                                 "`<OD>`, `<OE>`, `<OH>`, `<SFX>`, `<SFXI>`, `<SFXS>`"
                             )
                         setting_groups.append(group_tag_styles)

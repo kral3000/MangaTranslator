@@ -73,6 +73,7 @@ ITEM_LABEL_FONT_CANDIDATES = (
 LOCAL_GEMMA_RESPONSE_TAGS = {
     "BN",
     "BE",
+    "BS",
     "BT",
     "BW",
     "ON",
@@ -93,8 +94,8 @@ LOCAL_GEMMA_TAG_ALIASES = {
     "EMPHASIS": "BE",
     "EMPHASIZED": "BE",
     "BOLD": "BE",
-    "SHOUT": "BE",
-    "SHOUTING": "BE",
+    "SHOUT": "BS",
+    "SHOUTING": "BS",
     "THOUGHT": "BT",
     "THOUGHTS": "BT",
     "INNER_MONOLOGUE": "BT",

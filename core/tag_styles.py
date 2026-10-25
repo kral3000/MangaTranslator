@@ -5,7 +5,8 @@ from typing import Any, Dict, List, Mapping
 
 TAG_DEFINITIONS = OrderedDict([
     ("BN", "말풍선: 일반 대화"),
-    ("BE", "말풍선: 굵게/크게/외침/강한 감정 대화"),
+    ("BE", "말풍선: 강조된 대사(굵게/크게)"),
+    ("BS", "말풍선: 외침/고함/격앙/절규/환호"),
     ("BT", "말풍선: 생각/속마음/내면 독백"),
     ("BW", "말풍선: 작은 목소리/속삭임 대사"),
     ("ON", "말풍선 밖: 내레이션/설명/회상 내레이션"),
@@ -50,7 +51,7 @@ def default_tag_style_rows() -> List[List[Any]]:
         [
             tag,
             description,
-            "",
+            "HY_POP/HY피오피B.TTF" if tag == "BS" else "",
             _NUMERIC_DEFAULTS["min_font_size"],
             _NUMERIC_DEFAULTS["max_font_size"],
             _NUMERIC_DEFAULTS["line_spacing_mult"],
@@ -160,9 +161,13 @@ def normalize_tag_style_table(value: Any) -> Dict[str, Dict[str, Any]]:
         if result[tag_name]["max_font_size"] < result[tag_name]["min_font_size"]:
             result[tag_name]["max_font_size"] = result[tag_name]["min_font_size"]
 
+    # Keep existing emphasis sizing for shouting, with its own default bold font.
+    if "BS" not in result and "BE" in result:
+        result["BS"] = dict(result["BE"], font_pack="HY_POP/HY피오피B.TTF")
+
     for tag_name in TAG_DEFINITIONS:
         result.setdefault(tag_name, {
-            "font_pack": "",
+            "font_pack": "HY_POP/HY피오피B.TTF" if tag_name == "BS" else "",
             "min_font_size": _NUMERIC_DEFAULTS["min_font_size"],
             "max_font_size": _NUMERIC_DEFAULTS["max_font_size"],
             "line_spacing_mult": _NUMERIC_DEFAULTS["line_spacing_mult"],

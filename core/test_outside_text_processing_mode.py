@@ -33,7 +33,7 @@ def test_outside_text_processing_modes():
     assert not should_process_outside_text_tag("off", "ON")
     for tag in (None, "", "UNKNOWN"):
         assert not should_process_outside_text_tag("prose", tag)
-    for tag in ("BN", "BE", "BT", "BW"):
+    for tag in ("BN", "BE", "BS", "BT", "BW"):
         assert should_process_outside_text_tag("prose", tag)
 
 

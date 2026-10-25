@@ -519,7 +519,7 @@ SPEECH_BUBBLE_SFX_VERTICAL_COMPARE_MIN_ASPECT = 3.0
 SPEECH_BUBBLE_SFX_VERTICAL_COMPARE_MAX_HORIZONTAL_FILL = 0.75
 SPEECH_BUBBLE_SFX_VERTICAL_COMPARE_MIN_FILL_GAIN = 0.10
 SPEECH_BUBBLE_SFX_VERTICAL_COMPARE_MIN_FONT_RATIO = 0.85
-INSIDE_BUBBLE_RENDER_TAGS = frozenset({"BN", "BE", "BT", "BW"})
+INSIDE_BUBBLE_RENDER_TAGS = frozenset({"BN", "BE", "BS", "BT", "BW"})
 OSB_INSIDE_TAG_VERTICAL_COMPARE_MAX_HORIZONTAL_FILL = 0.75
 OSB_INSIDE_TAG_VERTICAL_COMPARE_MIN_FILL_GAIN = 0.10
 OSB_INSIDE_TAG_VERTICAL_COMPARE_MIN_FONT_RATIO = 1.0
@@ -4813,7 +4813,7 @@ def _has_trusted_horizontal_osb_rotation(
         return False
 
     tag_name = str(render_tag or "").upper().strip().strip("<>")
-    return tag_name in {"OT", "ON", "BT", "BE"} or bool(
+    return tag_name in {"OT", "ON", "BT", "BE", "BS"} or bool(
         bubble.get("is_outside_text", False)
     )
 
@@ -13965,7 +13965,7 @@ def translate_and_render(
                                 render_config,
                                 tilted_vertical_allowed,
                             )
-                        if not is_outside_text and render_tag == "BE":
+                        if not is_outside_text and render_tag in {"BE", "BS"}:
                             render_config.tight_fit_shrink_factor = 0.95
                         _configure_translucent_tight_fit_shrink(
                             render_config,
@@ -14126,7 +14126,7 @@ def translate_and_render(
                                         render_config.tight_fit_shrink_exempt = True
                                     else:
                                         render_config.tight_fit_shrink_exempt = False
-                                        if render_tag == "BE":
+                                        if render_tag in {"BE", "BS"}:
                                             render_config.tight_fit_shrink_factor = 0.95
                                         else:
                                             render_config.tight_fit_shrink_factor = min(
