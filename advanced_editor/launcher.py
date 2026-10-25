@@ -111,6 +111,7 @@ from core.editor_session import (
     _region_text_transform,
     _resolve_repo_relative_path,
     add_region,
+    apply_region_tag_font,
     delete_region,
     editor_session_context_label,
     load_session,
@@ -119,6 +120,7 @@ from core.editor_session import (
     render_session_image,
     rerender_session,
     resolve_region_font_size,
+    resolve_tag_font_path,
     save_session,
     set_region_font_size,
 )
@@ -878,10 +880,12 @@ def _apply_region_format_adjustments(
         return False
     render = region.setdefault("render", {})
     changed = False
-    if font_path and os.path.normcase(
-        str(render.get("font_dir") or "")
-    ) != os.path.normcase(font_path):
+    if font_path and (
+        region.get("font_manual") is not True
+        or os.path.normcase(str(render.get("font_dir") or "")) != os.path.normcase(font_path)
+    ):
         render["font_dir"] = font_path
+        region["font_manual"] = True
         changed = True
 
     if font_size_delta:
@@ -3819,6 +3823,13 @@ class AdvancedEditorWindow(QMainWindow):
             "넓은 폰트 메뉴에서 검색하고 용도 태그로 골라보세요. 마우스 휠로 목록을 이동합니다."
         )
         self.font_family_combo.currentIndexChanged.connect(self._on_font_family_changed)
+        self.font_family_combo.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+        tag_font_action = QAction("태그 기본 글꼴 사용", self.font_family_combo)
+        tag_font_action.triggered.connect(self.use_selected_tag_font)
+        self.font_family_combo.addAction(tag_font_action)
+        self.font_family_combo.setToolTip(
+            self.font_family_combo.toolTip() + " 우클릭: 태그 기본 글꼴 사용."
+        )
         font_row.addWidget(self.font_family_combo, 1)
         refresh_fonts_button = QPushButton("새로고침")
         refresh_fonts_button.clicked.connect(self.populate_font_combo)
@@ -5224,6 +5235,26 @@ class AdvancedEditorWindow(QMainWindow):
         finally:
             del style_blocker
             del family_blocker
+
+    def use_selected_tag_font(self) -> None:
+        region = self.selected_region()
+        if region is None or region.get("ai_image"):
+            return
+        from ui import settings_manager
+
+        styles = settings_manager.get_saved_settings().get("tag_styles") or {}
+        target = resolve_tag_font_path(region.get("render_tag"), styles)
+        if target is None:
+            self.status_label.setText("이 태그의 기본 글꼴이 없거나 파일을 찾을 수 없습니다.")
+            return
+        self._push_history("태그 기본 글꼴 적용")
+        region["font_manual"] = False
+        region.setdefault("render", {})["font_dir"] = target
+        self._mark_region_dirty(region)
+        save_session(self.session_path, self.session)
+        self.load_selected_region_to_form()
+        self.schedule_exact_preview()
+        self.status_label.setText(f"{region.get('render_tag')} 태그의 기본 글꼴을 적용했습니다.")
 
     def _on_font_family_changed(self, *_args) -> None:
         family_key = self.font_family_combo.currentData()
@@ -6752,6 +6783,7 @@ class AdvancedEditorWindow(QMainWindow):
         selected_font = str(self.font_style_combo.currentData() or "")
         if self._font_change_requested and selected_font:
             render["font_dir"] = str(selected_font)
+            region["font_manual"] = True
         self._font_change_requested = False
         if mark_dirty:
             self._mark_region_dirty(region)
@@ -7055,6 +7087,9 @@ class AdvancedEditorWindow(QMainWindow):
     ) -> None:
         self._push_history("번역 결과 적용")
         regions = self.session.get("regions", [])
+        from ui import settings_manager
+
+        tag_styles = settings_manager.get_saved_settings().get("tag_styles") or {}
         for index, translated in zip(indexes, translations):
             if not (0 <= index < len(regions)):
                 continue
@@ -7064,6 +7099,7 @@ class AdvancedEditorWindow(QMainWindow):
             regions[index]["translation"] = text
             if tag:
                 regions[index]["render_tag"] = tag
+            apply_region_tag_font(regions[index], tag_styles)
             self._mark_region_dirty(regions[index])
         self.session["editor_translation_settings"] = {
             key: value for key, value in settings.items() if key != "api_key_override"

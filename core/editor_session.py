@@ -199,6 +199,36 @@ def _ensure_render_font_path(render: Dict[str, Any], *, persist: bool = True) ->
     return fallback
 
 
+def resolve_tag_font_path(render_tag: Any, tag_styles: Dict[str, Any]) -> Optional[str]:
+    tag = str(render_tag or "").strip().upper()
+    style = tag_styles.get(tag)
+    value = (
+        style.get("font_dir") or style.get("font_pack")
+        if isinstance(style, dict)
+        else getattr(style, "font_dir", None)
+    )
+    if not value:
+        return None
+    target = Path(_resolve_repo_relative_path(value))
+    if not target.is_absolute():
+        target = _repo_root() / "fonts" / target
+    return str(target.resolve()) if _path_contains_font(target) else None
+
+
+def apply_region_tag_font(region: Dict[str, Any], tag_styles: Dict[str, Any]) -> bool:
+    """Sync only explicitly automatic fonts; legacy and manual choices stay intact."""
+    if region.get("font_manual") is not False or region.get("ai_image"):
+        return False
+    target = resolve_tag_font_path(region.get("render_tag"), tag_styles)
+    if target is None:
+        return False
+    render = region.setdefault("render", {})
+    if str(render.get("font_dir") or "") == target:
+        return False
+    render["font_dir"] = target
+    return True
+
+
 def _resolve_render_font_paths(render: Dict[str, Any]) -> Dict[str, Any]:
     for key in FONT_PATH_KEYS:
         if key in render and render.get(key):
@@ -1415,6 +1445,9 @@ def save_pipeline_edit_session(
         meta_font_dir = str(editor_meta.get("font_dir") or "").strip()
         if meta_font_dir:
             font_dir = meta_font_dir
+        tag_font_dir = resolve_tag_font_path(render_tag, config.rendering.tag_styles)
+        if tag_font_dir:
+            font_dir = tag_font_dir
         if "rotation_deg" in editor_meta:
             try:
                 rotation_deg = float(editor_meta.get("rotation_deg") or 0.0)
@@ -1467,6 +1500,7 @@ def save_pipeline_edit_session(
                 "source_text": source_ocr_texts[index] if index < len(source_ocr_texts) else "",
                 "translation": text,
                 "render_tag": render_tag or "",
+                "font_manual": False,
                 "bbox": bbox,
                 "original_bbox": _jsonable(bubble.get("original_bbox") or bubble.get("bbox")),
                 "rotation_deg": rotation_deg,

@@ -43,6 +43,8 @@ Gradio-based web application for automating the translation of manga/comic page 
 
 `BE` marks visually emphasized dialogue without an actual shout. `BS` marks yelling, emotional outcries, screams and cheers; size, punctuation or angry wording alone do not imply shouting. Both tags have independent font and layout rows in the tag-rendering settings. `BS` defaults to HY_POP Bold (`HY피오피B.TTF`), keeps existing emphasis sizing when upgrading old settings, and respects later font choices. Existing translated sessions retain their saved tags.
 
+New pipeline sessions record whether a region uses an automatic tag font. Retranslation applies the current tag font only to automatic regions; selecting a family/style or applying a bulk font marks it as a manual choice, preserved across retranslation, undo and save/reopen. Older sessions without that record retain their existing fonts. Right-click **글꼴 가족 → 태그 기본 글꼴 사용** to explicitly restore automatic tag-font selection for a selected region. This changes the font only, preserving its size, position and other formatting.
+
 ### Advanced editor: text occlusion brush
 
 The left tool rail's **글씨 덮기 브러시** places original-image pixels above the rendered text, so foreground artwork can obscure selected strokes or characters. **글씨 덮기 지우개** removes that occlusion locally. Size is controlled by the existing top brush field, down to 1px. **도구 설정 → 편집기 설정 → 글씨 덮기 전체 지우기** clears this page's occlusion with undo support. The independent mask survives saving, reopening and portable exports; ordinary original restoration remains below text. AI artwork references exclude this text-occlusion layer.
