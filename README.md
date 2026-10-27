@@ -45,6 +45,12 @@ Gradio-based web application for automating the translation of manga/comic page 
 
 New pipeline sessions record whether a region uses an automatic tag font. Retranslation applies the current tag font only to automatic regions; selecting a family/style or applying a bulk font marks it as a manual choice, preserved across retranslation, undo and save/reopen. Older sessions without that record retain their existing fonts. Right-click **글꼴 가족 → 태그 기본 글꼴 사용** to explicitly restore automatic tag-font selection for a selected region. This changes the font only, preserving its size, position and other formatting.
 
+### Advanced editor: render performance
+
+Decoded artwork and identical text-free page renders share a bounded 64 MiB image cache. Content-based keys detect overwritten assets even when their filename, size and timestamp are unchanged; returned images have independent pixels. Frame keys include region state, mask contents and image metadata, and frames changed during rendering are not cached. Patch composition reuses renderer-owned buffers while retaining copy semantics for other callers. Text layout, font shaping, interpolation and export quality are unchanged.
+
+After a layered brush stroke, history and session settings are saved first, then the existing precise renderer runs immediately in its background worker. The last complete frame remains visible until the current result arrives; the UI no longer performs a duplicate full-page render before scheduling it. Existing stale-result checks, layer ordering and undo/redo remain in use.
+
 ### Advanced editor: text occlusion brush
 
 The left tool rail's **글씨 덮기 브러시** places original-image pixels above the rendered text, so foreground artwork can obscure selected strokes or characters. **글씨 덮기 지우개** removes that occlusion locally. Size is controlled by the existing top brush field, down to 1px. **도구 설정 → 편집기 설정 → 글씨 덮기 전체 지우기** clears this page's occlusion with undo support. The independent mask survives saving, reopening and portable exports; ordinary original restoration remains below text. AI artwork references exclude this text-occlusion layer.

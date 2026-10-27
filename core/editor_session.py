@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import math
 import re
@@ -10,6 +11,7 @@ import threading
 import time
 from collections import OrderedDict
 from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
@@ -42,8 +44,47 @@ _UPLOADED_RELATIVE_PATH_PREFIX = "__MT_RELATIVE_PATH__"
 _REGION_PATCH_CACHE_MAX_ITEMS = 96
 _REGION_PATCH_CACHE: "OrderedDict[str, Tuple[Tuple[int, int, int, int], np.ndarray, np.ndarray]]" = OrderedDict()
 _REGION_PATCH_CACHE_LOCK = threading.Lock()
+_DECODED_IMAGE_CACHE_MAX_BYTES = 64 * 1024 * 1024
+_DECODED_IMAGE_CACHE: "OrderedDict[Tuple[bytes, str], Image.Image]" = OrderedDict()
+_DECODED_IMAGE_CACHE_LOCK = threading.Lock()
 
 
+def _cached_editor_image(key: Tuple[bytes, str]) -> Optional[Image.Image]:
+    with _DECODED_IMAGE_CACHE_LOCK:
+        image = _DECODED_IMAGE_CACHE.get(key)
+        if image is None:
+            return None
+        _DECODED_IMAGE_CACHE.move_to_end(key)
+        return image.copy()
+
+
+def _cache_editor_image(key: Tuple[bytes, str], image: Image.Image) -> None:
+    size_bytes = image.width * image.height * len(image.getbands())
+    if size_bytes > _DECODED_IMAGE_CACHE_MAX_BYTES:
+        return
+    with _DECODED_IMAGE_CACHE_LOCK:
+        _DECODED_IMAGE_CACHE[key] = image.copy()
+        _DECODED_IMAGE_CACHE.move_to_end(key)
+        total = sum(item.width * item.height * len(item.getbands()) for item in _DECODED_IMAGE_CACHE.values())
+        while total > _DECODED_IMAGE_CACHE_MAX_BYTES:
+            _, evicted = _DECODED_IMAGE_CACHE.popitem(last=False)
+            total -= evicted.width * evicted.height * len(evicted.getbands())
+
+
+def _read_editor_image(path: Any, mode: str = "RGBA") -> Image.Image:
+    # Content keys also detect overwrites that preserve the filename, size and timestamp.
+    data = Path(path).read_bytes()
+    key = (hashlib.sha256(data).digest(), mode)
+    cached = _cached_editor_image(key)
+    if cached is not None:
+        return cached
+    with Image.open(io.BytesIO(data)) as opened:
+        image = opened.convert(mode)
+    _cache_editor_image(key, image)
+    return image
+
+
+@lru_cache(maxsize=1)
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
@@ -1061,11 +1102,8 @@ def _baseline_region(region: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def _image_cache_identity(path: Path, image_size: Tuple[int, int]) -> str:
     try:
-        stat = path.stat()
-        return (
-            f"{path.resolve()}|{stat.st_mtime_ns}|{stat.st_size}|"
-            f"{image_size[0]}x{image_size[1]}"
-        )
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        return f"{path.resolve()}|{digest}|{image_size[0]}x{image_size[1]}"
     except Exception:
         return f"{path}|{image_size[0]}x{image_size[1]}"
 
@@ -1106,23 +1144,18 @@ def _cached_region_patch(
     )
     if errors:
         return None, errors
-    clean_arr = np.asarray(clean_base.convert("RGBA"), dtype=np.uint8)
-    rendered_arr = np.asarray(rendered.convert("RGBA"), dtype=np.uint8)
-    diff = np.max(
-        np.abs(
-            rendered_arr[..., :3].astype(np.int16)
-            - clean_arr[..., :3].astype(np.int16)
-        ),
-        axis=2,
-    )
-    changed = diff > 2
-    if not np.any(changed):
+    clean_arr = np.asarray(clean_base if clean_base.mode == "RGBA" else clean_base.convert("RGBA"))
+    rendered_arr = np.asarray(rendered if rendered.mode == "RGBA" else rendered.convert("RGBA"))
+    # The original RGB-only >2 threshold, without full-page int16 intermediates.
+    difference = cv2.absdiff(rendered_arr, clean_arr)
+    changed = cv2.inRange(difference, (0, 0, 0, 0), (2, 2, 2, 255)) == 0
+    x, y, width, height = cv2.boundingRect(changed.astype(np.uint8))
+    if not width or not height:
         return None, []
-    ys, xs = np.where(changed)
-    left = max(0, int(xs.min()) - 2)
-    top = max(0, int(ys.min()) - 2)
-    right = min(rendered_arr.shape[1], int(xs.max()) + 3)
-    bottom = min(rendered_arr.shape[0], int(ys.max()) + 3)
+    left = max(0, x - 2)
+    top = max(0, y - 2)
+    right = min(rendered_arr.shape[1], x + width + 2)
+    bottom = min(rendered_arr.shape[0], y + height + 2)
     patch = (
         (left, top, right, bottom),
         changed[top:bottom, left:right].copy(),
@@ -2171,7 +2204,7 @@ def _apply_paint_overlay(image: Image.Image, session: Dict[str, Any]) -> Image.I
     if not paint_overlay_path or not Path(paint_overlay_path).is_file():
         return image
     try:
-        overlay = Image.open(paint_overlay_path).convert("RGBA")
+        overlay = _read_editor_image(paint_overlay_path)
         if overlay.size != image.size:
             overlay = overlay.resize(image.size, Image.Resampling.LANCZOS)
         image = image.copy()
@@ -2198,10 +2231,10 @@ def _apply_original_restore(
     if not source_path.is_file():
         return image
     try:
-        original = Image.open(source_path).convert("RGBA")
+        original = _read_editor_image(source_path)
         if original.size != image.size:
             original = original.resize(image.size, Image.Resampling.LANCZOS)
-        mask = Image.open(mask_path).convert("L")
+        mask = _read_editor_image(mask_path, "L")
         if mask.size != image.size:
             mask = mask.resize(image.size, Image.Resampling.NEAREST)
         return Image.composite(original, image.convert("RGBA"), mask)
@@ -2372,6 +2405,8 @@ def _apply_region_patch(
     region: Dict[str, Any],
     index: int,
     errors: List[str],
+    *,
+    copy_image: bool = True,
 ) -> Image.Image:
     if region.get("ai_image"):
         return image
@@ -2385,7 +2420,7 @@ def _apply_region_patch(
     if patch is None:
         return image
     box, patch_mask, pixels = patch
-    result = image.convert("RGBA")
+    result = image.convert("RGBA") if copy_image or image.mode != "RGBA" else image
     result.paste(
         Image.fromarray(pixels), box,
         Image.fromarray(patch_mask.astype(np.uint8) * 255),
@@ -2449,24 +2484,42 @@ def _render_session_text_image(
         or str(region.get("id") or "") in dirty_region_ids or not _region_is_baseline(region)
     ]
     if background_path.is_file():
-        image = Image.open(background_path).convert("RGBA")
+        image = _read_editor_image(background_path)
         image = _apply_paint_overlay(image, session)
         if text_free_inpainted_background:
             errors: List[str] = []
             if include_text:
+                def region_state() -> str:
+                    return json.dumps(_jsonable(session.get("regions", [])), ensure_ascii=False, sort_keys=True)
+
+                state = region_state()
+                signatures = [_region_render_signature(region) for region in session.get("regions", [])]
+                mask_digests = [signature["mask_digest"] for signature in signatures]
+                signature = json.dumps([state, signatures], ensure_ascii=False, sort_keys=True).encode("utf-8")
+                digest = hashlib.sha256(image.tobytes())
+                digest.update(json.dumps([image.size, _jsonable(image.info)], default=repr, sort_keys=True).encode("utf-8"))
+                digest.update(signature)
+                frame_key = (digest.digest(), "text-free-frame")
+                cached = _cached_editor_image(frame_key)
+                if cached is not None:
+                    return _apply_original_restore(cached, session), errors
                 for index, region in enumerate(session.get("regions", []), start=1):
                     image = _render_region_onto(image, region, index, errors)
+                # A brush mask may change while a background preview is running.
+                if not errors and state == region_state() and mask_digests == [
+                    _mask_digest(region.get("mask_path")) if region.get("use_mask") else ""
+                    for region in session.get("regions", [])
+                ]:
+                    _cache_editor_image(frame_key, image)
             return _apply_original_restore(image, session), errors
         if not changed_region_indexes and not deleted_boxes:
             return _apply_original_restore(image, session), []
-        clean_base = Image.open(base_path).convert("RGBA")
+        clean_base = _read_editor_image(base_path)
         if clean_base.size != image.size:
             clean_base = clean_base.resize(image.size, Image.Resampling.LANCZOS)
-        base_identity = _image_cache_identity(base_path, image.size)
         clean_base = _apply_paint_overlay(clean_base, session)
-        overlay_path = Path(session.get("paint_overlay_path") or "")
-        if overlay_path.is_file():
-            base_identity += "|" + _image_cache_identity(overlay_path, image.size)
+        # Identify the pixels actually read, even if a brush overwrites the file mid-render.
+        base_identity = f"pixels|{clean_base.size}|" + hashlib.sha256(clean_base.tobytes()).hexdigest()
         erase_boxes: List[Tuple[int, int, int, int]] = []
         for box in deleted_boxes:
             try:
@@ -2514,10 +2567,11 @@ def _render_session_text_image(
                 region,
                 index,
                 errors,
+                copy_image=False,
             )
         return _apply_original_restore(image, session), errors
 
-    image = Image.open(base_path).convert("RGBA")
+    image = _read_editor_image(base_path)
     image = _apply_paint_overlay(image, session)
     errors: List[str] = []
 
@@ -2541,7 +2595,7 @@ def render_session_background(
         image = apply_ai_image_regions(image, session, errors)
     elif any(region.get("ai_image") for region in session.get("regions", [])):
         # A saved flattened page can contain AI pixels; keep the baked artwork independent.
-        clean_base = Image.open(_editor_base_image_path(session)).convert("RGBA")
+        clean_base = _read_editor_image(_editor_base_image_path(session))
         if clean_base.size != image.size:
             clean_base = clean_base.resize(image.size, Image.Resampling.LANCZOS)
         clean_base = _apply_paint_overlay(clean_base, session)
@@ -2568,7 +2622,9 @@ def render_session_image(session: Dict[str, Any]) -> Tuple[Image.Image, List[str
     # Cache against actual lower-layer pixels, including AI toggles and brush changes.
     base_identity = "layered|" + hashlib.sha256(background.tobytes()).hexdigest()
     for index, region in enumerate(session.get("regions", []), start=1):
-        image = _apply_region_patch(image, background, base_identity, region, index, errors)
+        image = _apply_region_patch(
+            image, background, base_identity, region, index, errors, copy_image=False
+        )
     # Intentional occlusion is a separate top layer; ordinary restore stays below text.
     return _apply_original_restore(image, session, mask_key="text_cover_mask_path"), errors
 

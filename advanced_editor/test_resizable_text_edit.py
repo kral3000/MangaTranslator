@@ -25,6 +25,7 @@ class ResizableTextEditTest(TestCase):
     def test_paint_stroke_schedules_exact_text_preview(self) -> None:
         scheduled = []
         window = SimpleNamespace(
+            session={},
             _push_history=lambda *_args: None,
             _apply_paint_stroke=lambda *_args: None,
             save_current_session=lambda **_kwargs: None,

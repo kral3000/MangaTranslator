@@ -106,6 +106,7 @@ from core.editor_package import embed_editor_package, resolve_editor_session_inp
 from core.editor_session import (
     _apply_original_restore,
     _decode_uploaded_relative_path,
+    _read_editor_image,
     _region_is_baseline,
     _region_render_signature,
     _region_text_transform,
@@ -7410,9 +7411,20 @@ class AdvancedEditorWindow(QMainWindow):
             QMessageBox.warning(self, "브러시 작업 실패", str(exc))
             return
         self.save_current_session(push_history=False)
-        self.reload_display_image()
-        if tool in {"paint_brush", "paint_eraser", "restore_brush", "restore_eraser", "text_cover_brush", "text_cover_eraser"}:
+        layered = any(region.get("ai_image") for region in self.session.get("regions", [])) or any(
+            Path(self.session.get(key) or "").is_file()
+            for key in ("restore_mask_path", "text_cover_mask_path")
+        )
+        if layered:
+            # Keep the last complete frame while the existing worker composes the new one.
+            self.canvas.clear_mask_overlay_cache()
+            self.canvas.update()
             self.schedule_exact_preview()
+            self._preview_timer.start(0)
+        else:
+            self.reload_display_image()
+            if tool in {"paint_brush", "paint_eraser", "restore_brush", "restore_eraser", "text_cover_brush", "text_cover_eraser"}:
+                self.schedule_exact_preview()
         if (
             tool == "inpaint_brush"
             and hasattr(self, "auto_inpaint_checkbox")
@@ -7892,7 +7904,7 @@ class AdvancedEditorWindow(QMainWindow):
             return render_session_image(self.session)[0]
         background_path, source_kind = self._editor_background_source()
         if background_path is not None:
-            image = Image.open(background_path).convert("RGBA")
+            image = _read_editor_image(background_path)
             image = self._apply_paint_overlay_to(image)
             has_stale_text = source_kind in {"rendered", "translated", "edited"} or (
                 source_kind == "inpainted"

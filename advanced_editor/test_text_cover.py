@@ -42,7 +42,7 @@ class TextCoverTest(TestCase):
                 render_session_background(session).getpixel((5, 5)), (0, 0, 255, 255)
             )
 
-            def text_patch(image, *_args):
+            def text_patch(image, *_args, **_kwargs):
                 return Image.new("RGBA", image.size, "black")
 
             with patch(
