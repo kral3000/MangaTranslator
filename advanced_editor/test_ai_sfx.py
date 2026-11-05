@@ -64,6 +64,41 @@ class AiSfxTest(unittest.TestCase):
             np.array(restored)[outside], np.array(base)[outside]
         )
 
+    def test_saved_patch_boundary_is_repaired_without_modifying_assets(self):
+        original = np.full((12, 10, 3), 255, np.uint8)
+        original[3:, 4:] = 0
+        processed = original.copy()
+        processed[11, 5:8] = 200
+        Image.fromarray(original).save(self.original)
+        Image.fromarray(processed).save(self.processed)
+        Image.new("L", (10, 12), 255).save(self.mask)
+        saved_bytes = self.processed.read_bytes()
+        base = Image.new("RGBA", (30, 30), "white")
+        result = apply_ai_image_regions(base, self.session)
+        np.testing.assert_array_equal(np.array(result.crop((5, 6, 15, 18)))[:, :, :3], original)
+        self.assertEqual(self.processed.read_bytes(), saved_bytes)
+        self.assertEqual(base.getpixel((10, 17)), (255, 255, 255, 255))
+        # Newly finished patches already used the actual working background.
+        self.region["ai_image"]["boundary_preserved"] = True
+        result = apply_ai_image_regions(base, self.session)
+        np.testing.assert_array_equal(np.array(result.crop((5, 6, 15, 18)))[:, :, :3], processed)
+        self.region["enabled"] = False
+        result = apply_ai_image_regions(result, self.session)
+        np.testing.assert_array_equal(np.array(result.crop((5, 6, 15, 18)))[:, :, :3], original)
+
+    def test_legacy_patch_can_still_render_with_missing_or_unreadable_original(self):
+        base = Image.new("RGBA", (30, 30), "white")
+        for invalid in (None, b"damaged image"):
+            with self.subTest(invalid=invalid):
+                if invalid is None:
+                    self.original.unlink()
+                else:
+                    self.original.write_bytes(invalid)
+                errors = []
+                result = apply_ai_image_regions(base, self.session, errors)
+                self.assertEqual(errors, [])
+                self.assertEqual(result.getpixel((7, 9)), (0, 0, 255, 255))
+
     def test_revisit_after_flattened_export_still_restores_original(self):
         base = self.root / "base.png"
         saved = self.root / "saved.png"
@@ -220,6 +255,96 @@ class AiSfxTest(unittest.TestCase):
             self.assertEqual(image.getpixel((27, 27)), (0, 0, 0))
             self.assertEqual(image.getpixel((0, 0)), (255, 255, 255))
 
+    def test_matching_artwork_at_crop_edge_retains_original_pixels(self):
+        root = self.root / "edge_artwork"
+        root.mkdir()
+        original = np.full((100, 100, 3), 255, np.uint8)
+        original[45:, 65:] = 0  # Hair crossing the right/bottom selection edges.
+        original[20:35, 15:20] = 0  # Old Japanese lettering, separate from artwork.
+        generated = original.copy()
+        generated[20:35, 15:20] = 255
+        generated[22:37, 35:38] = 0  # New thin Korean stroke.
+        generated[45:, 64:65] = 0  # A one-pixel resampling shift in the hair outline.
+        generated[98:, 70:90] = 200  # Join artifact at the bottom of the crop.
+        Image.fromarray(original).save(root / "original.png")
+        Image.fromarray(generated).save(root / "generated.png")
+        result = finish_request(
+            {"directory": str(root), "target": [0, 0, 100, 100],
+             "box": [0, 0, 100, 100], "prompt": "test"},
+            {"path": str(root / "generated.png")},
+        )
+        with Image.open(result["ai_processed_path"]) as image:
+            pixels = np.array(image)
+        np.testing.assert_array_equal(pixels[43:, 62:], original[43:, 62:])
+        np.testing.assert_array_equal(pixels[22:37, 35:38], generated[22:37, 35:38])
+        np.testing.assert_array_equal(pixels[20:35, 15:20], generated[20:35, 15:20])
+
+    def test_boundary_preservation_does_not_erase_new_reversed_lettering(self):
+        from core.ai_image_region import preserve_boundary_artwork
+
+        original = np.full((100, 100, 3), 255, np.uint8)
+        original[10:90, 40:] = 0
+        original[30:50, 55:58] = 255
+        generated = original.copy()
+        generated[30:50, 55:58] = 0
+        generated[30:50, 75:78] = 255
+        result = preserve_boundary_artwork(original, generated, np.full((100, 100), 255, np.uint8))
+        np.testing.assert_array_equal(result, generated)
+        # The same protection applies to dark lettering added on a gray background.
+        gray = np.full_like(original, 180)
+        lettered = gray.copy()
+        lettered[30:50, 75:78] = 0
+        result = preserve_boundary_artwork(gray, lettered, np.full((100, 100), 255, np.uint8))
+        np.testing.assert_array_equal(result, lettered)
+
+    def test_boundary_preservation_keeps_changed_edge_text_and_respects_target(self):
+        from core.ai_image_region import preserve_boundary_artwork
+
+        original = np.full((100, 100, 3), 255, np.uint8)
+        original[20:50, :20] = 0
+        generated = original.copy()
+        generated[20:50, :20] = 255
+        generated[25:50, :5] = 0
+        result = preserve_boundary_artwork(original, generated, np.full((100, 100), 255, np.uint8))
+        np.testing.assert_array_equal(result, generated)
+        original[:] = 255
+        original[45:, 65:] = 0
+        generated = original.copy()
+        generated[45:, 64:65] = 0
+        allowed = np.zeros((100, 100), np.uint8)
+        allowed[50:, 50:] = 255
+        result = preserve_boundary_artwork(original, generated, allowed)
+        np.testing.assert_array_equal(result[allowed == 0], generated[allowed == 0])
+        np.testing.assert_array_equal(result[50:, 63:], original[50:, 63:])
+
+    def test_edge_art_protection_does_not_resurrect_connected_erased_text(self):
+        from core.ai_image_region import preserve_boundary_artwork
+
+        before = np.full((100, 100, 3), 255, np.uint8)
+        before[40:, 60:] = 0
+        before[20:30, 50:55] = 0
+        before[28:42, 53:62] = 0
+        after = before.copy()
+        after[20:30, 50:55] = 255
+        result = preserve_boundary_artwork(before, after, np.full((100, 100), 255, np.uint8))
+        np.testing.assert_array_equal(result, after)
+
+    def test_nearby_reference_keeps_native_texture_and_output_box(self):
+        page_path = self.root / "context.png"
+        pixels = np.full((240, 320, 3), 240, np.uint8)
+        pixels[75:85, 85:95] = (18, 47, 93)
+        Image.fromarray(pixels).save(page_path)
+        request = prepare_request({"source_image_path": str(page_path)},
+                                  {"bbox": [100, 100, 200, 150]}, self.root / "context")
+        self.assertEqual(request["box"], [100, 100, 200, 150])
+        self.assertEqual(request["target"], [0, 0, 100, 50])
+        with Image.open(Path(request["directory"]) / "context_reference.png") as image:
+            self.assertEqual(image.size, (140, 90))
+            self.assertEqual(image.getpixel((7, 2)), (18, 47, 93))
+        self.assertIn("READ-ONLY nearby CURRENT artwork", request["prompt"])
+        self.assertIn("screentone dot pitch", request["prompt"])
+        self.assertIn("not an illustration redraw", request["prompt"])
+
     def test_erased_letter_edges_are_not_blended_back_from_original(self):
         root = self.root / "erased_edges"
         root.mkdir()
@@ -270,7 +395,7 @@ class AiSfxTest(unittest.TestCase):
         ):
             with Image.open(Path(request["directory"]) / name) as image:
                 np.testing.assert_array_equal(np.array(image), expected)
-        self.assertEqual({Path(p).name for p in request["references"]}, {"reference.png", "source_reference.png"})
+        self.assertEqual({Path(p).name for p in request["references"]}, {"reference.png", "source_reference.png", "context_reference.png"})
         self.assertFalse((Path(request["directory"]) / "page.png").exists())
         for path in request["references"]:
             with Image.open(path) as reference:
@@ -359,12 +484,12 @@ class AiSfxTest(unittest.TestCase):
         result = finish_request(request, {"path": str(path)})
         self.assertIn("비율", result["warning"])
 
-    def test_failed_generation_keeps_raw_image_and_report_but_success_cleans_it(self):
+    def test_failure_and_success_keep_raw_output_but_success_cleans_references(self):
         from advanced_editor.ai_sfx import SfxGenerationError
         page = self.root / "page.png"
         Image.new("RGB", (100, 300), "white").save(page)
         directory = self.root / "failure"
-        def generate(_prompt, _references, destination, *_args):
+        def generate(_prompt, _references, destination, *_args, **_kwargs):
             Image.new("RGB", (600, 200), "black").save(destination)
             return {"path": str(destination)}
         with patch("utils.endpoints.codex_image.generate_image", side_effect=generate):
@@ -376,9 +501,32 @@ class AiSfxTest(unittest.TestCase):
         report = json.loads((directory / "failure.json").read_text(encoding="utf-8"))
         self.assertEqual(report["generated.png"], [600, 200])
         self.assertEqual(report["request"]["canvas_size"], [290, 290])
-        with patch("utils.endpoints.codex_image.generate_image", side_effect=generate), patch("advanced_editor.ai_sfx.finish_request", return_value={"ok": True}):
+        with patch("utils.endpoints.codex_image.generate_image", side_effect=generate), patch("advanced_editor.ai_sfx_layers.finish_layers", return_value={"ok": True}):
             generate_sfx_patch({"source_image_path": str(page)}, {"bbox": [5, 5, 95, 295]}, self.root / "success", threading.Event(), lambda _: None)
-        self.assertFalse((self.root / "success" / "generated.png").exists())
+        self.assertTrue((self.root / "success" / "generated.png").exists())
+
+    def test_success_keeps_raw_generation_for_compositor_diagnostics(self):
+        from PIL import ImageDraw
+
+        page = self.root / "raw_page.png"
+        Image.new("RGB", (100, 100), "white").save(page)
+        directory = self.root / "raw_success"
+
+        def generate(_prompt, references, destination, *_args, **kwargs):
+            self.assertTrue(kwargs["transparent_background"])
+            with Image.open(references[0]) as reference:
+                image = Image.new("RGBA", reference.size, (0, 0, 0, 0))
+            ImageDraw.Draw(image).rectangle((350, 350, 650, 650), fill="black")
+            image.save(destination)
+            return {"path": str(destination)}
+
+        with patch("utils.endpoints.codex_image.generate_image", side_effect=generate):
+            result = generate_sfx_patch({"source_image_path": str(page)},
+                {"bbox": [20, 20, 80, 80]}, directory, threading.Event(), lambda _: None)
+        self.assertTrue((directory / "generated.png").is_file())
+        self.assertTrue((directory / "generation.json").is_file())
+        self.assertTrue(Path(result["ai_processed_path"]).is_file())
+        self.assertFalse((directory / "context_reference.png").exists())
 
     def test_new_box_does_not_reuse_id_after_deletion(self):
         self.session["regions"] = [{"id": "r001"}, {"id": "r003"}]
@@ -478,7 +626,8 @@ class AiSfxTest(unittest.TestCase):
             {"source_image_path": str(page_path)}, {"bbox": [20, 20, 50, 60]},
             self.root / "unchanged_request", current_page=page,
         )
-        self.assertEqual(len(request["references"]), 1)
+        self.assertEqual({Path(p).name for p in request["references"]},
+                         {"reference.png", "context_reference.png"})
         self.assertFalse((Path(request["directory"]) / "source_reference.png").exists())
         self.assertFalse((Path(request["directory"]) / "page.png").exists())
 

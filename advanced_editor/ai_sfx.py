@@ -9,6 +9,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
+from core.ai_image_region import preserve_boundary_artwork
+
 
 class SfxGenerationError(ValueError):
     """Keep rejected output available for inspection, never for application."""
@@ -74,6 +76,27 @@ def prepare_request(session, region, directory, *, current_page=None):
             "never restore old lines, erased artwork or an earlier Korean rendering from "
             "the second image. "
         )
+    # Read-only nearby artwork gives anatomy and print texture without sending the full page.
+    padding = max(12, min(96, round(min(crop.size) * 0.4)))
+    context_box = (max(0, x1 - padding), max(0, y1 - padding),
+                   min(page.width, x2 + padding), min(page.height, y2 + padding))
+    context_hint = ""
+    if context_box != box and context_box != (0, 0, page.width, page.height):
+        context = page.crop(context_box)
+        native_size = context.size
+        context.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+        context.save(directory / "context_reference.png")
+        references.append(str(directory / "context_reference.png"))
+        context_target = [round((value - origin) * scale) for value, origin, scale in zip(
+            box, context_box[:2] * 2,
+            (context.width / native_size[0], context.height / native_size[1]) * 2)]
+        context_hint = (
+            f"Reference image {len(references)} is READ-ONLY nearby CURRENT artwork. "
+            f"The target within it is {context_target} in its {context.width}x{context.height} pixels. "
+            "Use it to understand connected fingers, hair, clothing and lines, and to match "
+            "paper tone, screentone dot pitch, print grain and native edge softness. "
+            "It is NOT an extra editable region or the output framing. Return ONLY the FIRST image. "
+        )
     wording = re.sub(
         r"</?[^>]+>|\*",
         "",
@@ -88,6 +111,7 @@ def prepare_request(session, region, directory, *, current_page=None):
     prompt = (
         "Edit the FIRST image, which contains only the selected editor region. "
         + original_hint
+        + context_hint
         + "Preserve the current edited background and boundaries from the FIRST image. "
         "Editable dialogue/text layers are intentionally excluded from these artwork "
         "references and will be composited later. Do not add speech text or duplicate "
@@ -106,7 +130,13 @@ def prepare_request(session, region, directory, *, current_page=None):
             if wording
             else "Read the Japanese effect and choose a natural Korean manga sound effect. "
         )
-        + "Act as a professional Korean manga letterer. First completely remove ONLY the "
+        + "Act as a professional Korean manga letterer. This is a surgical text replacement, "
+        "not an illustration redraw or image enhancement. Match the source's native resolution, "
+        "black level, paper white, antialiasing, grain and halftone density; do not denoise, "
+        "smooth, sharpen, invent texture, replace screentones with gray fills or improve the art. "
+        "Preserve all visible anatomy, object contours and fine lines exactly, including "
+        "hands, fingers and nails; do not simplify or invent them. Reconstruct ONLY "
+        "what was hidden by the old effect, leaving visible artwork intact. First completely remove ONLY the "
         "target effect lettering, including any previous Korean version: all ink, outlines, "
         "white borders, shadows, antialiased "
         "fringes and detached marks belonging to that effect. Reconstruct the underlying "
@@ -241,6 +271,7 @@ def finish_request(request, generated):
                     after = cv2.warpAffine(
                         after, matrix, original.size, borderMode=cv2.BORDER_REFLECT
                     )
+    after = preserve_boundary_artwork(before, after, allowed)
     # Ignore small tonal drift, retain letter contours, never paste the generated rectangle.
     difference = np.max(
         np.abs(after.astype(np.int16) - before.astype(np.int16)), axis=2
@@ -279,6 +310,7 @@ def finish_request(request, generated):
     return {
         "ai_image": {
             "id": uuid4().hex,
+            "boundary_preserved": True,
             "box": request["box"],
             "elapsed_seconds": generated.get("elapsed_seconds"),
             "generation_seconds": generated.get("generation_seconds"),
@@ -296,6 +328,7 @@ def finish_request(request, generated):
 def generate_sfx_patch(
     session, region, directory, cancel, progress, *, current_page=None
 ):
+    from advanced_editor.ai_sfx_layers import finish_layers, prepare_layers
     from utils.endpoints.codex_image import GenerationCancelled, generate_image
 
     complete = False
@@ -307,18 +340,24 @@ def generate_sfx_patch(
         request = prepare_request(session, region, directory, current_page=current_page)
         if cancel.is_set():
             raise GenerationCancelled()
-        progress("선택 영역을 식자하고 있습니다…")
+        request = prepare_layers(request, cancel, progress)
+        progress("배경과 분리된 새 글자 레이어를 생성하고 있습니다…")
         generated = generate_image(
             request["prompt"],
             request["references"],
             Path(directory) / "generated.png",
             cancel,
             progress,
+            transparent_background=True,
         )
         if cancel.is_set():
             raise GenerationCancelled()
-        progress("결과의 경계를 정리하고 있습니다…")
-        patch = finish_request(request, generated)
+        progress("수복 배경과 새 글자를 합성하고 있습니다…")
+        patch = finish_layers(request, generated)
+        (directory / "generation.json").write_text(
+            json.dumps({"request": request, "generation": generated}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         complete = True
         return patch
     except GenerationCancelled:
@@ -348,14 +387,15 @@ def generate_sfx_patch(
         raise SfxGenerationError(str(exc), preview) from exc
     finally:
         names = [
-            "generated.png",
             "reference.png",
             "source_reference.png",
+            "context_reference.png",
             "page.png",
             "working.png",
         ]
         if not complete:
-            names.extend(["original.png", "processed.png", "mask.png"])
+            names.extend(["generated.png", "generation.json", "original.png", "processed.png", "mask.png",
+                          "background.png", "lettering.png", "erase_mask.png"])
         # Only this request's named assets; never delete a session or a source image.
         if not failed:
             for name in names:

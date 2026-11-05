@@ -21,10 +21,12 @@ class ImagePeer:
         self._events = {}
         self.thread_config = {}
         self.calls = []
+        self.thread_params = None
 
     def rpc(self, method, params, *_args):
         self.calls.append(method)
         if method == "thread/start":
+            self.thread_params = params
             return {"thread": {"id": "t"}}
         if method == "turn/start":
             if self.cancel:
@@ -53,6 +55,15 @@ class CodexImageTest(unittest.TestCase):
             self.assertNotIn("turn/interrupt", peer.calls)
             self.assertIn("thread/unsubscribe", peer.calls)
             self.assertFalse(peer._events)
+
+    def test_transparent_layer_request_reaches_native_tool_instructions(self):
+        peer = ImagePeer()
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "utils.endpoints.codex_image._get_image_server", return_value=peer
+        ):
+            generate_image("lettering", [], Path(directory) / "layer.png", transparent_background=True)
+        self.assertIn("transparent_background=true", peer.thread_params["baseInstructions"])
+        self.assertEqual(peer.calls.count("turn/start"), 1)
 
     def test_cancellation_interrupts_once_and_never_writes_result(self):
         cancel = threading.Event()

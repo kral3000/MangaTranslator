@@ -14,6 +14,7 @@ from sklearn.cluster import KMeans
 
 from core.config import MangaTranslatorConfig, normalize_outside_text_processing_mode
 from core.image.image_utils import cv2_to_pil, pil_to_cv2, process_bubble_image_cached
+from core.image.inpaint_composite import finish_outside_inpaint
 from core.image.inpainting import FluxKleinInpainter, FluxKontextInpainter
 from core.image.ocr_detection import OutsideTextDetector, extract_text_with_manga_ocr
 from core.ml.model_manager import get_model_manager
@@ -2801,6 +2802,7 @@ def process_outside_text(
             )
 
         current_image = pil_image
+        refinement_masks = []
         temp_files = []
         none_skipped_clip_bboxes = set()
         extracted_text_colors = {}
@@ -3564,6 +3566,7 @@ def process_outside_text(
                             {
                                 "index": i + 1,
                                 "mask": grouped_mask,
+                                "refine_boundary": not buffer_conflict,
                                 "bbox": _bbox_from_mask(
                                     grouped_mask, img_w, img_h, padding=0
                                 ),
@@ -3623,6 +3626,16 @@ def process_outside_text(
                         continue
 
                     flux_inpaints += 1
+                    if not buffer_conflict:
+                        refinement_mask = combined_mask.copy()
+                        if composite_clip_bbox is not None:
+                            cx1, cy1, cx2, cy2 = composite_clip_bbox
+                            clipped = np.zeros_like(refinement_mask)
+                            clipped[max(0, cy1):min(img_h, cy2), max(0, cx1):min(img_w, cx2)] = refinement_mask[
+                                max(0, cy1):min(img_h, cy2), max(0, cx1):min(img_w, cx2)
+                            ]
+                            refinement_mask = clipped
+                        refinement_masks.append(refinement_mask)
                     # Save to disk if more regions remain to reduce memory usage
                     if i < len(mask_groups) - 1:
                         temp_file = None
@@ -3722,6 +3735,10 @@ def process_outside_text(
                                     "Flux returned original image (no inpaint)"
                                 )
                             current_image = inpainted_image
+                            refinement_masks.extend(
+                                candidate["mask"] for candidate in flux_batch
+                                if candidate["refine_boundary"]
+                            )
                             flux_inpaints += len(flux_batch)
                         except Exception as e:
                             log_message(
@@ -3763,6 +3780,12 @@ def process_outside_text(
                     except Exception:
                         pass
 
+        current_image = finish_outside_inpaint(
+            pil_image, current_image, refinement_masks,
+            protected=np.logical_or(
+                total_bubble_mask, _dilate_bool_mask(preserve_mask, 15)
+            ),
+        )
         outside_text_data = _build_outside_text_translation_data(
             pil_image=pil_image,
             config=config,

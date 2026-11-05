@@ -163,6 +163,9 @@ class OutsideSelectionTest(unittest.TestCase):
                     patch.object(processor, "OutsideTextDetector", self.detector),
                     patch.object(processor, "FluxKleinInpainter", self.inpainter),
                     patch.object(
+                        processor, "finish_outside_inpaint", wraps=processor.finish_outside_inpaint,
+                    ) as finish,
+                    patch.object(
                         self.inpainter,
                         "inpaint_mask",
                         side_effect=RuntimeError("test failure"),
@@ -179,6 +182,13 @@ class OutsideSelectionTest(unittest.TestCase):
                         pre_inpaint_data_callback=lambda _: {(65, 30, 95, 60)},
                     )
                 self.assertEqual(len(items), 2)
+                finished_masks = finish.call_args.args[2]
+                if backend.startswith("flux") and not fails:
+                    self.assertEqual(len(self.seen_masks), 1)  # Finishing adds no model pass.
+                    self.assertEqual(len(finished_masks), 1)
+                    self.assertFalse(finished_masks[0][30:60, 30:60].any())
+                else:
+                    self.assertEqual(finished_masks, [])
                 self.assertEqual(self.mask_inputs[-1], [self.raw[1]])
                 np.testing.assert_array_equal(
                     np.asarray(result)[30:60, 30:60],

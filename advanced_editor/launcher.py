@@ -996,6 +996,26 @@ class EditorCanvas(QWidget):
         return QSize(900, 900)
 
     def keyPressEvent(self, event) -> None:
+        if self.tool == "inpaint_brush" and self.stroke_points:
+            x, y = self.stroke_points[-1]
+            width, height = self.window.image_size
+            endpoint = {
+                Qt.Key.Key_Left: (0, y),
+                Qt.Key.Key_Right: (width - 1, y),
+                Qt.Key.Key_Up: (x, 0),
+                Qt.Key.Key_Down: (x, height - 1),
+            }.get(event.key())
+            if endpoint is not None and not event.modifiers() & (
+                Qt.KeyboardModifier.ControlModifier
+                | Qt.KeyboardModifier.AltModifier
+                | Qt.KeyboardModifier.MetaModifier
+            ):
+                if not event.isAutoRepeat() and endpoint != (x, y):
+                    # Return to the physical brush position to avoid a diagonal on the next mouse move.
+                    self.stroke_points.extend([endpoint, (x, y)])
+                    self.update()
+                event.accept()
+                return
         if self.window.handle_editor_key_event(event):
             return
         super().keyPressEvent(event)
@@ -1553,6 +1573,7 @@ class EditorCanvas(QWidget):
             "text_cover_brush",
             "text_cover_eraser",
         }:
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
             self.stroke_points = [
                 (int(round(image_pos.x())), int(round(image_pos.y())))
             ]
@@ -1904,6 +1925,7 @@ class AdvancedEditorWindow(QMainWindow):
                     _editor_icon(tool_icons[key]), TOOL_RAIL_LABELS[key], self
                 )
                 action.setToolTip({
+                    "inpaint_brush": "마우스 왼쪽 버튼을 누른 채 방향키를 누르면 현재 위치에서 이미지 끝까지 직선으로 칠합니다.",
                     "text_cover_brush": "텍스트 위에 원본 그림을 올려 칠한 부분의 글씨를 가립니다.",
                     "text_cover_eraser": "글씨 덮기 마스크를 지워 텍스트를 다시 표시합니다.",
                 }.get(key, TOOLS[key]))
