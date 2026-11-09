@@ -1235,6 +1235,15 @@ class EditorCanvas(QWidget):
         if delta == 0:
             event.ignore()
             return
+        if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            spin = self.window.brush_size_spin
+            previous_size = spin.value()
+            steps = max(1, abs(delta) // 120)
+            spin.stepBy(4 * steps if delta > 0 else -4 * steps)
+            if spin.value() != previous_size:
+                self.window._store_brush_settings()
+            event.accept()
+            return
         steps = delta / 120.0
         self.zoom_at(QPointF(event.position()), 1.2**steps)
         event.accept()
