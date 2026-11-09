@@ -1928,13 +1928,13 @@ class AdvancedEditorWindow(QMainWindow):
         tool_shortcuts = {
             "select": "Ctrl+1",
             "inpaint_brush": "Ctrl+2",
-            "inpaint_eraser": "Ctrl+Shift+2",
+            "inpaint_eraser": "Shift+2",
             "restore_brush": "Ctrl+3",
-            "restore_eraser": "Ctrl+Shift+3",
+            "restore_eraser": "Shift+3",
             "paint_brush": "Ctrl+4",
-            "paint_eraser": "Ctrl+Shift+4",
+            "paint_eraser": "Shift+4",
             "text_cover_brush": "Ctrl+5",
-            "text_cover_eraser": "Ctrl+Shift+5",
+            "text_cover_eraser": "Shift+5",
         }
         for group_index, (group_label, tool_keys) in enumerate(tool_groups):
             if group_index:
