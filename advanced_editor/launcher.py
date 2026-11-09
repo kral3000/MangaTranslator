@@ -1921,10 +1921,21 @@ class AdvancedEditorWindow(QMainWindow):
         tool_groups = (
             ("기본", ("select", "textbox")),
             ("인페인팅", ("inpaint_brush", "inpaint_eraser")),
-            ("그리기", ("paint_brush", "paint_eraser")),
             ("원본 복구", ("restore_brush", "restore_eraser")),
+            ("그리기", ("paint_brush", "paint_eraser")),
             ("글씨 덮기", ("text_cover_brush", "text_cover_eraser")),
         )
+        tool_shortcuts = {
+            "select": "Ctrl+1",
+            "inpaint_brush": "Ctrl+2",
+            "inpaint_eraser": "Ctrl+Shift+2",
+            "restore_brush": "Ctrl+3",
+            "restore_eraser": "Ctrl+Shift+3",
+            "paint_brush": "Ctrl+4",
+            "paint_eraser": "Ctrl+Shift+4",
+            "text_cover_brush": "Ctrl+5",
+            "text_cover_eraser": "Ctrl+Shift+5",
+        }
         for group_index, (group_label, tool_keys) in enumerate(tool_groups):
             if group_index:
                 divider = QFrame(tool_toolbar)
@@ -1943,6 +1954,10 @@ class AdvancedEditorWindow(QMainWindow):
                     "text_cover_brush": "텍스트 위에 원본 그림을 올려 칠한 부분의 글씨를 가립니다.",
                     "text_cover_eraser": "글씨 덮기 마스크를 지워 텍스트를 다시 표시합니다.",
                 }.get(key, TOOLS[key]))
+                if key in tool_shortcuts:
+                    shortcut = QKeySequence(tool_shortcuts[key])
+                    action.setShortcut(shortcut)
+                    action.setToolTip(f"{action.toolTip()} ({shortcut.toString()})")
                 action.setCheckable(True)
                 action.triggered.connect(
                     lambda checked=False, tool=key: self.set_tool(tool)
@@ -2232,7 +2247,6 @@ class AdvancedEditorWindow(QMainWindow):
         zoom_layout.addWidget(fit_button)
 
         actual_size_button = QPushButton("100%")
-        actual_size_button.setShortcut(QKeySequence("Ctrl+1"))
         actual_size_button.setToolTip("이미지 1픽셀을 화면 1픽셀 크기로 표시합니다.")
         actual_size_button.clicked.connect(self.zoom_actual_size)
         zoom_layout.addWidget(actual_size_button)
