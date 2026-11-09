@@ -1231,11 +1231,16 @@ class EditorCanvas(QWidget):
         self._fit_transform()
 
     def wheelEvent(self, event) -> None:
-        delta = event.angleDelta().y()
+        angle = event.angleDelta()
+        alt_pressed = event.modifiers() & Qt.KeyboardModifier.AltModifier
+        delta = angle.y()
+        if alt_pressed and delta == 0:
+            # Qt on Windows reports Alt + vertical wheel on the horizontal axis.
+            delta = angle.x()
         if delta == 0:
             event.ignore()
             return
-        if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+        if alt_pressed:
             spin = self.window.brush_size_spin
             previous_size = spin.value()
             steps = max(1, abs(delta) // 120)
