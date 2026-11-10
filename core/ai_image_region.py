@@ -53,6 +53,43 @@ def preserve_boundary_artwork(before, after, allowed):
     return result
 
 
+def repair_padding_fringe(before, after):
+    """Restore a coherent one-pixel bright fringe beside the square canvas padding."""
+    width, height = after.size
+    if width == height or min(width, height) < 3 or max(width, height) < 11:
+        return after
+
+    original_patch = after
+    vertical = width < height
+    if not vertical:
+        before = before.transpose(Image.Transpose.TRANSPOSE)
+        after = after.transpose(Image.Transpose.TRANSPOSE)
+        width, height = after.size
+
+    repaired = after
+    for x, direction in ((0, 1), (width - 1, -1)):
+        left = min(x, x + 2 * direction)
+        strip = (left, 0, left + 3, height)
+        old = before.crop(strip).convert("L")
+        new = after.crop(strip).convert("L")
+        delta = np.asarray(new, dtype=np.int16) - np.asarray(old, dtype=np.int16)
+        edge, inner, deeper = delta[:, ::direction].T
+        edge_luma = np.asarray(new)[:, ::direction][:, 0]
+        bright = (edge >= 16) & (edge >= np.maximum(inner, deeper) + 16)
+        bright &= edge_luma < 240
+        coherent = np.convolve(bright, np.ones(11, dtype=np.uint8), mode="same") >= 6
+        repair = bright & coherent
+        if repair.any():
+            if repaired is after:
+                repaired = after.copy()
+            edge_box = (x, 0, x + 1, height)
+            mask = Image.fromarray(repair[:, None].astype(np.uint8) * 255)
+            repaired.paste(before.crop(edge_box), edge_box, mask)
+    if repaired is after:
+        return original_patch
+    return repaired if vertical else repaired.transpose(Image.Transpose.TRANSPOSE)
+
+
 @lru_cache(maxsize=32)
 def _read_asset(path, stamp, size, mode, reference_path=None, reference_stamp=None):
     with Image.open(path) as image:
@@ -120,6 +157,8 @@ def apply_ai_image_regions(image, session, errors=None):
                                               asset("ai_lettering_path", "RGBA"))
             else:
                 patch = asset(key, "RGBA")
+                if key == "ai_processed_path" and not metadata.get("padding_fringe_fixed"):
+                    patch = repair_padding_fringe(result.crop(box), patch)
             mask = asset("ai_mask_path", "L").point(lambda value: 255 if value else 0)
             if result is image:
                 result = image.convert("RGBA").copy()

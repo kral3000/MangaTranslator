@@ -86,6 +86,38 @@ class AiSfxTest(unittest.TestCase):
         result = apply_ai_image_regions(result, self.session)
         np.testing.assert_array_equal(np.array(result.crop((5, 6, 15, 18)))[:, :, :3], original)
 
+    def test_saved_padding_fringe_repairs_only_the_bright_edge_on_both_axes(self):
+        rng = np.random.default_rng(42)
+        base = rng.integers(15, 80, (70, 30, 3), dtype=np.uint8)
+        edited = base.copy()
+        edited[5:40, 0] += 70
+        edited[46:67, :2] = 210  # Real artwork continues into the patch.
+        expected = edited.copy()
+        expected[5:40, 0] = base[5:40, 0]
+        self.region["ai_image"]["boundary_preserved"] = True
+
+        for transpose in (False, True):
+            with self.subTest(transpose=transpose):
+                images = [Image.fromarray(data) for data in (base, edited, expected)]
+                if transpose:
+                    images = [im.transpose(Image.Transpose.TRANSPOSE) for im in images]
+                original, processed, expected_patch = images
+                processed.save(self.processed)
+                saved_bytes = self.processed.read_bytes()
+                Image.new("L", processed.size, 255).save(self.mask)
+                page = Image.new("RGB", (100, 100), "white")
+                page.paste(original, (5, 6))
+                box = [5, 6, 5 + original.width, 6 + original.height]
+                self.region["ai_image"]["box"] = box
+                expected_page = page.copy()
+                expected_page.paste(expected_patch, (5, 6))
+
+                result = apply_ai_image_regions(page, self.session)
+                np.testing.assert_array_equal(
+                    np.asarray(result.convert("RGB")), np.asarray(expected_page)
+                )
+                self.assertEqual(self.processed.read_bytes(), saved_bytes)
+
     def test_legacy_patch_can_still_render_with_missing_or_unreadable_original(self):
         base = Image.new("RGBA", (30, 30), "white")
         for invalid in (None, b"damaged image"):
