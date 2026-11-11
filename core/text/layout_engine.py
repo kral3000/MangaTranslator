@@ -48,7 +48,7 @@ SHORT_WORD_MAX_2_LINES_CHAR_LIMIT = 6
 VERTICAL_COLUMN_GAP_RATIO = 0.35
 VERTICAL_COLUMN_GAP_MIN = 4.0
 VERTICAL_COLUMN_GAP_MAX = 16.0
-VERTICAL_GROUPED_PUNCTUATION = set(".,;:!?…。．！？｡")
+VERTICAL_GROUPED_PUNCTUATION = set(".,;:!?‥…⋯。．！？｡")
 VERTICAL_ATTACHED_PUNCTUATION = set("!?！？,")
 VERTICAL_GROUPED_ROTATED_GLYPHS = set("~～〜")
 DASH_LINE_CHARS = set("-‐‑‒–—―−─━ーｰㅡ")
@@ -59,7 +59,6 @@ VERTICAL_VERTICAL_BRACKET_GLYPHS = set("()（）[]［］{}｛｝【】「」『�
 VERTICAL_ROTATED_GLYPHS = DASH_LINE_CHARS | set("~～〜") | VERTICAL_VERTICAL_BRACKET_GLYPHS
 VERTICAL_ROTATION_DEGREES = 90.0
 VERTICAL_SPACE_TOKEN = "\ue002"
-VERTICAL_CENTERED_DOT_TOKEN = "\ue007"
 VERTICAL_WORD_SPACE_RATIO = 0.24
 VERTICAL_WORD_SPACE_MIN = 2.0
 VERTICAL_WORD_SPACE_MAX = 7.0
@@ -255,7 +254,7 @@ def _can_attach_vertical_quote(unit: Dict) -> bool:
     return not (
         unit.get("vertical_space")
         or unit.get("draw_vertical_quote")
-        or unit.get("draw_vertical_ellipsis")
+        or _is_vertical_ellipsis_text(unit.get("text_with_markers", ""))
         or unit.get("draw_vertical_dash")
     )
 
@@ -308,7 +307,12 @@ def _attach_vertical_quote_units(units: List[Dict]) -> List[Dict]:
 
 
 def _should_rotate_vertical_unit(text: str) -> bool:
-    return bool(text) and all(ch in VERTICAL_ROTATED_GLYPHS for ch in text)
+    return (
+        bool(text) and all(ch in VERTICAL_ROTATED_GLYPHS for ch in text)
+    ) or (
+        _is_vertical_ellipsis_text(text)
+        and not any(ch in {"\ufe19", "\u22ee"} for ch in text)
+    )
 
 
 def _should_group_rotated_vertical_unit(text: str) -> bool:
@@ -351,18 +355,6 @@ def _is_vertical_ellipsis_text(text: str) -> bool:
     )
 
 
-def _vertical_ellipsis_dot_count(text: str) -> int:
-    count = 0
-    for ch in text:
-        if ch in VERTICAL_DOT_ELLIPSIS_CHARS:
-            count += 1
-        elif ch == "\u2025":
-            count += 2
-        elif ch in VERTICAL_ELLIPSIS_CHARS:
-            count += 3
-    return count
-
-
 def _strip_vertical_terminal_period(text: str) -> str:
     """Drop a single ASCII sentence-ending period only for vertical text layout."""
     if not text:
@@ -391,14 +383,6 @@ def _strip_vertical_terminal_period(text: str) -> str:
         return text
 
     return text[:period_index] + text[period_index + 1 :]
-
-
-def _append_vertical_unit(
-    units: List[Tuple[str, str]], text: str, style_name: str
-) -> None:
-    if len(text) == 1 and text in VERTICAL_DOT_ELLIPSIS_CHARS:
-        text = VERTICAL_CENTERED_DOT_TOKEN
-    units.append((text, style_name))
 
 
 def _vertical_gap_size(
@@ -588,7 +572,7 @@ def _iter_vertical_units(text: str) -> List[Tuple[str, str]]:
         for ch in segment_text:
             if _is_separator_or_space(ch):
                 if current:
-                    _append_vertical_unit(units, current, style_name)
+                    units.append((current, style_name))
                     current = ""
                     current_is_punctuation = False
                     current_is_grouped_rotated = False
@@ -618,7 +602,7 @@ def _iter_vertical_units(text: str) -> List[Tuple[str, str]]:
                     current = candidate
                 else:
                     for digit_ch in current:
-                        _append_vertical_unit(units, digit_ch, style_name)
+                        units.append((digit_ch, style_name))
                     current = ch
                     current_digit_overflow = True
                 current_is_punctuation = False
@@ -628,7 +612,7 @@ def _iter_vertical_units(text: str) -> List[Tuple[str, str]]:
                 continue
             if ch_is_digit:
                 if current:
-                    _append_vertical_unit(units, current, style_name)
+                    units.append((current, style_name))
                 current = ch
                 current_is_punctuation = False
                 current_is_grouped_rotated = False
@@ -642,7 +626,7 @@ def _iter_vertical_units(text: str) -> List[Tuple[str, str]]:
                 continue
             if ch_is_dash_line:
                 if current:
-                    _append_vertical_unit(units, current, style_name)
+                    units.append((current, style_name))
                 current = ch
                 current_is_punctuation = False
                 current_is_grouped_rotated = False
@@ -662,7 +646,7 @@ def _iter_vertical_units(text: str) -> List[Tuple[str, str]]:
                 ):
                     current = candidate
                 else:
-                    _append_vertical_unit(units, current, style_name)
+                    units.append((current, style_name))
                     current = ch
                 continue
             if (
@@ -674,7 +658,7 @@ def _iter_vertical_units(text: str) -> List[Tuple[str, str]]:
                 current += ch
                 continue
             if current:
-                _append_vertical_unit(units, current, style_name)
+                units.append((current, style_name))
             current = ch
             current_is_punctuation = ch_is_punctuation
             current_is_grouped_rotated = ch_is_grouped_rotated
@@ -682,7 +666,7 @@ def _iter_vertical_units(text: str) -> List[Tuple[str, str]]:
             current_is_digit = False
             current_digit_overflow = False
         if current:
-            _append_vertical_unit(units, current, style_name)
+            units.append((current, style_name))
 
     return units
 
@@ -716,49 +700,6 @@ def _measure_vertical_unit(
             "top": -space_height / 2.0,
             "bottom": space_height / 2.0,
             "vertical_space": True,
-        }
-
-    if _is_vertical_ellipsis_text(text):
-        dot_count = _vertical_ellipsis_dot_count(text)
-        dot_radius = max(0.95, float(font_size) * 0.065)
-        dot_gap = max(1.25, float(font_size) * 0.15)
-        dot_step = dot_radius * 2.0 + dot_gap
-        visual_width = dot_radius * 2.0
-        visual_height = dot_radius * 2.0 * dot_count + dot_gap * (dot_count - 1)
-        return {
-            "text_with_markers": text,
-            "style": style_name,
-            "width": visual_width,
-            "height": visual_height,
-            "advance_height": visual_height,
-            "baseline_offset_y": visual_height / 2.0,
-            "left": -visual_width / 2.0,
-            "right": visual_width / 2.0,
-            "top": -visual_height / 2.0,
-            "bottom": visual_height / 2.0,
-            "draw_vertical_ellipsis": True,
-            "ellipsis_dot_count": dot_count,
-            "ellipsis_dot_radius": dot_radius,
-            "ellipsis_dot_step": dot_step,
-        }
-
-    if text == VERTICAL_CENTERED_DOT_TOKEN:
-        dot_radius = max(0.85, float(font_size) * 0.07)
-        visual_width = dot_radius * 2.0
-        visual_height = max(dot_radius * 2.0, float(font_size) * 0.28)
-        return {
-            "text_with_markers": ".",
-            "style": style_name,
-            "width": visual_width,
-            "height": visual_height,
-            "advance_height": visual_height,
-            "baseline_offset_y": visual_height / 2.0,
-            "left": -visual_width / 2.0,
-            "right": visual_width / 2.0,
-            "top": -visual_height / 2.0,
-            "bottom": visual_height / 2.0,
-            "draw_vertical_centered_dot": True,
-            "centered_dot_radius": dot_radius,
         }
 
     if _is_dash_line_text(text):
@@ -938,6 +879,8 @@ def _measure_vertical_unit(
         "center_on_column": (
             _is_attached_vertical_punctuation_text(text)
             or _is_vertical_digit_text(text)
+            or text in VERTICAL_DOT_ELLIPSIS_CHARS
+            or _is_vertical_ellipsis_text(text)
         ),
         "horizontal_in_vertical": _is_vertical_digit_text(text),
     }
@@ -971,18 +914,23 @@ def _build_vertical_layout(
 
         column_units = []
         for unit_text, style_name in _iter_vertical_units(column_text):
-            unit = _measure_vertical_unit(
-                unit_text,
-                style_name,
-                font_size,
-                loaded_hb_faces,
-                features_to_enable,
-                font_cmaps,
-                layout_scale,
+            runs = (
+                split_text_by_font_support(unit_text, style_name, font_cmaps)
+                if _is_vertical_ellipsis_text(unit_text)
+                else [(unit_text, style_name)]
             )
-            if unit is None:
-                continue
-            column_units.append(unit)
+            for run_text, _ in runs:
+                unit = _measure_vertical_unit(
+                    run_text,
+                    style_name,
+                    font_size,
+                    loaded_hb_faces,
+                    features_to_enable,
+                    font_cmaps,
+                    layout_scale,
+                )
+                if unit is not None:
+                    column_units.append(unit)
 
         if not column_units:
             continue
@@ -991,8 +939,6 @@ def _build_vertical_layout(
             float(unit["center_offset"])
             for unit in column_units
             if not unit.get("rotate_in_vertical")
-            and not unit.get("draw_vertical_ellipsis")
-            and not unit.get("draw_vertical_centered_dot")
             and not unit.get("draw_vertical_dash")
             and not unit.get("draw_vertical_quote")
             and not unit.get("vertical_space")
@@ -1006,8 +952,6 @@ def _build_vertical_layout(
             for unit in column_units:
                 if (
                     unit.get("rotate_in_vertical")
-                    or unit.get("draw_vertical_ellipsis")
-                    or unit.get("draw_vertical_centered_dot")
                     or unit.get("draw_vertical_dash")
                     or unit.get("draw_vertical_quote")
                     or unit.get("vertical_space")

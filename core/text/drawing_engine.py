@@ -18,8 +18,6 @@ _hb_face_cache = LRUCache(max_size=50)
 _font_cache_lock = threading.RLock()
 
 DASH_LINE_CHARS = set("-‐‑‒–—―−─━ーｰㅡ")
-HORIZONTAL_DOT_ELLIPSIS_CHARS = {".", "\uff0e"}
-HORIZONTAL_ELLIPSIS_CHARS = {"\u2025", "\u2026", "\u22ef", "\ufe19", "\u22ee"}
 HB_26_6_SCALE_FACTOR = 64.0
 VERTICAL_DRAW_QUOTE_OPEN_GLYPHS = {
     "'": "\u300c",
@@ -193,28 +191,6 @@ def _is_dash_line_text(text: str) -> bool:
     return len(text) >= 2 and all(ch in DASH_LINE_CHARS for ch in text)
 
 
-def _is_dot_ellipsis_text(text: str) -> bool:
-    return len(text) >= 2 and all(ch in HORIZONTAL_DOT_ELLIPSIS_CHARS for ch in text)
-
-
-def _is_horizontal_ellipsis_text(text: str) -> bool:
-    return _is_dot_ellipsis_text(text) or (
-        bool(text) and all(ch in HORIZONTAL_ELLIPSIS_CHARS for ch in text)
-    )
-
-
-def _ellipsis_dot_count(text: str) -> int:
-    count = 0
-    for ch in text:
-        if ch in HORIZONTAL_DOT_ELLIPSIS_CHARS:
-            count += 1
-        elif ch == "\u2025":
-            count += 2
-        elif ch in HORIZONTAL_ELLIPSIS_CHARS:
-            count += 3
-    return max(2, count)
-
-
 def _iter_special_text_parts(text: str):
     normal = []
 
@@ -240,30 +216,6 @@ def _iter_special_text_parts(text: str):
                 yield run, "dash"
             else:
                 normal.append(run)
-            i = j
-            continue
-        if ch in HORIZONTAL_DOT_ELLIPSIS_CHARS:
-            j = i + 1
-            while j < len(text) and text[j] in HORIZONTAL_DOT_ELLIPSIS_CHARS:
-                j += 1
-            run = text[i:j]
-            if _is_dot_ellipsis_text(run):
-                value = flush_normal()
-                if value:
-                    yield value, "text"
-                yield run, "ellipsis"
-            else:
-                normal.append(run)
-            i = j
-            continue
-        if ch in HORIZONTAL_ELLIPSIS_CHARS:
-            j = i + 1
-            while j < len(text) and text[j] in HORIZONTAL_ELLIPSIS_CHARS:
-                j += 1
-            value = flush_normal()
-            if value:
-                yield value, "text"
-            yield text[i:j], "ellipsis"
             i = j
             continue
         normal.append(ch)
@@ -329,37 +281,6 @@ def _draw_horizontal_dash(canvas, start_x, baseline_y, width, top, bottom, font_
     if outline_paint:
         _draw_filled_rect(canvas, center_x, center_y, line_width, thickness + 1.0, outline_paint)
     _draw_filled_rect(canvas, center_x, center_y, line_width, thickness, paint_obj)
-
-
-def _draw_horizontal_ellipsis(canvas, start_x, baseline_y, width, top, bottom, text, font_size, paint_obj, outline_paint):
-    dot_count = _ellipsis_dot_count(text)
-    radius = max(0.95, float(font_size) * 0.065)
-    center_y = float(baseline_y) + (float(top) + float(bottom)) / 2.0
-    for idx in range(dot_count):
-        dot_x = float(start_x) + float(width) * (idx + 0.5) / dot_count
-        if outline_paint:
-            canvas.drawCircle(float(dot_x), float(center_y), float(radius + 0.5), outline_paint)
-        canvas.drawCircle(float(dot_x), float(center_y), float(radius), paint_obj)
-
-
-def _draw_vertical_ellipsis(
-    canvas,
-    center_x,
-    center_y,
-    dot_count,
-    dot_step,
-    radius,
-    paint_obj,
-    outline_paint,
-):
-    first_offset = -float(dot_step) * (int(dot_count) - 1) / 2.0
-    for idx in range(int(dot_count)):
-        dot_y = float(center_y) + first_offset + float(dot_step) * idx
-        if outline_paint:
-            canvas.drawCircle(
-                float(center_x), float(dot_y), float(radius + 0.5), outline_paint
-            )
-        canvas.drawCircle(float(center_x), float(dot_y), float(radius), paint_obj)
 
 
 def _horizontal_line_start_x(
@@ -748,96 +669,6 @@ def draw_layout(
                             verbose=verbose,
                         )
                         continue
-                    if line_data.get("draw_vertical_ellipsis"):
-                        left = line_data.get("left", 0.0)
-                        right = line_data.get("right", line_data.get("width", 0.0))
-                        top = line_data.get("top", -line_data.get("height", 0.0))
-                        bottom = line_data.get("bottom", 0.0)
-                        center_y = block_top_y + line_data.get("origin_y", 0.0)
-                        radius = float(
-                            line_data.get(
-                                "ellipsis_dot_radius",
-                                max(1.0, final_font_size * 0.07),
-                            )
-                        )
-                        dot_step = float(
-                            line_data.get(
-                                "ellipsis_dot_step",
-                                radius * 2.0 + max(1.0, final_font_size * 0.16),
-                            )
-                        )
-                        dot_count = max(
-                            2, int(line_data.get("ellipsis_dot_count", 3))
-                        )
-
-                        if bg_paint is not None:
-                            pad_x = final_font_size * 0.1
-                            pad_y = final_font_size * 0.05
-                            rect = skia.Rect.MakeXYWH(
-                                unit_center_x + left - pad_x,
-                                center_y + top - pad_y,
-                                (right - left) + 2 * pad_x,
-                                (bottom - top) + 2 * pad_y,
-                            )
-                            canvas.drawRect(rect, bg_paint)
-
-                        _draw_vertical_ellipsis(
-                            canvas,
-                            unit_center_x,
-                            center_y,
-                            dot_count,
-                            dot_step,
-                            radius,
-                            paint,
-                            outline_paint,
-                        )
-                        log_message(
-                            "Rendered vertical ellipsis",
-                            verbose=verbose,
-                        )
-                        continue
-                    if line_data.get("draw_vertical_centered_dot"):
-                        left = line_data.get("left", 0.0)
-                        right = line_data.get("right", line_data.get("width", 0.0))
-                        top = line_data.get("top", -line_data.get("height", 0.0))
-                        bottom = line_data.get("bottom", 0.0)
-                        center_y = block_top_y + line_data.get("origin_y", 0.0)
-                        radius = float(
-                            line_data.get(
-                                "centered_dot_radius",
-                                max(0.85, final_font_size * 0.07),
-                            )
-                        )
-
-                        if bg_paint is not None:
-                            pad_x = final_font_size * 0.1
-                            pad_y = final_font_size * 0.05
-                            rect = skia.Rect.MakeXYWH(
-                                unit_center_x + left - pad_x,
-                                center_y + top - pad_y,
-                                (right - left) + 2 * pad_x,
-                                (bottom - top) + 2 * pad_y,
-                            )
-                            canvas.drawRect(rect, bg_paint)
-
-                        if outline_paint:
-                            canvas.drawCircle(
-                                float(unit_center_x),
-                                float(center_y),
-                                float(radius + max(1.0, outline_width)),
-                                outline_paint,
-                            )
-                        canvas.drawCircle(
-                            float(unit_center_x),
-                            float(center_y),
-                            float(radius),
-                            paint,
-                        )
-                        log_message(
-                            "Rendered centered vertical '.'",
-                            verbose=verbose,
-                        )
-                        continue
                     quote_info = VERTICAL_DRAW_QUOTE_DISPLAY_INFO.get(segment_text)
                     if line_data.get("draw_vertical_quote") or quote_info is not None:
                         role = line_data.get("quote_role")
@@ -1212,19 +1043,6 @@ def draw_layout(
                                             part_width,
                                             part_top,
                                             part_bottom,
-                                            final_font_size,
-                                            paint,
-                                            outline_paint,
-                                        )
-                                    elif special_kind == "ellipsis":
-                                        _draw_horizontal_ellipsis(
-                                            canvas,
-                                            part_cursor_x,
-                                            current_baseline_y,
-                                            part_width,
-                                            part_top,
-                                            part_bottom,
-                                            part_text,
                                             final_font_size,
                                             paint,
                                             outline_paint,
