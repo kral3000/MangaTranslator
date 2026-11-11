@@ -148,18 +148,39 @@ def _is_korean_postposition_token(token: str) -> bool:
 
 
 def glue_korean_postposition_particles(tokens: List[str]) -> List[str]:
-    """Leave user/LLM spacing intact.
+    """Keep a Korean particle with the quotation it follows when wrapping."""
+    if not any(QUOTE_GLYPH_RE.search(token) for token in tokens):
+        return tokens
 
-    The older behavior joined separate tokens such as "게다가 이" into
-    "게다가이" because "이" can also be a particle.  Particle protection now
-    happens only when splitting an already-attached Hangul word for wrapping.
-    """
-    return tokens
+    glued: List[str] = []
+    stack: List[str] = []
+    after_quote = False
+    for token in tokens:
+        content = _token_content_without_style(token)
+        if after_quote and QUOTE_POSTPOSITION_TOKEN_RE.fullmatch(content):
+            glued[-1] += strip_no_space_before_marker(token)
+        else:
+            glued.append(token)
+        after_quote = any(
+            index == len(content) - 1 for index in _closing_quote_indices(content, stack)
+        )
+    return glued
 
 
 def attach_korean_postposition_particles(text: str) -> str:
-    """Leave user/LLM spacing intact."""
-    return text
+    """Remove one ordinary space between a closed quotation and its particle."""
+    if not QUOTE_POSTPOSITION_SPACE_RE.search(text):
+        return text
+
+    parts = []
+    start = 0
+    for closer in _closing_quote_indices(text, []):
+        match = QUOTE_POSTPOSITION_SPACE_RE.match(text, closer)
+        if match:
+            space = match.end() - 1
+            parts.append(text[start:space])
+            start = space + 1
+    return "".join(parts) + text[start:]
 
 
 def hyphenation_token_length(token: str) -> int:
@@ -301,6 +322,15 @@ DETACHED_TRAILING_PUNCT_RE = re.compile(
 WRAPPED_SYMBOL_ORPHAN_MAX_CHARS = 1
 WRAPPED_SYMBOL_KEEP_TOGETHER_MAX_CHARS = 8
 WRAPPED_SYMBOL_SYMMETRIC_QUOTES = {'"', "'"}
+QUOTE_GLYPH_RE = re.compile(r"[\"'\u2018\u2019\u201c\u201d\u300c\u300d\u300e\u300f]")
+_QUOTE_PARTICLE = (
+    "은|는|이|가|을|를|의|에|에서|도|만|로|으로|와|과|랑|이랑|께|에게|한테|"
+    "라고|이라고|라는|이라는|란|이란|처럼|부터|까지|보다"
+)
+QUOTE_POSTPOSITION_TOKEN_RE = re.compile(rf"(?:{_QUOTE_PARTICLE})[^\w\s]*")
+QUOTE_POSTPOSITION_SPACE_RE = re.compile(
+    rf"[\"'\u2019\u201d\u300d\u300f]\*{{0,3}} (?=(?:{_QUOTE_PARTICLE})(?!\w))"
+)
 WRAPPED_SYMBOL_OPEN_TO_CLOSE = {
     "(": ")",
     "[": "]",
@@ -412,6 +442,18 @@ def _update_wrapped_symbol_stack(
                 return True
 
     return False
+
+
+def _closing_quote_indices(text: str, stack: List[str]):
+    for match in QUOTE_GLYPH_RE.finditer(text):
+        index = match.start()
+        ch = match.group()
+        if ch in {"'", "’"} and 0 < index < len(text) - 1:
+            before, after = text[index - 1], text[index + 1]
+            if before.isascii() and after.isascii() and before.isalnum() and after.isalnum():
+                continue  # Apostrophe inside a Latin word.
+        if _update_wrapped_symbol_stack(stack, ch, text, index):
+            yield index
 
 
 def _split_attached_text_after_wrapped_symbol(

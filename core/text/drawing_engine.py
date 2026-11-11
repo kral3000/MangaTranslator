@@ -989,7 +989,8 @@ def draw_layout(
 
                             try:
                                 infos, positions, _ = shape_line(
-                                    run_text, hb_font_segment, features_to_enable
+                                    run_text, hb_font_segment, features_to_enable,
+                                    compact_quotes=True,
                                 )
                                 if not infos:
                                     log_message(
@@ -1024,6 +1025,7 @@ def draw_layout(
                                         part_text,
                                         hb_font_segment,
                                         features_to_enable,
+                                        compact_quotes=True,
                                     )
                                     if not part_infos:
                                         continue

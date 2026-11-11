@@ -1,6 +1,6 @@
 import re
 import unicodedata
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple, Union
 
 import numpy as np
 import skia
@@ -8,6 +8,7 @@ import uharfbuzz as hb
 
 from core.text.text_processing import (
     NO_SPACE_BEFORE_MARKER,
+    QUOTE_GLYPH_RE,
     STYLE_PATTERN,
     attach_korean_postposition_particles,
     find_optimal_breaks_dp,
@@ -414,9 +415,46 @@ def _vertical_gap_size(
     return max(0.0, gap)
 
 
+class _CompactQuotePosition(NamedTuple):
+    x_advance: int
+    y_advance: int
+    x_offset: int
+    y_offset: int
+    original_x_offset: int
+
+
+def _compact_horizontal_quotes(text, font, infos, positions):
+    # Full-width quote glyphs can have most of their em as blank side bearing.
+    max_padding = round(font.scale[0] * 0.30)
+    normal_padding = round(font.scale[0] * 0.07)
+    quote_indices = {match.start() for match in QUOTE_GLYPH_RE.finditer(text)}
+    for index, (info, position) in enumerate(zip(infos, positions)):
+        if info.cluster not in quote_indices or not info.codepoint:
+            continue
+        extents = font.get_glyph_extents(info.codepoint)
+        if not extents or extents.width <= 0:
+            continue
+        left = extents.x_bearing + position.x_offset
+        right = position.x_advance - left - extents.width
+        trim_left = left - normal_padding if left > max_padding else 0
+        trim_right = right - normal_padding if right > max_padding else 0
+        if trim_left or trim_right:
+            positions[index] = _CompactQuotePosition(
+                position.x_advance - trim_left - trim_right,
+                position.y_advance,
+                position.x_offset - trim_left,
+                position.y_offset,
+                position.x_offset,
+            )
+
+
 def shape_line(
-    text_line: str, hb_font: hb.Font, features: Dict[str, bool]
-) -> Tuple[List[hb.GlyphInfo], List[hb.GlyphPosition], str]:
+    text_line: str,
+    hb_font: hb.Font,
+    features: Dict[str, bool],
+    *,
+    compact_quotes: bool = False,
+) -> Tuple[List[hb.GlyphInfo], List[Union[hb.GlyphPosition, _CompactQuotePosition]], str]:
     """Shapes a line of text with HarfBuzz.
 
     Returns:
@@ -432,7 +470,11 @@ def shape_line(
     direction = str(hb_buffer.direction)
     try:
         hb.shape(hb_font, hb_buffer, features)
-        return hb_buffer.glyph_infos, hb_buffer.glyph_positions, direction
+        infos = hb_buffer.glyph_infos
+        positions = hb_buffer.glyph_positions
+        if compact_quotes and direction == "ltr" and QUOTE_GLYPH_RE.search(text_line):
+            _compact_horizontal_quotes(text_line, hb_font, infos, positions)
+        return infos, positions, direction
     except Exception as e:
         log_message(f"HarfBuzz shaping failed: {e}", always_print=True)
         raise RenderingError("HarfBuzz text shaping failed") from e
@@ -500,14 +542,18 @@ def calculate_styled_line_width(
             hb_scale = int(font_size * 64)
             hb_font_segment.scale = (hb_scale, hb_scale)
 
-            _, positions, _ = shape_line(run_text, hb_font_segment, features)
+            _, positions, _ = shape_line(
+                run_text, hb_font_segment, features, compact_quotes=True,
+            )
             if not positions:
                 continue
 
             total_advance_fixed_all += sum(pos.x_advance for pos in positions)
             if first_offset_fixed_global is None:
-                first_offset_fixed_global = positions[0].x_offset
-            last_offset_fixed_global = positions[-1].x_offset
+                first = positions[0]
+                first_offset_fixed_global = getattr(first, "original_x_offset", first.x_offset)
+            last = positions[-1]
+            last_offset_fixed_global = getattr(last, "original_x_offset", last.x_offset)
 
     if total_advance_fixed_all == 0 and first_offset_fixed_global is None:
         return 0.0
