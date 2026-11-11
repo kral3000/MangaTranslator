@@ -3539,6 +3539,18 @@ def process_outside_text(
                         )
                         continue
 
+                    # Only expansion beyond the detected text is known to be spare background.
+                    content_bbox = (
+                        (ox0, oy0, ox1, oy1)
+                        if buffer_conflict
+                        and not speech_edge_mask_group
+                        and not edge_sfx_exact_rect_buffer_conflict
+                        and not guarded_wide_sfx_buffer_conflict
+                        and ox0 is not None
+                        and ox0 < ox1
+                        and oy0 < oy1
+                        else None
+                    )
                     if group_flux_regions and inpainter is not None:
                         grouped_mask = combined_mask.copy()
                         if composite_clip_bbox is not None:
@@ -3562,14 +3574,14 @@ def process_outside_text(
                             )
                             continue
 
+                        mask_bbox = _bbox_from_mask(grouped_mask, img_w, img_h)
                         grouped_flux_candidates.append(
                             {
                                 "index": i + 1,
                                 "mask": grouped_mask,
                                 "refine_boundary": not buffer_conflict,
-                                "bbox": _bbox_from_mask(
-                                    grouped_mask, img_w, img_h, padding=0
-                                ),
+                                "bbox": mask_bbox,
+                                "content_bbox": content_bbox or mask_bbox,
                                 "fallback_color": (
                                     fallback_fill_color
                                     if fallback_fill_color
@@ -3599,6 +3611,12 @@ def process_outside_text(
                                 verbose=verbose,
                                 strict_mask_clipping=True,
                                 composite_clip_bbox=composite_clip_bbox,
+                                **(
+                                    {"composite_content_boxes": [content_bbox]}
+                                    if content_bbox
+                                    and isinstance(inpainter, FluxKleinInpainter)
+                                    else {}
+                                ),
                             )
                             if inpainted_image is current_image:
                                 flux_failed = True
@@ -3695,10 +3713,18 @@ def process_outside_text(
                         )
                         try:
                             group_seed = base_seed if base_seed > 0 else base_seed
-                            grouped_luminance_correction = isinstance(
-                                inpainter, FluxKleinInpainter
-                            ) and bool(
+                            is_klein = isinstance(inpainter, FluxKleinInpainter)
+                            grouped_luminance_correction = is_klein and bool(
                                 getattr(inpainter, "luminance_correction", False)
+                            )
+                            content_boxes = (
+                                [candidate["content_bbox"] for candidate in flux_batch]
+                                if is_klein
+                                and any(
+                                    candidate["content_bbox"] != candidate["bbox"]
+                                    for candidate in flux_batch
+                                )
+                                else None
                             )
                             if grouped_luminance_correction:
                                 log_message(
@@ -3727,6 +3753,10 @@ def process_outside_text(
                                     [candidate["mask"] for candidate in flux_batch]
                                     if grouped_luminance_correction
                                     else None
+                                ),
+                                **(
+                                    {"composite_content_boxes": content_boxes}
+                                    if content_boxes else {}
                                 ),
                             )
 

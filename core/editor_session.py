@@ -2592,7 +2592,10 @@ def render_session_background(
     if errors is not None:
         errors.extend(background_errors)
     if include_ai:
-        image = apply_ai_image_regions(image, session, errors)
+        image = apply_ai_image_regions(
+            image, session, errors,
+            has_baked_ai=not Path(session.get("inpainted_image_path") or "").is_file(),
+        )
     elif any(region.get("ai_image") for region in session.get("regions", [])):
         # A saved flattened page can contain AI pixels; keep the baked artwork independent.
         clean_base = _read_editor_image(_editor_base_image_path(session))

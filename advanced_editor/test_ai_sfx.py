@@ -118,6 +118,60 @@ class AiSfxTest(unittest.TestCase):
                 )
                 self.assertEqual(self.processed.read_bytes(), saved_bytes)
 
+    def test_square_patch_blends_rgb_seams_and_keeps_strokes_and_page_edge(self):
+        base = np.full((32, 32, 3), (111, 150, 170), dtype=np.uint8)
+        edited = base.copy()
+        edited[0, 4:26] = (142, 140, 174)
+        edited[1, 4:26] = (94, 158, 165)
+        edited[-1, 6:25] = (40, 95, 130)
+        edited[10:19, -2] = (175, 163, 164)
+        edited[5:25, 0] = (199, 160, 161)  # Physical page edge.
+        edited[:10, 12:14] = (9, 20, 25)  # Lettering crossing the seam band.
+        expected = base.copy()
+        expected[5:25, 0] = edited[5:25, 0]
+        expected[:10, 12:14] = edited[:10, 12:14]
+
+        Image.fromarray(base).save(self.original)
+        Image.fromarray(edited).save(self.processed)
+        Image.new("L", (32, 32), 255).save(self.mask)
+        self.region["ai_image"].update(
+            box=[0, 8, 32, 40], boundary_preserved=True, padding_fringe_version=2,
+        )
+        page = Image.new("RGB", (48, 48), "white")
+        page.paste(Image.fromarray(base), (0, 8))
+        expected_page = page.copy()
+        expected_page.paste(Image.fromarray(expected), (0, 8))
+
+        result = apply_ai_image_regions(page, self.session)
+
+        np.testing.assert_array_equal(np.asarray(result.convert("RGB")), np.asarray(expected_page))
+
+    def test_reexport_rechecks_bright_and_dark_rows_of_an_already_processed_patch(self):
+        base = np.full((28, 85, 3), 160, dtype=np.uint8)
+        base[:, 10:13] = 85
+        base[:, 22:25] = 210
+        edited = base.copy()
+        edited[-1, 5:51] += 12
+        edited[-2, 5:51] -= 12
+        edited[-3:, 62:81] = 15  # A real stroke reaches the bottom of the crop.
+        expected = base.copy()
+        expected[-3:, 62:81] = edited[-3:, 62:81]
+        Image.fromarray(base).save(self.original)
+        Image.fromarray(edited).save(self.processed)
+        Image.new("L", (85, 28), 255).save(self.mask)
+        self.region["ai_image"].update(
+            box=[5, 6, 90, 34], boundary_preserved=True, padding_fringe_fixed=True,
+        )
+        page = Image.new("RGB", (95, 40), "white")
+        page.paste(Image.fromarray(edited), (5, 6))  # Reopen a flattened export.
+        expected_page = page.copy()
+        expected_page.paste(Image.fromarray(expected), (5, 6))
+
+        result = apply_ai_image_regions(page, self.session, has_baked_ai=True)
+
+        np.testing.assert_array_equal(np.asarray(result.convert("RGB")), np.asarray(expected_page))
+        np.testing.assert_array_equal(np.asarray(Image.open(self.processed)), edited)
+
     def test_legacy_patch_can_still_render_with_missing_or_unreadable_original(self):
         base = Image.new("RGBA", (30, 30), "white")
         for invalid in (None, b"damaged image"):

@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
-from core.ai_image_region import preserve_boundary_artwork, repair_padding_fringe
+from core.ai_image_region import preserve_boundary_artwork
 
 
 class SfxGenerationError(ValueError):
@@ -287,7 +287,6 @@ def finish_request(request, generated):
     mask[changed > 0] = 255
     mask[allowed == 0] = 0
     processed = Image.composite(Image.fromarray(after), original, Image.fromarray(mask))
-    processed = repair_padding_fringe(original, processed)
     # Own the old text box as well, so OFF restores actual Japanese even on a cleaned page.
     ownership = np.where(mask > 0, 255, 0).astype(np.uint8)
     ownership[y1:y2, x1:x2] = 255
@@ -312,7 +311,6 @@ def finish_request(request, generated):
         "ai_image": {
             "id": uuid4().hex,
             "boundary_preserved": True,
-            "padding_fringe_fixed": True,
             "box": request["box"],
             "elapsed_seconds": generated.get("elapsed_seconds"),
             "generation_seconds": generated.get("generation_seconds"),

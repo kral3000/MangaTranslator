@@ -146,6 +146,33 @@ class OutsideSelectionTest(unittest.TestCase):
         with self.assertRaises(TranslationError):
             pipeline._select_outside_text_for_inpainting(items, [], "prose", "Codex")
 
+    def test_klein_gets_original_text_bounds_for_a_padded_mask_near_a_bubble(self):
+        for grouped in (False, True):
+            with self.subTest(grouped=grouped):
+                self.config.outside_text.flux_group_regions = grouped
+                seen = {}
+
+                def inpaint(image, mask, **kwargs):
+                    seen.update(kwargs)
+                    self.assertTrue(mask[24, 80])  # Padding above the detected text.
+                    self.assertFalse(mask[43, 110])  # The bubble stays protected.
+                    return image.copy()
+
+                with (
+                    patch.object(processor, "OutsideTextDetector", self.detector),
+                    patch.object(processor, "FluxKleinInpainter", self.inpainter),
+                    patch.object(self.inpainter, "inpaint_mask", side_effect=inpaint),
+                ):
+                    processor.process_outside_text(
+                        self.original,
+                        self.config,
+                        "unused",
+                        "PNG",
+                        bubble_data=[{"bbox": (105, 37, 126, 54)}],
+                        pre_inpaint_data_callback=lambda _: {(65, 30, 95, 60)},
+                    )
+                self.assertEqual(seen.get("composite_content_boxes"), [(30, 30, 95, 60)])
+
     def test_mixed_masks_and_all_fill_backends_preserve_excluded_pixels(self):
         for backend, grouped, fails in [
             ("flux_klein_4b", False, False),

@@ -19,6 +19,25 @@ class KleinCompositeTest(unittest.TestCase):
         self.assertEqual(blended[5, 10], 220)
         self.assertTrue(np.all(blended[8:12, 8:12] == 220))
 
+    def test_ocr_padding_feathers_both_axes_without_changing_text_or_mask_exterior(self):
+        mask = np.zeros((65, 80), dtype=bool)
+        mask[5:60, 7:73] = True
+        content = np.zeros_like(mask)
+        content[23:50, 7:50] = True  # Text can reach an unpadded edge.
+        old_alpha = _klein_clipped_composite_alpha(mask)
+        alpha = _klein_clipped_composite_alpha(mask, content)
+
+        np.testing.assert_array_equal(alpha[content], old_alpha[content])
+        np.testing.assert_array_equal(alpha[~mask], old_alpha[~mask])
+        np.testing.assert_array_equal(alpha[16:49, 18:62], old_alpha[16:49, 18:62])
+        self.assertEqual(alpha[5, 30], 0)
+        self.assertEqual(alpha[6, 30], 0)
+        self.assertEqual(alpha[31, 72], 0)
+        self.assertGreater(alpha[9, 30], 0)
+        self.assertLess(alpha[9, 30], 0.25)
+        self.assertGreater(alpha[31, 68], 0)
+        self.assertLess(alpha[31, 68], 0.25)
+
     def test_empty_thin_and_image_edge_masks(self):
         mask = np.zeros((12, 12), dtype=bool)
         self.assertFalse(_klein_clipped_composite_alpha(mask).any())

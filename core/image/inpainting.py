@@ -27,13 +27,24 @@ CONTEXT_PADDING_RATIO = 0.5  # Context padding is 50% of detection size
 MAX_CONTEXT_PADDING = 80  # Context padding capped at 80 pixels
 
 
-def _klein_clipped_composite_alpha(mask: np.ndarray) -> np.ndarray:
-    """Feather inside the mask by two pixels without fading thin brush marks."""
+def _klein_clipped_composite_alpha(
+    mask: np.ndarray,
+    content: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Feather within the mask, with more room where OCR added background padding."""
     mask = np.asarray(mask, dtype=bool)
     distance = distance_transform_edt(np.pad(mask, 1))[1:-1, 1:-1]
     local_depth = maximum_filter(distance, size=5, mode="constant", cval=0)
     width = np.clip(local_depth, 1.0, 2.0)
-    return np.minimum(distance / width, 1.0).astype(np.float32)
+    alpha = np.minimum(distance / width, 1.0).astype(np.float32)
+    if content is not None and content.any() and np.any(mask & ~content):
+        # Keep the old alpha in the detected text, and ease into it before reaching ink.
+        from_ink = cv2.distanceTransform((~content).astype(np.uint8), cv2.DIST_L2, 3)
+        edge = np.clip((distance.astype(np.float32) - 2) / 10, 0, 1)
+        ink = np.clip(1 - from_ink / 6, 0, 1)
+        ramp = np.maximum(edge, ink)
+        alpha *= ramp * ramp * (3 - 2 * ramp)
+    return alpha
 
 
 def _prompt_value_to_cpu(value):
@@ -1362,6 +1373,7 @@ class FluxKleinInpainter:
         composite_clip_bbox: Optional[Tuple[int, int, int, int]] = None,
         ocr_params: Optional[Dict] = None,
         luminance_match_masks: Optional[List[np.ndarray]] = None,
+        composite_content_boxes: Optional[List[Tuple[int, int, int, int]]] = None,
     ) -> Image.Image:
         """Inpaint a specific mask region in the image using Flux.2 Klein.
 
@@ -1377,6 +1389,7 @@ class FluxKleinInpainter:
             ocr_params: Optional OCR parameters dict for cache key generation
             luminance_match_masks: Optional original region masks to use for
                 independent luminance matching inside a grouped Flux crop
+            composite_content_boxes: Detected text bounds before automatic mask expansion
 
         Returns:
             PIL.Image: The inpainted image
@@ -1528,48 +1541,37 @@ class FluxKleinInpainter:
             if cached_patch is not None:
                 log_message("  - Using cached inpainting patch", verbose=verbose)
 
-        mask_float = mask_crop_np.astype(np.float32)
-        if blur_radius > 0:
-            d_out = distance_transform_edt(~mask_crop_np)
-            d_in = distance_transform_edt(mask_crop_np)
-            alpha = np.zeros_like(d_out, np.float32)
-            alpha[d_in > 0] = 1.0
-            ramp = np.clip(1.0 - (d_out / blur_radius), 0.0, 1.0)
-            alpha[d_out > 0] = ramp[d_out > 0]
-            mask_for_composite = torch.from_numpy(alpha)[None, ...]
-        else:
-            mask_for_composite = torch.from_numpy(mask_float)[None, ...]
-
         if strict_mask_clipping:
-            original_mask_crop = torch.from_numpy(mask_crop_np.astype(np.float32))
-            mask_for_composite = mask_for_composite * original_mask_crop
+            alpha = mask_crop_np
+        else:
+            distance_outside = distance_transform_edt(~mask_crop_np)
+            alpha = np.clip(1.0 - distance_outside / blur_radius, 0.0, 1.0).astype(
+                np.float32
+            )
 
         if composite_clip_bbox is not None:
             clip_x1, clip_y1, clip_x2, clip_y2 = composite_clip_bbox
-            clip_x1 = max(0, min(img_w, clip_x1))
-            clip_x2 = max(0, min(img_w, clip_x2))
-            clip_y1 = max(0, min(img_h, clip_y1))
-            clip_y2 = max(0, min(img_h, clip_y2))
-
-            start_x = max(0, clip_x1 - x1)
-            end_x = min(width, clip_x2 - x1)
-            start_y = max(0, clip_y1 - y1)
-            end_y = min(height, clip_y2 - y1)
-
-            if end_x <= start_x or end_y <= start_y:
-                mask_for_composite = torch.zeros_like(mask_for_composite)
-            else:
-                clipped_mask = torch.zeros_like(mask_for_composite)
-                clipped_mask[:, start_y:end_y, start_x:end_x] = mask_for_composite[
-                    :, start_y:end_y, start_x:end_x
+            clipped = np.zeros_like(alpha)
+            if clip_x2 > x1 and clip_x1 < x2 and clip_y2 > y1 and clip_y1 < y2:
+                clip = np.s_[
+                    max(0, clip_y1 - y1):min(height, clip_y2 - y1),
+                    max(0, clip_x1 - x1):min(width, clip_x2 - x1),
                 ]
-                mask_for_composite = clipped_mask
+                clipped[clip] = alpha[clip]
+            alpha = clipped
 
         if strict_mask_clipping:
-            # Feather after clipping so bbox protection also keeps a soft inner edge.
-            mask_for_composite = torch.from_numpy(
-                _klein_clipped_composite_alpha(mask_for_composite[0].cpu().numpy() > 0)
-            )[None, ...]
+            content = None
+            if composite_content_boxes:
+                content = np.zeros_like(alpha)
+                for bx1, by1, bx2, by2 in composite_content_boxes:
+                    if bx2 > x1 and bx1 < x2 and by2 > y1 and by1 < y2:
+                        content[
+                            max(0, by1 - y1):min(height, by2 - y1),
+                            max(0, bx1 - x1):min(width, bx2 - x1),
+                        ] = True
+            alpha = _klein_clipped_composite_alpha(alpha, content)
+        mask_for_composite = torch.from_numpy(alpha)[None, ...]
 
         patch_pil = cached_patch
 

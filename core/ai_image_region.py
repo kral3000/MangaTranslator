@@ -7,6 +7,10 @@ import cv2
 import numpy as np
 from PIL import Image
 
+# Reference weight from the outermost pixel inward. The first two pixels can
+# contain both the bright and dark lobes of the padded-canvas resize.
+_SEAM_WEIGHTS = (255, 255, 191, 64)
+
 AI_FILE_KEYS = ("ai_original_path", "ai_processed_path", "ai_mask_path",
                 "ai_background_path", "ai_lettering_path", "ai_erase_mask_path")
 
@@ -53,47 +57,72 @@ def preserve_boundary_artwork(before, after, allowed):
     return result
 
 
-def repair_padding_fringe(before, after):
-    """Restore a coherent one-pixel bright fringe beside the square canvas padding."""
-    width, height = after.size
-    if width == height or min(width, height) < 3 or max(width, height) < 11:
-        return after
+def _blend_patch_edges(page, box, patch, saved_original=None):
+    """Join the patch to the page without resampling its interior."""
+    left, top, right, bottom = box
+    width, height = patch.size
+    result = patch
+    for axis, length, margins in (
+        (1, width, (left, page.width - right)),
+        (0, height, (top, page.height - bottom)),
+    ):
+        depth = min(len(_SEAM_WEIGHTS), (length - 1) // 2)
+        if depth < 1:
+            continue
+        for reverse, margin in enumerate(margins):
+            if not margin:
+                continue  # There is no join at the physical page edge.
+            start, stop = (length - depth - 1, length) if reverse else (0, depth + 1)
+            sample_box = (start, 0, stop, height) if axis == 1 else (0, start, width, stop)
+            page_box = tuple(v + offset for v, offset in zip(sample_box, (left, top, left, top)))
+            current = page.crop(page_box)
+            if current.mode != "RGBA":
+                current = current.convert("RGBA")
+            sample = patch.crop(sample_box)
+            reference_bytes, sample_bytes = current.tobytes(), sample.tobytes()
+            if reference_bytes == sample_bytes:
+                if saved_original is None:
+                    continue
+                current = saved_original.crop(sample_box)
+                reference_bytes = current.tobytes()
+                if reference_bytes == sample_bytes:
+                    continue
 
-    original_patch = after
-    vertical = width < height
-    if not vertical:
-        before = before.transpose(Image.Transpose.TRANSPOSE)
-        after = after.transpose(Image.Transpose.TRANSPOSE)
-        width, height = after.size
-
-    repaired = after
-    for x, direction in ((0, 1), (width - 1, -1)):
-        left = min(x, x + 2 * direction)
-        strip = (left, 0, left + 3, height)
-        old = before.crop(strip).convert("L")
-        new = after.crop(strip).convert("L")
-        delta = np.asarray(new, dtype=np.int16) - np.asarray(old, dtype=np.int16)
-        edge, inner, deeper = delta[:, ::direction].T
-        edge_luma = np.asarray(new)[:, ::direction][:, 0]
-        bright = (edge >= 16) & (edge >= np.maximum(inner, deeper) + 16)
-        bright &= edge_luma < 240
-        coherent = np.convolve(bright, np.ones(11, dtype=np.uint8), mode="same") >= 6
-        repair = bright & coherent
-        if repair.any():
-            if repaired is after:
-                repaired = after.copy()
-            edge_box = (x, 0, x + 1, height)
-            mask = Image.fromarray(repair[:, None].astype(np.uint8) * 255)
-            repaired.paste(before.crop(edge_box), edge_box, mask)
-    if repaired is after:
-        return original_patch
-    return repaired if vertical else repaired.transpose(Image.Transpose.TRANSPOSE)
+            # Compare each pixel with its inward neighbor. Keep strong ink or
+            # erasure that extends inward, including strokes along a box edge.
+            shape = (sample.height, sample.width, 4)
+            edited = np.frombuffer(sample_bytes, dtype=np.uint8).reshape(shape)[..., :3]
+            reference = np.frombuffer(reference_bytes, dtype=np.uint8).reshape(shape)[..., :3]
+            delta = np.subtract(edited, reference, dtype=np.int16)
+            delta = np.moveaxis(delta, axis, 1)
+            if reverse:
+                delta = delta[:, ::-1]
+            lighter, darker = delta >= 48, delta <= -48
+            connected = (
+                (lighter[:, :-1] & lighter[:, 1:]) | (darker[:, :-1] & darker[:, 1:])
+            ).any(axis=-1)
+            protected = connected.copy()
+            protected[:, 1:] |= connected[:, :-1]
+            # The last sample only establishes continuity. It is never blended.
+            alpha = np.zeros(delta.shape[:2], dtype=np.uint8)
+            np.copyto(alpha[:, :depth], np.array(_SEAM_WEIGHTS[:depth], dtype=np.uint8), where=~protected)
+            if reverse:
+                alpha = alpha[:, ::-1]
+            if axis == 0:
+                alpha = alpha.T
+            if alpha.any():
+                if result is patch:
+                    result = patch.copy()
+                result.paste(current, sample_box, Image.fromarray(alpha))
+    return result
 
 
 @lru_cache(maxsize=32)
 def _read_asset(path, stamp, size, mode, reference_path=None, reference_stamp=None):
     with Image.open(path) as image:
         result = image.convert(mode)
+        if mode == "L":
+            result = result.point(lambda value: 255 if value else 0)
         if result.size != size:
             raise ValueError("AI 식자 파일 크기가 저장된 영역과 다릅니다.")
         if reference_path is not None:
@@ -116,7 +145,7 @@ def _read_asset(path, stamp, size, mode, reference_path=None, reference_stamp=No
         return result
 
 
-def apply_ai_image_regions(image, session, errors=None):
+def apply_ai_image_regions(image, session, errors=None, *, has_baked_ai=False):
     result = image
     for index, region in enumerate(session.get("regions", []), 1):
         metadata = region.get("ai_image")
@@ -152,16 +181,21 @@ def apply_ai_image_regions(image, session, errors=None):
                     )
                 return _read_asset(str(path), path.stat().st_mtime_ns, size, mode)
 
-            if region.get("enabled", True) and metadata.get("pipeline") == "separated_v1":
-                patch = Image.alpha_composite(asset("ai_background_path", "RGBA"),
-                                              asset("ai_lettering_path", "RGBA"))
-            else:
-                patch = asset(key, "RGBA")
-                if key == "ai_processed_path" and not metadata.get("padding_fringe_fixed"):
-                    patch = repair_padding_fringe(result.crop(box), patch)
-            mask = asset("ai_mask_path", "L").point(lambda value: 255 if value else 0)
+            separated = key == "ai_processed_path" and metadata.get("pipeline") == "separated_v1"
+            patch = asset("ai_background_path" if separated else key, "RGBA")
+            if key == "ai_processed_path":
+                saved_original = None
+                if has_baked_ai:
+                    try:
+                        saved_original = asset("ai_original_path", "RGBA")
+                    except (OSError, KeyError, ValueError, TypeError):
+                        pass
+                patch = _blend_patch_edges(result, box, patch, saved_original)
+                if separated:
+                    patch = Image.alpha_composite(patch, asset("ai_lettering_path", "RGBA"))
+            mask = asset("ai_mask_path", "L")
             if result is image:
-                result = image.convert("RGBA").copy()
+                result = image.convert("RGBA")
             result.paste(patch, box, mask)
         except (OSError, KeyError, ValueError, TypeError) as exc:
             if errors is not None:
