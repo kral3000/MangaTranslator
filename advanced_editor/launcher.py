@@ -966,6 +966,13 @@ def _save_editor_settings(settings: dict[str, Any]) -> None:
 
 
 class EditorCanvas(QWidget):
+    BRUSH_CURSOR_COLORS = {
+        "inpaint": (178, 206, 232),
+        "restore": (229, 194, 167),
+        "paint": (255, 255, 255),
+        "text_cover": (178, 178, 178),
+    }
+
     def __init__(self, window: "AdvancedEditorWindow"):
         super().__init__()
         self.window = window
@@ -1506,16 +1513,11 @@ class EditorCanvas(QWidget):
                 painter.drawLine(points[i - 1], points[i])
 
     def _draw_brush_cursor(self, painter: QPainter) -> None:
-        if self.hover_image_pos is None or self.tool not in {
-            "inpaint_brush",
-            "inpaint_eraser",
-            "paint_brush",
-            "paint_eraser",
-            "restore_brush",
-            "restore_eraser",
-            "text_cover_brush",
-            "text_cover_eraser",
-        }:
+        if self.hover_image_pos is None:
+            return
+        family, _, action = self.tool.rpartition("_")
+        color = self.BRUSH_CURSOR_COLORS.get(family)
+        if color is None or action not in {"brush", "eraser"}:
             return
         center = self.image_to_view(self.hover_image_pos)
         brush_size = self.window.brush_size_for_tool(self.tool)
@@ -1532,7 +1534,7 @@ class EditorCanvas(QWidget):
             painter.drawRect(cursor_rect)
         else:
             painter.drawEllipse(center, radius, radius)
-        painter.setPen(QPen(QColor(255, 255, 255, 235), 1.0))
+        painter.setPen(QPen(QColor(*color, 235), 1.0))
         if self.window.brush_shape == "square":
             painter.drawRect(cursor_rect)
         else:
