@@ -47,6 +47,10 @@ def discover_existing_editor_sessions(
 
     sessions: Dict[str, tuple[Path, Dict[str, Any], float, str]] = {}
     invalid_count = 0
+    known_members = (
+        {_group_member_key(path) for path in session_paths.values()}
+        if recent_files is not None else set()
+    )
     paths = list(session_paths.values())
     if recent_files is not None:
         def modified(path: Path) -> int:
@@ -73,20 +77,13 @@ def discover_existing_editor_sessions(
         except Exception:
             invalid_count += 1
 
-    def group_member_key(value: Any) -> str:
-        parts = Path(str(value)).parts
-        for index, part in enumerate(parts):
-            if part.casefold() in {"editor_sessions", "editor_imports"}:
-                parts = parts[index:]
-                break
-        return "/".join(part.casefold() for part in parts)
-
     groups: Dict[tuple[str, ...], List[Path]] = {}
     group_positions: Dict[tuple[str, ...], Dict[str, int]] = {}
     related_cache: Dict[tuple[str, ...], List[Path]] = {}
+    legacy_counts: Dict[tuple[str, ...], int] = {}
     for path, data, _modified, _display_name in sessions.values():
         stored_group = tuple(
-            group_member_key(value)
+            _group_member_key(value)
             for value in data.get("editor_session_group", []) or []
         )
         if stored_group:
@@ -102,9 +99,10 @@ def discover_existing_editor_sessions(
         cache_key = (str(collection).casefold(),)
         if cache_key in related_cache:
             continue
+        candidates = related_edit_session_paths(path, data)
         related_cache[cache_key] = [
             candidate
-            for candidate in related_edit_session_paths(path, data)
+            for candidate in candidates
             if str(candidate).casefold() in sessions
         ]
         related = related_cache[cache_key]
@@ -112,6 +110,7 @@ def discover_existing_editor_sessions(
             str(path).casefold(),
         )
         groups.setdefault(key, related or [path])
+        legacy_counts[key] = sum(str(candidate).casefold() in session_paths for candidate in candidates)
 
     choices: List[Tuple[float, str, str]] = []
     cleanup_records = {}
@@ -120,7 +119,7 @@ def discover_existing_editor_sessions(
         if positions:
             paths = sorted(
                 paths,
-                key=lambda item: positions.get(group_member_key(item), len(positions)),
+                key=lambda item: positions.get(_group_member_key(item), len(positions)),
             )
         records = [sessions[str(path).casefold()] for path in paths]
         modified = max(record[2] for record in records)
@@ -157,6 +156,14 @@ def discover_existing_editor_sessions(
             cleanup_records[str(paths[0])] = dict(
                 id=str(paths[0]), label=label,
                 paths=[str(path) for path in paths], modified=modified,
+                title=context or records[0][3],
+                group_key=key if positions else None,
+                page_count=(
+                    max(len(records), len(positions.keys() & known_members))
+                    if recent_files is not None and positions
+                    else max(len(records), legacy_counts.get(key, 0))
+                    if recent_files is not None else len(records)
+                ),
             )
 
     choices.sort(key=lambda item: (-item[0], item[1].casefold()))
@@ -164,3 +171,12 @@ def discover_existing_editor_sessions(
     if include_members:
         return result, invalid_count, [cleanup_records[path] for _label, path in result]
     return result, invalid_count
+
+
+def _group_member_key(value: Any) -> str:
+    parts = Path(str(value)).parts
+    for index, part in enumerate(parts):
+        if part.casefold() in {"editor_sessions", "editor_imports"}:
+            parts = parts[index:]
+            break
+    return "/".join(part.casefold() for part in parts)

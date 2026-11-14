@@ -17,6 +17,26 @@ from ui.logic import _batch_source_folder_name
 
 
 class ExistingEditorSessionDiscoveryTest(TestCase):
+    def test_recent_job_counts_group_pages_outside_recent_sample(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            folder = root / "editor_sessions"
+            folder.mkdir()
+            paths = [folder / f"{number}_edit_session.json" for number in range(4)]
+            for path in paths[:3]:
+                path.write_text(json.dumps({
+                    "source_display_path": path.name,
+                    "editor_source_folder_name": "Chapter 15",
+                    "editor_session_group": [str(member) for member in paths],
+                }), encoding="utf-8")
+
+            _, _, recent = _discover_existing_editor_sessions(root, include_members=True, recent_files=1)
+            _, _, full = _discover_existing_editor_sessions(root, include_members=True)
+            self.assertEqual(recent[0]["page_count"], 3)
+            self.assertEqual(recent[0]["title"], "Chapter 15")
+            self.assertEqual(recent[0]["group_key"], full[0]["group_key"])
+            self.assertEqual(full[0]["page_count"], 3)
+
     def test_unchanged_list_metadata_is_cached_and_file_changes_are_visible(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

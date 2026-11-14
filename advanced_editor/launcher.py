@@ -24,6 +24,7 @@ from PIL import Image
 from PyQt6.QtCore import (
     QByteArray,
     QEvent,
+    QEventLoop,
     QObject,
     QPointF,
     QRect,
@@ -67,6 +68,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGridLayout,
+    QHeaderView,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -91,6 +93,8 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QToolBar,
     QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -102,6 +106,7 @@ from advanced_editor.backend import (
     translate_texts,
 )
 from advanced_editor.font_picker import FontPicker
+from advanced_editor.standalone import EDITOR_ICON, startup_dialog
 from core.ai_image_region import apply_ai_image_regions
 from core.config import DEFAULT_FLUX_KLEIN_PROMPT, DEFAULT_FLUX_KONTEXT_PROMPT
 from core.editor_package import embed_editor_package, resolve_editor_session_input
@@ -578,24 +583,86 @@ class OpenEditorJobDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("작업 열기")
-        self.resize(650, 430)
+        self.setObjectName("OpenEditorJob")
+        self.resize(720, 500)
+        self.setMinimumSize(490, 350)
+        self.setStyleSheet("""
+            QDialog#OpenEditorJob { background: #f4f7fb; }
+            QDialog#OpenEditorJob QWidget {
+                color: #172033; font-family: "Segoe UI", "Malgun Gothic"; font-size: 13px;
+            }
+            QDialog#OpenEditorJob QLabel#JobTitle { font-size: 21px; font-weight: 700; }
+            QDialog#OpenEditorJob QLabel#JobStatus { color: #475569; }
+            QLineEdit, QTreeWidget {
+                background: #ffffff; border: 1px solid #c4cfdd; border-radius: 7px;
+            }
+            QLineEdit { padding: 8px 10px; placeholder-text-color: #526176; }
+            QLineEdit:focus, QTreeWidget:focus, QPushButton:focus { border: 1px solid #2563eb; }
+            QTreeWidget { alternate-background-color: #f8fafc; outline: 0; }
+            QTreeWidget::item { height: 34px; border-bottom: 1px solid #edf2f7; }
+            QTreeWidget::item:hover { background: #eff6ff; }
+            QTreeWidget::item:selected { background: #dbeafe; color: #1e3a8a; }
+            QHeaderView { background: #edf2f7; }
+            QHeaderView::section {
+                background: #edf2f7; color: #334155; padding: 8px;
+                border: none; border-bottom: 1px solid #d5dde8; font-weight: 600;
+            }
+            QPushButton { min-width: 74px; padding: 7px 12px; border-radius: 6px;
+                          background: #ffffff; border: 1px solid #c4cfdd; }
+            QPushButton:hover { background: #eff6ff; }
+            QDialog#OpenEditorJob QPushButton#OpenJobButton {
+                background: #2563eb; color: #ffffff; border: 1px solid #2563eb;
+            }
+            QDialog#OpenEditorJob QPushButton#OpenJobButton:focus { border: 1px solid #172033; }
+            QDialog#OpenEditorJob QPushButton#OpenJobButton:hover { background: #1d4ed8; }
+            QDialog#OpenEditorJob QPushButton#OpenJobButton:disabled {
+                background: #e2e8f0; color: #526176; border-color: #c4cfdd;
+            }
+            QProgressBar { border: none; background: #dbeafe; border-radius: 2px; }
+            QProgressBar::chunk { background: #2563eb; }
+        """)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(11)
+        title = QLabel("저장된 편집 작업")
+        title.setObjectName("JobTitle")
+        layout.addWidget(title)
         self.search = QLineEdit(placeholderText="작업 이름 검색")
         self.search.setAccessibleName("작업 이름 검색")
+        self.search.setClearButtonEnabled(True)
+        self.search.addAction(_editor_icon("search", "#475569"), QLineEdit.ActionPosition.LeadingPosition)
         self.status = QLabel("저장된 작업을 찾는 중…")
-        self.jobs = QListWidget()
+        self.status.setObjectName("JobStatus")
+        self.jobs = QTreeWidget()
+        self.jobs.setRootIsDecorated(False)
+        self.jobs.setUniformRowHeights(True)
+        self.jobs.setAlternatingRowColors(True)
+        self.jobs.setHeaderLabels(["작업", "이미지", "수정일"])
+        header = self.jobs.header()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.resizeSection(1, 78)
+        header.resizeSection(2, 146)
         self.jobs.setAccessibleName("최근 편집 작업")
         layout.addWidget(self.search)
         layout.addWidget(self.jobs, 1)
-        layout.addWidget(self.status)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(3)
+        layout.addWidget(self.progress)
+        footer = QHBoxLayout()
+        footer.addWidget(self.status, 1)
         buttons = QDialogButtonBox()
         self.open_button = buttons.addButton("열기", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.open_button.setObjectName("OpenJobButton")
         buttons.addButton("취소", QDialogButtonBox.ButtonRole.RejectRole)
-        layout.addWidget(buttons)
+        footer.addWidget(buttons)
+        layout.addLayout(footer)
         self.open_button.setEnabled(False)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        self.jobs.itemActivated.connect(lambda _item: self.accept())
+        self.jobs.itemActivated.connect(lambda _item, _column: self.accept())
         self.jobs.currentItemChanged.connect(
             lambda current, _previous: self.open_button.setEnabled(current is not None)
         )
@@ -605,7 +672,7 @@ class OpenEditorJobDialog(QDialog):
 
         self._signals = TaskSignals()
         self._signals.finished.connect(self._populate)
-        self._signals.failed.connect(self.status.setText)
+        self._signals.failed.connect(self._show_error)
         threading.Thread(target=self._discover, args=(self._signals,), daemon=True).start()
 
     @staticmethod
@@ -613,9 +680,9 @@ class OpenEditorJobDialog(QDialog):
         try:
             from core.editor_session_catalog import discover_existing_editor_sessions
 
-            recent, _invalid = discover_existing_editor_sessions(recent_files=96)
+            _, _invalid, recent = discover_existing_editor_sessions(recent_files=96, include_members=True)
             signals.finished.emit((recent, 0, False))
-            choices, invalid = discover_existing_editor_sessions()
+            _, invalid, choices = discover_existing_editor_sessions(include_members=True)
             signals.finished.emit((choices, invalid, True))
         except Exception as exc:
             signals.failed.emit(f"작업 목록을 불러올 수 없습니다. {exc}")
@@ -623,13 +690,17 @@ class OpenEditorJobDialog(QDialog):
     def _populate(self, result):
         choices, invalid, complete = result
         selection = self.jobs.currentItem()
-        selected_path = selection.data(Qt.ItemDataRole.UserRole) if selection else None
+        selected_key = selection.data(0, Qt.ItemDataRole.UserRole + 1) if selection else None
         self.jobs.clear()
-        for label, path in choices:
-            item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, path)
-            item.setToolTip(path)
-            self.jobs.addItem(item)
+        for job in choices:
+            modified = datetime.fromtimestamp(job["modified"]).strftime("%Y-%m-%d %H:%M")
+            item = QTreeWidgetItem([job["title"], f"{job['page_count']}장", modified])
+            item.setTextAlignment(1, Qt.AlignmentFlag.AlignCenter)
+            item.setData(0, Qt.ItemDataRole.UserRole, job["id"])
+            item.setData(0, Qt.ItemDataRole.UserRole + 1, job["group_key"] or job["id"])
+            item.setToolTip(0, job["label"])
+            self.jobs.addTopLevelItem(item)
+        self.progress.setVisible(not complete)
         if not complete:
             self.status.setText("최근 작업 표시 중 · 나머지 작업을 찾는 중…")
         elif invalid:
@@ -637,21 +708,26 @@ class OpenEditorJobDialog(QDialog):
         elif not choices:
             self.status.setText("저장된 편집 작업이 없습니다.")
         else:
-            self.status.hide()
+            self.status.setText(f"저장된 작업 {len(choices)}개")
         self._filter(self.search.text())
-        if selected_path:
-            for row in range(self.jobs.count()):
-                item = self.jobs.item(row)
-                if item.data(Qt.ItemDataRole.UserRole) == selected_path and not item.isHidden():
+        if selected_key:
+            for row in range(self.jobs.topLevelItemCount()):
+                item = self.jobs.topLevelItem(row)
+                if item.data(0, Qt.ItemDataRole.UserRole + 1) == selected_key and not item.isHidden():
                     self.jobs.setCurrentItem(item)
                     break
+
+    def _show_error(self, message):
+        self.progress.hide()
+        self.status.setText("작업 목록을 불러오지 못했습니다.")
+        self.status.setToolTip(message)
 
     def _filter(self, query):
         first = None
         query = query.strip().casefold()
-        for row in range(self.jobs.count()):
-            item = self.jobs.item(row)
-            match = query in item.text().casefold()
+        for row in range(self.jobs.topLevelItemCount()):
+            item = self.jobs.topLevelItem(row)
+            match = query in item.toolTip(0).casefold()
             item.setHidden(not match)
             if match and first is None:
                 first = item
@@ -660,7 +736,7 @@ class OpenEditorJobDialog(QDialog):
     def accept(self):
         current = self.jobs.currentItem()
         if current is not None and not current.isHidden():
-            self.session_path = Path(current.data(Qt.ItemDataRole.UserRole))
+            self.session_path = Path(current.data(0, Qt.ItemDataRole.UserRole))
             super().accept()
 
 
@@ -3578,7 +3654,13 @@ class AdvancedEditorWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             target = dialog.session_path.resolve()
             if target != self.session_path.resolve():
-                self._switch_editor_session(target)
+                loading = startup_dialog("편집 작업을 여는 중…", self)
+                loading.show()
+                QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+                try:
+                    self._switch_editor_session(target)
+                finally:
+                    loading.close()
         dialog.deleteLater()
 
     def _switch_editor_session(self, target: Path) -> None:
@@ -9290,6 +9372,7 @@ def _write_lifecycle_log(message: str) -> None:
 
 def launch(session_path: str | None = None) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
+    app.setWindowIcon(QIcon(str(EDITOR_ICON)))
     app.setQuitOnLastWindowClosed(True)
     if session_path is None:
         dialog = OpenEditorJobDialog()
@@ -9298,7 +9381,13 @@ def launch(session_path: str | None = None) -> int:
         session_path = str(dialog.session_path)
     resolved_session_path = str(resolve_editor_session_input(session_path))
     _write_lifecycle_log(f"launch started session={resolved_session_path}")
-    window = AdvancedEditorWindow(resolved_session_path)
+    loading = startup_dialog("편집 작업을 여는 중…")
+    loading.show()
+    QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+    try:
+        window = AdvancedEditorWindow(resolved_session_path)
+    finally:
+        loading.hide()
     if getattr(window, "_start_maximized", False):
         window.showMaximized()
     else:
