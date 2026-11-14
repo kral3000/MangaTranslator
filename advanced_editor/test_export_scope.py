@@ -89,6 +89,7 @@ class ExportScopeTest(TestCase):
         target = Path("target.json")
         window = SimpleNamespace(
             session_path=Path("current.json"),
+            related_session_paths=[Path("current.json"), target],
             session={"regions": []},
             _switching_session=False,
             _preview_timer=SimpleNamespace(stop=Mock()),
@@ -107,6 +108,8 @@ class ExportScopeTest(TestCase):
             _refresh_history_menu=Mock(),
             setWindowTitle=Mock(),
             _set_session_list_current=Mock(),
+            session_selection_label=Mock(),
+            _update_session_selection_summary=Mock(),
             schedule_exact_preview=Mock(),
             status_label=SimpleNamespace(setText=Mock()),
             _session_display_name=Mock(return_value="target"),
@@ -121,7 +124,9 @@ class ExportScopeTest(TestCase):
         ):
             AdvancedEditorWindow._switch_editor_session(window, target)
 
-        window._set_session_list_current.assert_not_called()
+        window._set_session_list_current.assert_called_once_with(
+            target, preserve_selection=True
+        )
 
     def test_bulk_export_writes_new_files_without_rerendering_work_files(self) -> None:
         with TemporaryDirectory() as temporary_directory:

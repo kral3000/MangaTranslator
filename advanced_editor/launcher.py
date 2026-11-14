@@ -62,6 +62,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QCompleter,
     QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -71,6 +72,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -570,6 +572,96 @@ class TaskSignals(QObject):
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
     progress = pyqtSignal(int, int, str)
+
+
+class OpenEditorJobDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("작업 열기")
+        self.resize(650, 430)
+        layout = QVBoxLayout(self)
+        self.search = QLineEdit(placeholderText="작업 이름 검색")
+        self.search.setAccessibleName("작업 이름 검색")
+        self.status = QLabel("저장된 작업을 찾는 중…")
+        self.jobs = QListWidget()
+        self.jobs.setAccessibleName("최근 편집 작업")
+        layout.addWidget(self.search)
+        layout.addWidget(self.jobs, 1)
+        layout.addWidget(self.status)
+        buttons = QDialogButtonBox()
+        self.open_button = buttons.addButton("열기", QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton("취소", QDialogButtonBox.ButtonRole.RejectRole)
+        layout.addWidget(buttons)
+        self.open_button.setEnabled(False)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        self.jobs.itemActivated.connect(lambda _item: self.accept())
+        self.jobs.currentItemChanged.connect(
+            lambda current, _previous: self.open_button.setEnabled(current is not None)
+        )
+        self.search.textChanged.connect(self._filter)
+        self.search.returnPressed.connect(self.accept)
+        self.search.setFocus()
+
+        self._signals = TaskSignals()
+        self._signals.finished.connect(self._populate)
+        self._signals.failed.connect(self.status.setText)
+        threading.Thread(target=self._discover, args=(self._signals,), daemon=True).start()
+
+    @staticmethod
+    def _discover(signals):
+        try:
+            from core.editor_session_catalog import discover_existing_editor_sessions
+
+            recent, _invalid = discover_existing_editor_sessions(recent_files=96)
+            signals.finished.emit((recent, 0, False))
+            choices, invalid = discover_existing_editor_sessions()
+            signals.finished.emit((choices, invalid, True))
+        except Exception as exc:
+            signals.failed.emit(f"작업 목록을 불러올 수 없습니다. {exc}")
+
+    def _populate(self, result):
+        choices, invalid, complete = result
+        selection = self.jobs.currentItem()
+        selected_path = selection.data(Qt.ItemDataRole.UserRole) if selection else None
+        self.jobs.clear()
+        for label, path in choices:
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            item.setToolTip(path)
+            self.jobs.addItem(item)
+        if not complete:
+            self.status.setText("최근 작업 표시 중 · 나머지 작업을 찾는 중…")
+        elif invalid:
+            self.status.setText(f"읽을 수 없는 세션 {invalid}개를 제외했습니다.")
+        elif not choices:
+            self.status.setText("저장된 편집 작업이 없습니다.")
+        else:
+            self.status.hide()
+        self._filter(self.search.text())
+        if selected_path:
+            for row in range(self.jobs.count()):
+                item = self.jobs.item(row)
+                if item.data(Qt.ItemDataRole.UserRole) == selected_path and not item.isHidden():
+                    self.jobs.setCurrentItem(item)
+                    break
+
+    def _filter(self, query):
+        first = None
+        query = query.strip().casefold()
+        for row in range(self.jobs.count()):
+            item = self.jobs.item(row)
+            match = query in item.text().casefold()
+            item.setHidden(not match)
+            if match and first is None:
+                first = item
+        self.jobs.setCurrentItem(first)
+
+    def accept(self):
+        current = self.jobs.currentItem()
+        if current is not None and not current.isHidden():
+            self.session_path = Path(current.data(Qt.ItemDataRole.UserRole))
+            super().accept()
 
 
 REGION_TYPE_LABELS = {
@@ -1983,6 +2075,10 @@ class AdvancedEditorWindow(QMainWindow):
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, action_toolbar)
         self.action_toolbar = action_toolbar
 
+        open_job = action_toolbar.addAction(_editor_icon("images"), "작업 열기")
+        open_job.setShortcut(QKeySequence.StandardKey.Open)
+        open_job.triggered.connect(self._open_editor_job)
+
         self.undo_action = QAction(_editor_icon("undo"), "실행 취소", self)
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.undo_action.triggered.connect(self.undo)
@@ -3366,6 +3462,16 @@ class AdvancedEditorWindow(QMainWindow):
         self.session_list.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
         )
+        self.session_list.currentRowChanged.connect(self._on_session_list_changed)
+        self.session_list.itemSelectionChanged.connect(
+            self._update_session_selection_summary
+        )
+        layout.addWidget(self.session_list, 1)
+        self._populate_session_list()
+        panel.setVisible(len(self.related_session_paths) > 1)
+        return panel
+
+    def _populate_session_list(self) -> None:
         try:
             collection_root = Path(
                 os.path.commonpath(
@@ -3374,23 +3480,22 @@ class AdvancedEditorWindow(QMainWindow):
             )
         except Exception:
             collection_root = None
-        for index, path in enumerate(self.related_session_paths, start=1):
-            self.session_list.addItem(
-                f"{index}. {self._session_display_name(path, collection_root)}"
-            )
-            item = self.session_list.item(self.session_list.count() - 1)
-            item.setData(Qt.ItemDataRole.UserRole, str(path))
-            item.setToolTip(str(path))
-        self.session_list.currentRowChanged.connect(self._on_session_list_changed)
-        self.session_list.itemSelectionChanged.connect(
-            self._update_session_selection_summary
-        )
-        layout.addWidget(self.session_list, 1)
-
+        self.session_list.blockSignals(True)
+        try:
+            self.session_list.clear()
+            for index, path in enumerate(self.related_session_paths, start=1):
+                item = QListWidgetItem(f"{index}. {self._session_display_name(path, collection_root)}")
+                item.setData(Qt.ItemDataRole.UserRole, str(path))
+                item.setToolTip(str(path))
+                self.session_list.addItem(item)
+        finally:
+            self.session_list.blockSignals(False)
         self._set_session_list_current(self.session_path)
+        count = len(self.related_session_paths)
+        self.session_panel_action.setText(f"이미지 목록 {count}")
+        self.session_panel_action.setVisible(count > 1)
+        self._set_session_panel_visible(count > 1 and self.session_panel_action.isChecked())
         self._update_session_selection_summary()
-        panel.setVisible(len(self.related_session_paths) > 1)
-        return panel
 
     def _set_session_panel_visible(self, visible: bool) -> None:
         if hasattr(self, "session_panel"):
@@ -3465,8 +3570,21 @@ class AdvancedEditorWindow(QMainWindow):
             return
         self._switch_editor_session(target)
 
+    def _open_editor_job(self) -> None:
+        if self._background_job_count or self._inpainting_running or self._export_running:
+            QMessageBox.information(self, "작업 진행 중", "현재 작업이 끝난 뒤 다른 편집 작업을 열어 주세요.")
+            return
+        dialog = OpenEditorJobDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            target = dialog.session_path.resolve()
+            if target != self.session_path.resolve():
+                self._switch_editor_session(target)
+        dialog.deleteLater()
+
     def _switch_editor_session(self, target: Path) -> None:
         previous = self.session_path
+        previous_group = self.related_session_paths
+        switching_group = target not in previous_group
         self._switching_session = True
         try:
             self.commit_region_form(mark_dirty=False)
@@ -3478,6 +3596,8 @@ class AdvancedEditorWindow(QMainWindow):
             self._preview_request_serial += 1
             self.session_path = target
             self.session = load_session(target)
+            if switching_group:
+                self.related_session_paths = related_edit_session_paths(target, self.session)
             self._dirty_region_ids = {
                 str(region_id)
                 for region_id in self.session.get("editor_dirty_region_ids", []) or []
@@ -3500,7 +3620,10 @@ class AdvancedEditorWindow(QMainWindow):
             self.reload_display_image()
             self.refresh_region_list()
             self.load_selected_region_to_form()
-            if hasattr(self, "session_selection_label"):
+            if switching_group:
+                self._populate_session_list()
+            elif hasattr(self, "session_selection_label"):
+                self._set_session_list_current(target, preserve_selection=True)
                 self._update_session_selection_summary()
             self._refresh_history_menu()
             self.setWindowTitle(
@@ -3514,6 +3637,7 @@ class AdvancedEditorWindow(QMainWindow):
         except Exception as exc:
             try:
                 self.session_path = previous
+                self.related_session_paths = previous_group
                 self.session = load_session(previous)
                 self._dirty_region_ids = {
                     str(region_id)
@@ -3534,7 +3658,10 @@ class AdvancedEditorWindow(QMainWindow):
             except Exception:
                 pass
             finally:
-                self._set_session_list_current(previous)
+                if switching_group:
+                    self._populate_session_list()
+                else:
+                    self._set_session_list_current(previous)
             QMessageBox.critical(self, "이미지 전환 실패", str(exc))
         finally:
             self._switching_session = False
@@ -9161,11 +9288,16 @@ def _write_lifecycle_log(message: str) -> None:
         pass
 
 
-def launch(session_path: str) -> int:
-    resolved_session_path = str(resolve_editor_session_input(session_path))
-    _write_lifecycle_log(f"launch started session={resolved_session_path}")
+def launch(session_path: str | None = None) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(True)
+    if session_path is None:
+        dialog = OpenEditorJobDialog()
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return 0
+        session_path = str(dialog.session_path)
+    resolved_session_path = str(resolve_editor_session_input(session_path))
+    _write_lifecycle_log(f"launch started session={resolved_session_path}")
     window = AdvancedEditorWindow(resolved_session_path)
     if getattr(window, "_start_maximized", False):
         window.showMaximized()
@@ -9192,11 +9324,8 @@ def launch(session_path: str) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print("사용법: python -m advanced_editor.launcher <edit_session.json>")
-        return 2
     try:
-        return launch(sys.argv[1])
+        return launch(sys.argv[1] if len(sys.argv) > 1 else None)
     except Exception as exc:
         try:
             repo_root = Path(__file__).resolve().parents[1]
