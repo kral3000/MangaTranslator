@@ -1832,9 +1832,15 @@ def link_edit_session_group(session_paths: List[Any]) -> List[Path]:
 def related_edit_session_paths(
     session_path: Any,
     session: Optional[Dict[str, Any]] = None,
+    *,
+    include_batch: bool = True,
 ) -> List[Path]:
     """Return linked batch/import sessions, with a directory fallback for older runs."""
     current = Path(str(session_path or "")).resolve()
+    if include_batch:
+        batch = editor_batch_for_session(current)
+        if batch is not None:
+            return batch["paths"]
     if session is None:
         try:
             with open(current, "r", encoding="utf-8") as f:
@@ -1885,6 +1891,15 @@ def related_edit_session_paths(
     if current in ordered:
         return ordered
     return [current, *ordered]
+
+
+def editor_batch_for_session(session_path: Path):
+    from .editor_batch_progress import find_editor_batch
+
+    root = next((parent for parent in session_path.parents if parent.name == "editor_sessions"), None)
+    if root is not None:
+        return find_editor_batch(root.parent, session_path)
+    return None
 
 
 def region_choices(session: Dict[str, Any]) -> List[Tuple[str, str]]:

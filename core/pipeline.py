@@ -15845,6 +15845,8 @@ def _resolve_output_path(
     output_dir: Path,
     config: MangaTranslatorConfig,
     preserve_structure: bool,
+    *,
+    create_directory: bool = True,
 ) -> Tuple[Path, str, str]:
     """Compute output path, display name, and error key for a single image."""
     use_split_batch_output = bool(
@@ -15859,13 +15861,11 @@ def _resolve_output_path(
     if preserve_structure:
         relative_path = img_path.relative_to(input_dir)
         output_subdir = output_root / relative_path.parent
-        os.makedirs(output_subdir, exist_ok=True)
         output_filename = f"{relative_path.stem}_translated"
         display_path = str(relative_path)
         error_key = str(relative_path)
     else:
         output_subdir = output_root
-        os.makedirs(output_subdir, exist_ok=True)
         output_filename = f"{img_path.stem}_translated"
         display_path = img_path.name
         error_key = img_path.name
@@ -15886,6 +15886,8 @@ def _resolve_output_path(
             always_print=True,
         )
 
+    if create_directory:
+        os.makedirs(output_subdir, exist_ok=True)
     return output_subdir / f"{output_filename}{output_ext}", display_path, error_key
 
 
@@ -16001,6 +16003,7 @@ def _record_batch_success(
     error_key: str,
     img_path: Path,
     output_path: Path,
+    editor_progress=None,
 ) -> None:
     results.setdefault("errors", {}).pop(error_key, None)
     results.setdefault("failed_files", {}).pop(error_key, None)
@@ -16014,6 +16017,8 @@ def _record_batch_success(
     results.setdefault("successful_inputs", {})[error_key] = str(img_path)
     _sync_batch_counts(results)
     _write_failed_files_txt(results)
+    if editor_progress is not None:
+        editor_progress.page_ready(default_edit_session_path(output_path))
 
 
 def _record_batch_failure(
@@ -16063,6 +16068,7 @@ async def _batch_translate_parallel(
     cancellation_manager: Optional["CancellationManager"],
     failed_files_txt_path: Optional[Union[str, Path]] = None,
     failed_source_paths: Optional[Dict[str, str]] = None,
+    editor_progress=None,
 ) -> Dict[str, Any]:
     """Process images in parallel using a semaphore to maintain target concurrency.
 
@@ -16147,7 +16153,7 @@ async def _batch_translate_parallel(
         if first_ocr_texts:
             with ocr_text_history_lock:
                 ocr_text_history[first_img] = first_ocr_texts
-        _record_batch_success(results, first_key, first_img, first_output)
+        _record_batch_success(results, first_key, first_img, first_output, editor_progress)
     except CancellationError as exc:
         cancel_message = str(exc) or "Batch process cancelled by user."
         log_message(
@@ -16280,7 +16286,7 @@ async def _batch_translate_parallel(
                     )
                     with results_lock:
                         _record_batch_success(
-                            results, error_key, img_path, output_path
+                            results, error_key, img_path, output_path, editor_progress
                         )
                         completed_count += 1
                         count = completed_count
@@ -16349,6 +16355,7 @@ def _retry_failed_batch_images(
     preserve_structure: bool,
     progress_callback: Optional[Callable[[float, str], None]],
     cancellation_manager: Optional["CancellationManager"],
+    editor_progress=None,
 ) -> None:
     failed_items = list(results.get("failed_files", {}).items())
     if not failed_items:
@@ -16406,7 +16413,7 @@ def _retry_failed_batch_images(
                 edit_session_path=default_edit_session_path(output_path),
                 cancellation_manager=cancellation_manager,
             )
-            _record_batch_success(results, error_key, img_path, output_path)
+            _record_batch_success(results, error_key, img_path, output_path, editor_progress)
             results["retry_success_count"] += 1
             log_message(
                 f"Retry succeeded for {display_path}",
@@ -16446,6 +16453,8 @@ def batch_translate_images(
     cancellation_manager: Optional["CancellationManager"] = None,
     failed_files_txt_path: Optional[Union[str, Path]] = None,
     failed_source_paths: Optional[Dict[str, str]] = None,
+    *,
+    publish_editor_progress: bool = False,
 ) -> Dict[str, Any]:
     """
     Process all images in a directory using a configuration object.
@@ -16525,6 +16534,42 @@ def batch_translate_images(
             failed_source_paths=failed_source_paths,
         )
 
+    editor_progress = None
+    if publish_editor_progress:
+        from .editor_batch_progress import EditorBatchProgress
+        from .editor_session import editor_session_context_label
+
+        repo = Path(__file__).resolve().parents[1]
+        title = editor_session_context_label({
+            "editor_character_profile_name": config.editor_character_profile_name,
+            "editor_source_folder_name": config.editor_source_folder_name or input_dir.name,
+        })
+        sessions = [
+            default_edit_session_path(
+                _resolve_output_path(img, input_dir, output_dir, config, preserve_structure,
+                                     create_directory=False)[0]
+            )
+            for img in image_files
+        ]
+        candidate = EditorBatchProgress(repo, title, output_dir, sessions)
+        if candidate.publish():
+            editor_progress = candidate
+    try:
+        return _run_batch_images(
+            image_files, input_dir, config, output_dir, progress_callback,
+            preserve_structure, cancellation_manager, failed_files_txt_path,
+            failed_source_paths, editor_progress,
+        )
+    finally:
+        if editor_progress is not None:
+            editor_progress.finish()
+
+
+def _run_batch_images(
+    image_files, input_dir, config, output_dir, progress_callback,
+    preserve_structure, cancellation_manager, failed_files_txt_path,
+    failed_source_paths, editor_progress,
+):
     total_images = len(image_files)
     start_batch_time = time.time()
     cancelled = False
@@ -16544,6 +16589,7 @@ def batch_translate_images(
                 cancellation_manager=cancellation_manager,
                 failed_files_txt_path=failed_files_txt_path,
                 failed_source_paths=failed_source_paths,
+                editor_progress=editor_progress,
             )
         )
     else:
@@ -16610,7 +16656,7 @@ def batch_translate_images(
                     with ocr_text_history_lock:
                         ocr_text_history[img_path] = captured_ocr_texts
 
-                _record_batch_success(results, error_key, img_path, output_path)
+                _record_batch_success(results, error_key, img_path, output_path, editor_progress)
 
                 if progress_callback:
                     completed_progress = (i + 1) / total_images
@@ -16686,6 +16732,7 @@ def batch_translate_images(
             preserve_structure=preserve_structure,
             progress_callback=progress_callback,
             cancellation_manager=cancellation_manager,
+            editor_progress=editor_progress,
         )
 
     if progress_callback and not results.get("cancelled", False):
@@ -16706,6 +16753,8 @@ def batch_translate_images(
         for filename, error_msg in results["errors"].items():
             log_message(f"  - {filename}: {error_msg}", always_print=True)
 
+    if editor_progress is not None:
+        return results
     link_edit_session_group(
         [
             default_edit_session_path(Path(output_path))

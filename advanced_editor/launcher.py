@@ -121,6 +121,7 @@ from core.editor_session import (
     add_region,
     apply_region_tag_font,
     delete_region,
+    editor_batch_for_session,
     editor_session_context_label,
     load_session,
     related_edit_session_paths,
@@ -641,7 +642,7 @@ class OpenEditorJobDialog(QDialog):
         header = self.jobs.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.resizeSection(1, 78)
+        header.resizeSection(1, 92)
         header.resizeSection(2, 146)
         self.jobs.setAccessibleName("최근 편집 작업")
         layout.addWidget(self.search)
@@ -664,7 +665,9 @@ class OpenEditorJobDialog(QDialog):
         buttons.rejected.connect(self.reject)
         self.jobs.itemActivated.connect(lambda _item, _column: self.accept())
         self.jobs.currentItemChanged.connect(
-            lambda current, _previous: self.open_button.setEnabled(current is not None)
+            lambda current, _previous: self.open_button.setEnabled(
+                bool(current and current.data(0, Qt.ItemDataRole.UserRole))
+            )
         )
         self.search.textChanged.connect(self._filter)
         self.search.returnPressed.connect(self.accept)
@@ -680,9 +683,13 @@ class OpenEditorJobDialog(QDialog):
         try:
             from core.editor_session_catalog import discover_existing_editor_sessions
 
-            _, _invalid, recent = discover_existing_editor_sessions(recent_files=96, include_members=True)
+            _, _invalid, recent = discover_existing_editor_sessions(
+                recent_files=96, include_members=True, include_active=True
+            )
             signals.finished.emit((recent, 0, False))
-            _, invalid, choices = discover_existing_editor_sessions(include_members=True)
+            _, invalid, choices = discover_existing_editor_sessions(
+                include_members=True, include_active=True
+            )
             signals.finished.emit((choices, invalid, True))
         except Exception as exc:
             signals.failed.emit(f"작업 목록을 불러올 수 없습니다. {exc}")
@@ -694,11 +701,21 @@ class OpenEditorJobDialog(QDialog):
         self.jobs.clear()
         for job in choices:
             modified = datetime.fromtimestamp(job["modified"]).strftime("%Y-%m-%d %H:%M")
-            item = QTreeWidgetItem([job["title"], f"{job['page_count']}장", modified])
+            title = job["title"]
+            count = f"{job['page_count']}장"
+            if job.get("translating"):
+                title = f"번역 중 · {title}"
+                count = f"{job['page_count']} / {job['total_pages']}장"
+            item = QTreeWidgetItem([title, count, modified])
             item.setTextAlignment(1, Qt.AlignmentFlag.AlignCenter)
-            item.setData(0, Qt.ItemDataRole.UserRole, job["id"])
+            item.setData(0, Qt.ItemDataRole.UserRole, job["paths"][0] if job["paths"] else None)
             item.setData(0, Qt.ItemDataRole.UserRole + 1, job["group_key"] or job["id"])
-            item.setToolTip(0, job["label"])
+            tooltip = job["label"]
+            if job.get("translating"):
+                tooltip = f"{title} · 편집 가능 {count}"
+            if job.get("output_dir"):
+                tooltip += f"\n{job['output_dir']}"
+            item.setToolTip(0, tooltip)
             self.jobs.addTopLevelItem(item)
         self.progress.setVisible(not complete)
         if not complete:
@@ -736,7 +753,10 @@ class OpenEditorJobDialog(QDialog):
     def accept(self):
         current = self.jobs.currentItem()
         if current is not None and not current.isHidden():
-            self.session_path = Path(current.data(0, Qt.ItemDataRole.UserRole))
+            path = current.data(0, Qt.ItemDataRole.UserRole)
+            if not path:
+                return
+            self.session_path = Path(path)
             super().accept()
 
 
@@ -1880,8 +1900,10 @@ class AdvancedEditorWindow(QMainWindow):
         super().__init__()
         self.session_path = Path(session_path)
         self.session = load_session(self.session_path)
-        self.related_session_paths = related_edit_session_paths(
-            self.session_path, self.session
+        self.editor_batch = editor_batch_for_session(self.session_path.resolve())
+        self.related_session_paths = (
+            self.editor_batch["paths"] if self.editor_batch else
+            related_edit_session_paths(self.session_path, self.session, include_batch=False)
         )
         self.editor_settings = _load_editor_settings()
         self.help_widgets: list[QWidget] = []
@@ -2151,10 +2173,6 @@ class AdvancedEditorWindow(QMainWindow):
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, action_toolbar)
         self.action_toolbar = action_toolbar
 
-        open_job = action_toolbar.addAction(_editor_icon("images"), "작업 열기")
-        open_job.setShortcut(QKeySequence.StandardKey.Open)
-        open_job.triggered.connect(self._open_editor_job)
-
         self.undo_action = QAction(_editor_icon("undo"), "실행 취소", self)
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.undo_action.triggered.connect(self.undo)
@@ -2301,7 +2319,7 @@ class AdvancedEditorWindow(QMainWindow):
         )
         self.session_panel_action.setCheckable(True)
         self.session_panel_action.setChecked(True)
-        self.session_panel_action.setVisible(len(self.related_session_paths) > 1)
+        self.session_panel_action.setVisible(bool(self.editor_batch) or len(self.related_session_paths) > 1)
         self.session_panel_action.setToolTip("오른쪽 이미지 목록 표시/숨기기")
         self.session_panel_action.triggered.connect(self._set_session_panel_visible)
         action_toolbar.addAction(self.session_panel_action)
@@ -2330,13 +2348,13 @@ class AdvancedEditorWindow(QMainWindow):
         action_toolbar.addWidget(self.render_status_widget)
         self._set_render_status("ready")
 
-        self.render_action = QAction(_editor_icon("save"), "저장  Ctrl+S", self)
+        self.render_action = QAction(_editor_icon("save"), "저장", self)
         self.render_action.setShortcut(QKeySequence("Ctrl+S"))
         self.render_action.setToolTip("현재 세션의 번역 결과 갱신 (Ctrl+S)")
         self.render_action.triggered.connect(self.render_and_save)
         action_toolbar.addAction(self.render_action)
 
-        self.plain_render_action = QAction(_editor_icon("export"), "내보내기", self)
+        self.plain_render_action = QAction(_editor_icon("export"), "출력", self)
         self.plain_render_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
         self.plain_render_action.setToolTip(
             "범위와 새 저장 위치를 골라 내보내기 (Ctrl+Shift+S)"
@@ -2352,14 +2370,29 @@ class AdvancedEditorWindow(QMainWindow):
         self.export_selected_action.triggered.connect(self.export_selected_images)
         self.export_all_action.triggered.connect(self.export_all_images)
         self.export_menu.aboutToShow.connect(self._refresh_export_menu)
-        self.plain_render_action.setMenu(self.export_menu)
-        action_toolbar.addAction(self.plain_render_action)
         save_button = action_toolbar.widgetForAction(self.render_action)
         if save_button is not None:
             save_button.setProperty("toolbarRole", "primary")
-        export_button = action_toolbar.widgetForAction(self.plain_render_action)
-        if isinstance(export_button, QToolButton):
-            export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        open_job = QAction(_editor_icon("images"), "작업", self)
+        open_job.setShortcut(QKeySequence.StandardKey.Open)
+        open_job.setToolTip("저장된 편집 작업 열기 (Ctrl+O)")
+        open_job.triggered.connect(self._open_editor_job)
+        self.addActions([open_job, self.plain_render_action])
+        actions_group = QWidget(action_toolbar)
+        actions_layout = QHBoxLayout(actions_group)
+        actions_layout.setContentsMargins(3, 0, 0, 0)
+        actions_layout.setSpacing(2)
+        for action in (open_job, self.plain_render_action):
+            button = QToolButton(actions_group)
+            button.setDefaultAction(action)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            button.setIconSize(QSize(15, 15))
+            button.setProperty("toolbarRole", "secondary")
+            if action is self.plain_render_action:
+                button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+                button.setMenu(self.export_menu)
+            actions_layout.addWidget(button)
+        action_toolbar.addWidget(actions_group)
 
         central = QWidget(self)
         central.setObjectName("CentralSurface")
@@ -2533,6 +2566,15 @@ class AdvancedEditorWindow(QMainWindow):
             QToolBar#TopBar QToolButton[toolbarRole="primary"]:hover {
                 background: #1d4ed8;
                 border-color: #93c5fd;
+            }
+            QToolBar#TopBar QToolButton[toolbarRole="secondary"] {
+                background: #1e293b;
+                border-color: #334155;
+                padding: 6px 7px;
+            }
+            QToolBar#TopBar QToolButton[toolbarRole="secondary"]:hover {
+                background: #273449;
+                border-color: #4b5a6f;
             }
             QToolBar#TopBar QLabel#TopBarLabel {
                 color: #e5e7eb;
@@ -3518,6 +3560,10 @@ class AdvancedEditorWindow(QMainWindow):
         title = QLabel("이미지 목록")
         title.setObjectName("PanelTitle")
         title_row.addWidget(title, 1)
+        self.session_refresh_button = QPushButton("새로고침")
+        self.session_refresh_button.setToolTip("편집 중인 페이지를 유지하고 완료된 이미지를 추가합니다.")
+        self.session_refresh_button.clicked.connect(self._refresh_batch_pages)
+        title_row.addWidget(self.session_refresh_button)
         layout.addLayout(title_row)
 
         self.session_selection_label = QLabel("")
@@ -3544,10 +3590,24 @@ class AdvancedEditorWindow(QMainWindow):
         )
         layout.addWidget(self.session_list, 1)
         self._populate_session_list()
-        panel.setVisible(len(self.related_session_paths) > 1)
+        panel.setVisible(bool(self.editor_batch) or len(self.related_session_paths) > 1)
         return panel
 
-    def _populate_session_list(self) -> None:
+    def _refresh_batch_pages(self) -> None:
+        batch = editor_batch_for_session(self.session_path.resolve())
+        if batch is None:
+            return
+        self.editor_batch = batch
+        if batch["paths"] != self.related_session_paths:
+            self.related_session_paths = batch["paths"]
+            self._populate_session_list(preserve_selection=True)
+        else:
+            self._update_session_selection_summary()
+
+    def _populate_session_list(self, *, preserve_selection: bool = False) -> None:
+        selected = {
+            item.data(Qt.ItemDataRole.UserRole) for item in self.session_list.selectedItems()
+        } if preserve_selection else set()
         try:
             collection_root = Path(
                 os.path.commonpath(
@@ -3567,10 +3627,20 @@ class AdvancedEditorWindow(QMainWindow):
         finally:
             self.session_list.blockSignals(False)
         self._set_session_list_current(self.session_path)
+        if selected:
+            self.session_list.blockSignals(True)
+            try:
+                for row in range(self.session_list.count()):
+                    item = self.session_list.item(row)
+                    item.setSelected(item.data(Qt.ItemDataRole.UserRole) in selected)
+            finally:
+                self.session_list.blockSignals(False)
         count = len(self.related_session_paths)
+        show_list = bool(self.editor_batch) or count > 1
         self.session_panel_action.setText(f"이미지 목록 {count}")
-        self.session_panel_action.setVisible(count > 1)
-        self._set_session_panel_visible(count > 1 and self.session_panel_action.isChecked())
+        self.session_panel_action.setVisible(show_list)
+        self.session_refresh_button.setVisible(bool(self.editor_batch))
+        self._set_session_panel_visible(show_list and self.session_panel_action.isChecked())
         self._update_session_selection_summary()
 
     def _set_session_panel_visible(self, visible: bool) -> None:
@@ -3596,6 +3666,8 @@ class AdvancedEditorWindow(QMainWindow):
         current_text = str(current_row + 1) if current_row >= 0 else "-"
         selected_count = len(self.session_list.selectedItems())
         summary = f"현재 {current_text} / {self.session_list.count()} · 선택 {selected_count}장"
+        if self.editor_batch and self.editor_batch["active"]:
+            summary = f"번역 중 · 편집 가능 {self.session_list.count()} / {len(self.editor_batch['expected'])}장\n{summary}"
         context = editor_session_context_label(self.session)
         self.session_selection_label.setText(
             f"{summary}\n{context}" if context else summary
@@ -3667,6 +3739,7 @@ class AdvancedEditorWindow(QMainWindow):
         previous = self.session_path
         previous_group = self.related_session_paths
         switching_group = target not in previous_group
+        previous_batch = self.editor_batch if switching_group else None
         self._switching_session = True
         try:
             self.commit_region_form(mark_dirty=False)
@@ -3679,7 +3752,11 @@ class AdvancedEditorWindow(QMainWindow):
             self.session_path = target
             self.session = load_session(target)
             if switching_group:
-                self.related_session_paths = related_edit_session_paths(target, self.session)
+                self.editor_batch = editor_batch_for_session(target)
+                self.related_session_paths = (
+                    self.editor_batch["paths"] if self.editor_batch else
+                    related_edit_session_paths(target, self.session, include_batch=False)
+                )
             self._dirty_region_ids = {
                 str(region_id)
                 for region_id in self.session.get("editor_dirty_region_ids", []) or []
@@ -3704,6 +3781,7 @@ class AdvancedEditorWindow(QMainWindow):
             self.load_selected_region_to_form()
             if switching_group:
                 self._populate_session_list()
+                _write_lifecycle_log(f"launch started session={target}")
             elif hasattr(self, "session_selection_label"):
                 self._set_session_list_current(target, preserve_selection=True)
                 self._update_session_selection_summary()
@@ -3720,6 +3798,8 @@ class AdvancedEditorWindow(QMainWindow):
             try:
                 self.session_path = previous
                 self.related_session_paths = previous_group
+                if switching_group:
+                    self.editor_batch = previous_batch
                 self.session = load_session(previous)
                 self._dirty_region_ids = {
                     str(region_id)

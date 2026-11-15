@@ -797,6 +797,7 @@ def process_batch_logic(
             cancellation_manager=cancellation_manager,
             failed_files_txt_path=failed_files_txt_path,
             failed_source_paths=failed_source_paths,
+            publish_editor_progress=True,
         )
 
         processing_time = time.time() - start_time

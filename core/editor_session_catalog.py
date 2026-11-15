@@ -6,6 +6,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .editor_batch_progress import read_editor_batches
+
 
 @lru_cache(maxsize=4096)
 def _read_editor_session_summary(path: Path, modified_ns: int, size: int) -> Dict[str, Any]:
@@ -28,6 +30,7 @@ def _read_editor_session_summary(path: Path, modified_ns: int, size: int) -> Dic
 def discover_existing_editor_sessions(
     repo_root: Optional[Path] = None,
     *, include_members: bool = False, recent_files: Optional[int] = None,
+    include_active: bool = False,
 ) -> tuple[List[Tuple[str, str]], int] | tuple[List[Tuple[str, str]], int, List[Dict[str, Any]]]:
     from core.editor_session import (
         editor_session_context_label,
@@ -45,13 +48,19 @@ def discover_existing_editor_sessions(
                 resolved = path.resolve()
                 session_paths.setdefault(str(resolved).casefold(), resolved)
 
+    batches = sorted(read_editor_batches(repo_root), key=lambda batch: -batch["modified"])
+    managed = {
+        str(path).casefold()
+        for batch in batches
+        for path in (batch["expected"] if batch["active"] else batch["paths"])
+    }
     sessions: Dict[str, tuple[Path, Dict[str, Any], float, str]] = {}
     invalid_count = 0
     known_members = (
         {_group_member_key(path) for path in session_paths.values()}
         if recent_files is not None else set()
     )
-    paths = list(session_paths.values())
+    paths = [path for key, path in session_paths.items() if key not in managed]
     if recent_files is not None:
         def modified(path: Path) -> int:
             try:
@@ -99,7 +108,7 @@ def discover_existing_editor_sessions(
         cache_key = (str(collection).casefold(),)
         if cache_key in related_cache:
             continue
-        candidates = related_edit_session_paths(path, data)
+        candidates = related_edit_session_paths(path, data, include_batch=False)
         related_cache[cache_key] = [
             candidate
             for candidate in candidates
@@ -166,7 +175,29 @@ def discover_existing_editor_sessions(
                 ),
             )
 
-    choices.sort(key=lambda item: (-item[0], item[1].casefold()))
+    active_ids = set()
+    claimed = set()
+    for batch in batches:
+        pages = [path for path in batch["paths"] if path not in claimed]
+        claimed.update(batch["expected"] if batch["active"] else pages)
+        if (batch["active"] and not include_active) or (not batch["active"] and not pages):
+            continue
+        key = str(pages[0]) if pages else batch["key"]
+        total = len(batch["expected"])
+        title = batch["title"] or Path(batch["output_dir"]).name
+        label = f"{title}  ·  {len(pages)}장"
+        if batch["active"]:
+            active_ids.add(key)
+        choices.append((batch["modified"], label, key))
+        if include_members:
+            cleanup_records[key] = dict(
+                id=key, label=label, title=title, modified=batch["modified"],
+                paths=[str(path) for path in pages],
+                group_key=batch["key"], page_count=len(pages), total_pages=total,
+                translating=batch["active"], output_dir=batch["output_dir"],
+            )
+
+    choices.sort(key=lambda item: (item[2] not in active_ids, -item[0], item[1].casefold()))
     result = [(label, path) for _modified, label, path in choices]
     if include_members:
         return result, invalid_count, [cleanup_records[path] for _label, path in result]
