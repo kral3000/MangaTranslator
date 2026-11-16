@@ -727,9 +727,10 @@ class AiSfxTest(unittest.TestCase):
         text = {"id": "dialogue", "enabled": True, "bbox": [6, 8, 10, 12],
                 "translation": "대사", "render": {}}
 
-        def draw_text(image, region, index, errors):
+        def draw_text(size, region, index, errors):
             if region.get("ai_image") or not region.get("enabled", True):
-                return image
+                return None
+            image = Image.new("RGBA", size)
             image.paste("black", (7, 9, 9, 11))
             return image
 
@@ -741,7 +742,7 @@ class AiSfxTest(unittest.TestCase):
                         session = {"regions": order, "base_image_path": str(base),
                                    "source_image_path": str(source),
                                    "restore_mask_path": str(restore) if restored else ""}
-                        with patch("core.editor_session._render_region_onto", side_effect=draw_text):
+                        with patch("core.editor_session._render_region_layer", side_effect=draw_text):
                             result, errors = render_session_image(session)
                         self.assertEqual(errors, [])
                         self.assertEqual(result.getpixel((7, 9)), (0, 0, 0, 255))

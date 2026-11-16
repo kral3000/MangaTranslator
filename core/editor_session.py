@@ -42,7 +42,7 @@ FONT_PATH_KEYS = {
 }
 _UPLOADED_RELATIVE_PATH_PREFIX = "__MT_RELATIVE_PATH__"
 _REGION_PATCH_CACHE_MAX_ITEMS = 96
-_REGION_PATCH_CACHE: "OrderedDict[str, Tuple[Tuple[int, int, int, int], np.ndarray, np.ndarray]]" = OrderedDict()
+_REGION_PATCH_CACHE: "OrderedDict[str, Tuple[Tuple[int, int], Image.Image]]" = OrderedDict()
 _REGION_PATCH_CACHE_LOCK = threading.Lock()
 _DECODED_IMAGE_CACHE_MAX_BYTES = 64 * 1024 * 1024
 _DECODED_IMAGE_CACHE: "OrderedDict[Tuple[bytes, str], Image.Image]" = OrderedDict()
@@ -1108,9 +1108,11 @@ def _image_cache_identity(path: Path, image_size: Tuple[int, int]) -> str:
         return f"{path}|{image_size[0]}x{image_size[1]}"
 
 
-def _region_patch_cache_key(base_identity: str, region: Dict[str, Any]) -> str:
+def _region_patch_cache_key(image_size: Tuple[int, int], region: Dict[str, Any]) -> str:
     signature = _region_render_signature(region)
-    return base_identity + "|" + json.dumps(
+    if signature["use_mask"]:
+        signature["use_mask"] = not _region_geometry_changed(region)
+    return f"{image_size}|" + json.dumps(
         _jsonable(signature),
         ensure_ascii=False,
         sort_keys=True,
@@ -1119,55 +1121,34 @@ def _region_patch_cache_key(base_identity: str, region: Dict[str, Any]) -> str:
 
 
 def _cached_region_patch(
-    clean_base: Image.Image,
-    base_identity: str,
+    image_size: Tuple[int, int],
     region: Dict[str, Any],
     index: int,
 ) -> Tuple[
-    Optional[Tuple[Tuple[int, int, int, int], np.ndarray, np.ndarray]],
+    Optional[Tuple[Tuple[int, int], Image.Image]],
     List[str],
 ]:
-    cache_key = _region_patch_cache_key(base_identity, region)
+    cache_key = _region_patch_cache_key(image_size, region)
     with _REGION_PATCH_CACHE_LOCK:
         cached = _REGION_PATCH_CACHE.get(cache_key)
         if cached is not None:
             _REGION_PATCH_CACHE.move_to_end(cache_key)
-            box, mask, pixels = cached
-            return (box, mask.copy(), pixels.copy()), []
+            return cached, []
 
     errors: List[str] = []
-    rendered = _render_region_onto(
-        clean_base.copy(),
-        deepcopy(region),
-        index,
-        errors,
-    )
+    rendered = _render_region_layer(image_size, deepcopy(region), index, errors)
     if errors:
         return None, errors
-    clean_arr = np.asarray(clean_base if clean_base.mode == "RGBA" else clean_base.convert("RGBA"))
-    rendered_arr = np.asarray(rendered if rendered.mode == "RGBA" else rendered.convert("RGBA"))
-    # The original RGB-only >2 threshold, without full-page int16 intermediates.
-    difference = cv2.absdiff(rendered_arr, clean_arr)
-    changed = cv2.inRange(difference, (0, 0, 0, 0), (2, 2, 2, 255)) == 0
-    x, y, width, height = cv2.boundingRect(changed.astype(np.uint8))
-    if not width or not height:
+    box = rendered.getbbox() if rendered is not None else None
+    if box is None:
         return None, []
-    left = max(0, x - 2)
-    top = max(0, y - 2)
-    right = min(rendered_arr.shape[1], x + width + 2)
-    bottom = min(rendered_arr.shape[0], y + height + 2)
-    patch = (
-        (left, top, right, bottom),
-        changed[top:bottom, left:right].copy(),
-        rendered_arr[top:bottom, left:right].copy(),
-    )
+    patch = (box[:2], rendered.crop(box))
     with _REGION_PATCH_CACHE_LOCK:
         _REGION_PATCH_CACHE[cache_key] = patch
         _REGION_PATCH_CACHE.move_to_end(cache_key)
         while len(_REGION_PATCH_CACHE) > _REGION_PATCH_CACHE_MAX_ITEMS:
             _REGION_PATCH_CACHE.popitem(last=False)
-    box, mask, pixels = patch
-    return (box, mask.copy(), pixels.copy()), []
+    return patch, []
 
 
 def _is_invalid_translation(text: str, provider: str) -> bool:
@@ -2329,17 +2310,17 @@ def _editor_overflow_bboxes(
     return candidates
 
 
-def _render_region_onto(
-    image: Image.Image,
+def _render_region_layer(
+    image_size: Tuple[int, int],
     region: Dict[str, Any],
     index: int,
     errors: List[str],
-) -> Image.Image:
+) -> Optional[Image.Image]:
     if region.get("ai_image") or not region.get("enabled", True):
-        return image
+        return None
     text = str(region.get("translation") or "")
     if not text.strip():
-        return image
+        return None
     render = region.get("render", {})
     if isinstance(render, dict):
         font_dir = _ensure_render_font_path(render, persist=False)
@@ -2347,9 +2328,9 @@ def _render_region_onto(
         font_dir = ""
     if not font_dir:
         errors.append(f"Region {index}: missing font path")
-        return image
+        return None
     config = _render_config_from_region(region)
-    bbox = _safe_int_bbox(region.get("bbox"), image.size)
+    bbox = _safe_int_bbox(region.get("bbox"), image_size)
     bubble_color_bgr = _bgr_tuple(
         region.get("bubble_color_bgr"),
         (255, 255, 255),
@@ -2366,13 +2347,15 @@ def _render_region_onto(
         or abs(perspective_y) > 1e-4
     )
 
+    # Supersampling must not resample the artwork or any previously drawn text.
+    text_layer = Image.new("RGBA", image_size)
+
     def render_at(
         target_bbox: Tuple[int, int, int, int],
         target_mask: Optional[np.ndarray],
     ) -> Image.Image:
-        target_image = Image.new("RGBA", image.size, (0, 0, 0, 0)) if use_text_warp else image
         result = render_text_skia(
-            pil_image=target_image,
+            pil_image=text_layer,
             text=text,
             bbox=target_bbox,
             font_dir=font_dir,
@@ -2393,16 +2376,15 @@ def _render_region_onto(
             result,
             _region_text_transform_matrix(region, target_bbox),
         )
-        composited = Image.alpha_composite(image.convert("RGBA"), warped)
-        composited.info.update(result.info)
-        return composited
+        warped.info.update(result.info)
+        return warped
 
     try:
         use_mask = bool(region.get("use_mask")) and not _region_geometry_changed(region)
         mask = _load_mask(region.get("mask_path")) if use_mask else None
         return render_at(bbox, mask)
     except Exception as initial_exc:
-        for overflow_bbox in _editor_overflow_bboxes(region, image.size):
+        for overflow_bbox in _editor_overflow_bboxes(region, image_size):
             try:
                 result = render_at(overflow_bbox, None)
                 result.info["editor_overflow_bbox"] = overflow_bbox
@@ -2410,13 +2392,28 @@ def _render_region_onto(
             except Exception:
                 continue
         errors.append(f"Region {index}: {initial_exc}")
+        return None
+
+
+def _render_region_onto(
+    image: Image.Image,
+    region: Dict[str, Any],
+    index: int,
+    errors: List[str],
+) -> Image.Image:
+    layer = _render_region_layer(image.size, region, index, errors)
+    if layer is None:
         return image
+    result = image.convert("RGBA")
+    box = layer.getbbox()
+    if box is not None:
+        result.alpha_composite(layer.crop(box), dest=box[:2])
+    result.info.update(layer.info)
+    return result
 
 
 def _apply_region_patch(
     image: Image.Image,
-    clean_base: Image.Image,
-    base_identity: str,
     region: Dict[str, Any],
     index: int,
     errors: List[str],
@@ -2426,20 +2423,16 @@ def _apply_region_patch(
     if region.get("ai_image"):
         return image
     patch, patch_errors = _cached_region_patch(
-        clean_base,
-        base_identity,
+        image.size,
         region,
         index,
     )
     errors.extend(patch_errors)
     if patch is None:
         return image
-    box, patch_mask, pixels = patch
+    origin, layer = patch
     result = image.convert("RGBA") if copy_image or image.mode != "RGBA" else image
-    result.paste(
-        Image.fromarray(pixels), box,
-        Image.fromarray(patch_mask.astype(np.uint8) * 255),
-    )
+    result.alpha_composite(layer, dest=origin)
     return result
 
 
@@ -2533,8 +2526,6 @@ def _render_session_text_image(
         if clean_base.size != image.size:
             clean_base = clean_base.resize(image.size, Image.Resampling.LANCZOS)
         clean_base = _apply_paint_overlay(clean_base, session)
-        # Identify the pixels actually read, even if a brush overwrites the file mid-render.
-        base_identity = f"pixels|{clean_base.size}|" + hashlib.sha256(clean_base.tobytes()).hexdigest()
         erase_boxes: List[Tuple[int, int, int, int]] = []
         for box in deleted_boxes:
             try:
@@ -2577,8 +2568,6 @@ def _render_session_text_image(
                 continue
             image = _apply_region_patch(
                 image,
-                clean_base,
-                base_identity,
                 region,
                 index,
                 errors,
@@ -2637,11 +2626,9 @@ def render_session_image(session: Dict[str, Any]) -> Tuple[Image.Image, List[str
     errors: List[str] = []
     background = render_session_background(session, errors=errors)
     image = background.copy()
-    # Cache against actual lower-layer pixels, including AI toggles and brush changes.
-    base_identity = "layered|" + hashlib.sha256(background.tobytes()).hexdigest()
     for index, region in enumerate(session.get("regions", []), start=1):
         image = _apply_region_patch(
-            image, background, base_identity, region, index, errors, copy_image=False
+            image, region, index, errors, copy_image=False
         )
     # Intentional occlusion is a separate top layer; ordinary restore stays below text.
     return _apply_original_restore(image, session, mask_key="text_cover_mask_path"), errors

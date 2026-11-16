@@ -89,6 +89,8 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QStyle,
     QStyleOptionToolButton,
+    QStyleOptionViewItem,
+    QStyledItemDelegate,
     QTabWidget,
     QTextEdit,
     QToolBar,
@@ -580,6 +582,37 @@ class TaskSignals(QObject):
     progress = pyqtSignal(int, int, str)
 
 
+class EditorJobTitleDelegate(QStyledItemDelegate):
+    STATUS_ROLE = Qt.ItemDataRole.UserRole + 2
+
+    def paint(self, painter, option, index):
+        badge = index.data(self.STATUS_ROLE)
+        if not badge:
+            super().paint(painter, option, index)
+            return
+        row = QStyleOptionViewItem(option)
+        self.initStyleOption(row, index)
+        title = row.text
+        row.text = ""
+        style = row.widget.style() if row.widget else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, row, painter, row.widget)
+        badge_width = row.fontMetrics.horizontalAdvance(badge) + 14
+        pill = QRect(row.rect.left() + 7, row.rect.center().y() - 10, badge_width, 21)
+        label = row.rect.adjusted(badge_width + 15, 0, -6, 0)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setFont(row.font)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#dce9fc"))
+        painter.drawRoundedRect(pill, 5, 5)
+        painter.setPen(QColor("#1e40af"))
+        painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, badge)
+        painter.setPen(QColor("#1e3a8a" if row.state & QStyle.StateFlag.State_Selected else "#172033"))
+        elided = row.fontMetrics.elidedText(title, Qt.TextElideMode.ElideRight, max(0, label.width()))
+        painter.drawText(label, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, elided)
+        painter.restore()
+
+
 class OpenEditorJobDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -639,13 +672,21 @@ class OpenEditorJobDialog(QDialog):
         self.jobs.setUniformRowHeights(True)
         self.jobs.setAlternatingRowColors(True)
         self.jobs.setHeaderLabels(["작업", "이미지", "수정일"])
+        self.jobs.setItemDelegateForColumn(0, EditorJobTitleDelegate(self.jobs))
         header = self.jobs.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.resizeSection(1, 92)
         header.resizeSection(2, 146)
         self.jobs.setAccessibleName("최근 편집 작업")
-        layout.addWidget(self.search)
+        filters = QHBoxLayout()
+        filters.setSpacing(8)
+        filters.addWidget(self.search, 1)
+        self.refresh_button = QPushButton("새로고침")
+        self.refresh_button.setToolTip("번역 중인 작업과 완료 장수를 다시 확인합니다.")
+        self.refresh_button.clicked.connect(self._refresh)
+        filters.addWidget(self.refresh_button)
+        layout.addLayout(filters)
         layout.addWidget(self.jobs, 1)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
@@ -674,28 +715,62 @@ class OpenEditorJobDialog(QDialog):
         self.search.setFocus()
 
         self._signals = TaskSignals()
-        self._signals.finished.connect(self._populate)
-        self._signals.failed.connect(self._show_error)
-        threading.Thread(target=self._discover, args=(self._signals,), daemon=True).start()
+        self._signals.finished.connect(self._on_discovery)
+        self._scan_lock = threading.Lock()
+        self._scan_cancel = threading.Event()
+        self._job_records = []
+        self._refresh()
+
+    def _refresh(self):
+        self._scan_cancel.set()
+        self._scan_cancel = threading.Event()
+        self.refresh_button.setEnabled(False)
+        self.progress.show()
+        self.status.setText("저장된 작업을 찾는 중…")
+        threading.Thread(
+            target=self._discover,
+            args=(self._signals, self._scan_lock, self._scan_cancel),
+            daemon=True,
+        ).start()
 
     @staticmethod
-    def _discover(signals):
+    def _discover(signals, scan_lock, cancelled):
         try:
             from core.editor_session_catalog import discover_existing_editor_sessions
 
             _, _invalid, recent = discover_existing_editor_sessions(
                 recent_files=96, include_members=True, include_active=True
             )
-            signals.finished.emit((recent, 0, False))
-            _, invalid, choices = discover_existing_editor_sessions(
-                include_members=True, include_active=True
-            )
-            signals.finished.emit((choices, invalid, True))
+            signals.finished.emit((cancelled, (recent, 0, False)))
+            with scan_lock:
+                if cancelled.is_set():
+                    return
+                _, invalid, choices = discover_existing_editor_sessions(
+                    include_members=True, include_active=True
+                )
+            signals.finished.emit((cancelled, (choices, invalid, True)))
         except Exception as exc:
-            signals.failed.emit(f"작업 목록을 불러올 수 없습니다. {exc}")
+            signals.finished.emit((cancelled, str(exc)))
+
+    def _on_discovery(self, update):
+        request, result = update
+        if request is not self._scan_cancel:
+            return
+        self.refresh_button.setEnabled(True)
+        if isinstance(result, str):
+            self._show_error(result)
+        else:
+            self._populate(result)
 
     def _populate(self, result):
         choices, invalid, complete = result
+        if not complete:
+            fresh_keys = {job["group_key"] or job["id"] for job in choices}
+            choices = choices + [
+                job for job in self._job_records
+                if not job.get("output_dir") and (job["group_key"] or job["id"]) not in fresh_keys
+            ]
+        self._job_records = choices
         selection = self.jobs.currentItem()
         selected_key = selection.data(0, Qt.ItemDataRole.UserRole + 1) if selection else None
         self.jobs.clear()
@@ -704,7 +779,6 @@ class OpenEditorJobDialog(QDialog):
             title = job["title"]
             count = f"{job['page_count']}장"
             if job.get("translating"):
-                title = f"번역 중 · {title}"
                 count = f"{job['page_count']} / {job['total_pages']}장"
             item = QTreeWidgetItem([title, count, modified])
             item.setTextAlignment(1, Qt.AlignmentFlag.AlignCenter)
@@ -712,7 +786,9 @@ class OpenEditorJobDialog(QDialog):
             item.setData(0, Qt.ItemDataRole.UserRole + 1, job["group_key"] or job["id"])
             tooltip = job["label"]
             if job.get("translating"):
-                tooltip = f"{title} · 편집 가능 {count}"
+                item.setData(0, EditorJobTitleDelegate.STATUS_ROLE, "번역 중")
+                item.setData(0, Qt.ItemDataRole.AccessibleTextRole, f"번역 중 · {title}")
+                tooltip = f"번역 중 · {title} · 편집 가능 {count}"
             if job.get("output_dir"):
                 tooltip += f"\n{job['output_dir']}"
             item.setToolTip(0, tooltip)

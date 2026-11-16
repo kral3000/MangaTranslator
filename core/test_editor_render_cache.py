@@ -5,7 +5,6 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
-import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 from core import editor_session as editor
@@ -78,46 +77,27 @@ class EditorRenderCacheTest(TestCase):
         self.assertEqual([im.getpixel((0, 0))[0] for im in results], list(range(12)))
         self.assertEqual(editor._read_editor_image(path).getpixel((0, 0)), (255, 255, 255, 255))
 
-    def test_native_diff_preserves_rgb_threshold_bounds_and_alpha(self):
-        for mode in ("RGB", "RGBA"):
-            for kind in ("rgb", "alpha_only", "below_threshold"):
-                with self.subTest(mode=mode, kind=kind):
-                    clean = np.full((19, 23, 4), 120, dtype=np.uint8)
-                    changed = clean.copy()
-                    if kind == "rgb":
-                        changed[4:9, 7:12, 0] += 3
-                        changed[12, 15, 2] -= 3
-                        changed[0, 0, 1] += 2
-                    elif kind == "alpha_only":
-                        changed[:, :, 3] = 255
-                    else:
-                        changed[4:9, 7:12, :3] += 2
-                    base = Image.fromarray(clean).convert(mode)
-                    rendered = Image.fromarray(changed).convert(mode)
-                    a = np.asarray(base.convert("RGBA"))
-                    b = np.asarray(rendered.convert("RGBA"))
-                    expected_mask = np.max(np.abs(b[..., :3].astype(np.int16) - a[..., :3].astype(np.int16)), axis=2) > 2
-                    with patch("core.editor_session._region_patch_cache_key", return_value=mode+kind), patch(
-                        "core.editor_session._render_region_onto", return_value=rendered):
-                        result, errors = editor._cached_region_patch(base, "base", {}, 1)
-                    self.assertFalse(errors)
-                    if not expected_mask.any():
-                        self.assertIsNone(result)
-                        continue
-                    ys, xs = np.where(expected_mask)
-                    box = (max(0, xs.min()-2), max(0, ys.min()-2), min(23, xs.max()+3), min(19, ys.max()+3))
-                    self.assertEqual(result[0], box)
-                    x1, y1, x2, y2 = box
-                    np.testing.assert_array_equal(result[1], expected_mask[y1:y2, x1:x2])
-                    np.testing.assert_array_equal(result[2], b[y1:y2, x1:x2])
+    def test_cached_text_alpha_preserves_underlying_ink_and_reuses_the_layer(self):
+        layer = Image.new("RGBA", (12, 12), (255, 255, 255, 0))
+        layer.putpixel((3, 5), (255, 255, 255, 128))
+        layer.putpixel((5, 5), (255, 255, 255, 255))
+        region = {"bbox": [1, 1, 10, 10], "translation": "text"}
+        with patch("core.editor_session._render_region_layer", return_value=layer) as render:
+            for color in ("black", "blue"):
+                # The gap lies inside the cached crop and touches the new glyphs.
+                lower = Image.new("RGBA", layer.size, color)
+                result = editor._apply_region_patch(lower, region, 1, [])
+                self.assertEqual(result.getpixel((4, 5)), lower.getpixel((4, 5)))
+                self.assertEqual(result.getpixel((5, 5)), (255, 255, 255, 255))
+                self.assertEqual(result.getpixel((3, 5)), Image.alpha_composite(lower, layer).getpixel((3, 5)))
+            render.assert_called_once()
 
     def test_owned_composite_updates_only_the_owned_accumulator(self):
         source = Image.new("RGBA", (10, 10), "white")
         background = source.copy()
-        pixels = np.full((2, 2, 4), (255, 0, 0, 255), dtype=np.uint8)
-        patch_value = ((2, 2, 4, 4), np.ones((2, 2), dtype=bool), pixels)
+        patch_value = ((2, 2), Image.new("RGBA", (2, 2), "red"))
         with patch("core.editor_session._cached_region_patch", return_value=(patch_value, [])):
-            result = editor._apply_region_patch(source, background, "base", {}, 1, [], copy_image=False)
+            result = editor._apply_region_patch(source, {}, 1, [], copy_image=False)
         self.assertIs(result, source)
         self.assertEqual(background.getpixel((2, 2)), (255, 255, 255, 255))
         self.assertEqual(result.getpixel((2, 2)), (255, 0, 0, 255))

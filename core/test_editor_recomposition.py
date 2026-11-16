@@ -20,25 +20,25 @@ class EditorRecompositionTest(TestCase):
     def test_patch_copy_preserves_all_channels_and_does_not_modify_inputs(self):
         rng = np.random.default_rng(42)
         pixels = rng.integers(0, 256, (4, 7, 4), dtype=np.uint8)
-        mask = rng.integers(0, 2, (4, 7)).astype(bool)
-        saved_pixels, saved_mask = pixels.copy(), mask.copy()
+        pixels[0, :, 3] = 0
+        layer = Image.fromarray(pixels)
+        saved_layer = layer.tobytes()
         box = (3, 2, 10, 6)
         for mode in ("RGB", "RGBA"):
             with self.subTest(mode=mode):
                 source = Image.new(mode, (20, 12), (37, 91, 42))
                 original = np.asarray(source).copy()
-                expected = np.asarray(source.convert("RGBA")).copy()
-                expected[2:6, 3:10][mask] = pixels[mask]
+                expected = source.convert("RGBA")
+                expected.paste(Image.alpha_composite(expected.crop(box), layer), box)
                 errors = []
                 with patch("core.editor_session._cached_region_patch",
-                           return_value=((box, mask, pixels), [])):
-                    actual = _apply_region_patch(source, source, "base", {}, 1, errors)
+                           return_value=((box[:2], layer), [])):
+                    actual = _apply_region_patch(source, {}, 1, errors)
                 self.assertFalse(errors)
                 self.assertEqual(actual.mode, "RGBA")
                 np.testing.assert_array_equal(actual, expected)
                 np.testing.assert_array_equal(source, original)
-                np.testing.assert_array_equal(pixels, saved_pixels)
-                np.testing.assert_array_equal(mask, saved_mask)
+                self.assertEqual(layer.tobytes(), saved_layer)
 
     def test_partial_neighbor_erase_does_not_leave_old_strokes_after_reload(self):
         with TemporaryDirectory() as directory:
@@ -111,9 +111,10 @@ class EditorRecompositionTest(TestCase):
                         if region["id"] != "r3":
                             render(expected, region, index, [])
                     save_session(root / "session.json", current)
-                    with patch(
-                        "core.editor_session._render_region_onto", side_effect=render
-                    ):
+                    def render_layer(size, region, index, errors):
+                        return render(Image.new("RGBA", size), region, index, errors)
+
+                    with patch("core.editor_session._render_region_layer", side_effect=render_layer):
                         first, errors = render_session_image(current)
                         reopened, reopen_errors = render_session_image(
                             load_session(root / "session.json")
