@@ -141,12 +141,16 @@ class StorageBrowserTest(TestCase):
             view.close()
 
     def test_library_navigation_keeps_page_and_separates_storage_from_history(self):
-        from PyQt6.QtCore import QTimer
+        from PyQt6.QtCore import QSettings, QTimer
         from PyQt6.QtWidgets import QDialog
 
         from advanced_editor.job_picker import OpenEditorJobDialog
 
-        with TemporaryDirectory() as tmp:
+        with (
+            TemporaryDirectory() as tmp,
+            patch("advanced_editor.job_picker.QSettings",
+                  return_value=QSettings(str(Path(tmp) / "layout.ini"), QSettings.Format.IniFormat)),
+        ):
             repo = Path(tmp)
             pages = [str(repo / ("page%d.json" % i)) for i in range(3)]
             jobs = [
@@ -171,6 +175,9 @@ class StorageBrowserTest(TestCase):
             ]
             main = OpenEditorJobDialog(repo=repo, jobs=jobs)
             main.show()
+            main.resize(780, 520)
+            main.splitter.moveSplitter(335, 1)
+            saved_size, saved_panes = main.size(), main.splitter.sizes()
             self.assertTrue(main.tree.isColumnHidden(0))
             self.assertEqual(main.items[pages[0]].text(2), "2 / 5")
             main.preview.gallery.pages.setCurrentRow(1)
@@ -197,4 +204,8 @@ class StorageBrowserTest(TestCase):
             main._open()
             self.assertEqual(main.result(), QDialog.DialogCode.Accepted)
             self.assertEqual(main.session_path, Path(pages[-1]))
+            reopened = OpenEditorJobDialog(repo=repo, jobs=jobs)
+            reopened.show()
+            self.assertEqual((reopened.size(), reopened.splitter.sizes()), (saved_size, saved_panes))
+            reopened.close()
             inventory.cache_clear()
