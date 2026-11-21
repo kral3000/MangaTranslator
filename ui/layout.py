@@ -641,7 +641,7 @@ def create_layout(
     with gr.Blocks(
         title="MangaTranslator",
         theme=gr.themes.Default(
-            font=["Noto Sans KR", "Malgun Gothic", "Segoe UI", "sans-serif"],
+            font=[gr.themes.Font("Noto Sans KR"), "Malgun Gothic", "Segoe UI", "sans-serif"],
         ).set(
             border_color_primary="#d9ddda",
             border_color_primary_dark="#454d50",
