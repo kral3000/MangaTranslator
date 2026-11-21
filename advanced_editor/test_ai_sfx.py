@@ -320,6 +320,35 @@ class AiSfxTest(unittest.TestCase):
             before, AdvancedEditorWindow._ai_sfx_region_stamp(self.region)
         )
 
+    def test_custom_direction_is_separate_from_exact_or_automatic_wording(self):
+        page = self.root / "custom_page.png"
+        Image.new("RGB", (100, 100), "white").save(page)
+        session = {"source_image_path": str(page)}
+        region = {"bbox": [20, 20, 50, 60], "source_text": "すっ"}
+        for field in ("translation", "ai_sfx_wording"):
+            with self.subTest(field=field):
+                region[field] = '[AI: 원본처럼 기울게] "ZIP!"'
+                request = prepare_request(session, region, self.root / "custom")
+                self.assertEqual(request["wording"], '"ZIP!"')
+                self.assertIn("exact wording: '\"ZIP!\"'", request["prompt"])
+                self.assertIn("direction for this region: '원본처럼 기울게'", request["prompt"])
+                region[field] = "[AI: 원문만 지우고 새 글자는 넣지 마]"
+                request = prepare_request(session, region, self.root / "custom")
+                self.assertEqual(request["wording"], "")
+                self.assertIn("without adding lettering", request["prompt"])
+                self.assertIn("Japanese OCR hint: 'すっ'", request["prompt"])
+
+    def test_custom_direction_does_not_change_regular_preview_or_render_signature(self):
+        region = {"bbox": [20, 20, 50, 60], "translation": "쪼오—옥"}
+        baseline = _region_render_signature(region)
+        region["translation"] = "  [AI: **아주 두껍게**]\n쪼오—옥"
+        self.assertEqual(AdvancedEditorWindow._preview_text(None, region), "쪼오—옥")
+        self.assertEqual(_region_render_signature(region), baseline)
+        region["translation"] = "[AI: 원본처럼 기울게]"
+        self.assertEqual(AdvancedEditorWindow._preview_text(None, region), "")
+        region["translation"] = "대사 [AI: 인용]"
+        self.assertEqual(AdvancedEditorWindow._preview_text(None, region), region["translation"])
+
     def test_generated_background_drift_does_not_become_a_rectangle(self):
         root = self.root / "composite"
         root.mkdir()
@@ -364,6 +393,29 @@ class AiSfxTest(unittest.TestCase):
         np.testing.assert_array_equal(pixels[43:, 62:], original[43:, 62:])
         np.testing.assert_array_equal(pixels[22:37, 35:38], generated[22:37, 35:38])
         np.testing.assert_array_equal(pixels[20:35, 15:20], generated[20:35, 15:20])
+
+    def test_faint_interior_stroke_survives_matching_edge_artwork(self):
+        root = self.root / "faint_stroke"
+        root.mkdir()
+        original = np.full((64, 64, 3), 255, np.uint8)
+        original[8:56, :24] = 0
+        generated = original.copy()
+        generated[30, 24:40] = 210
+        generated[10:50, 0] = 212
+        Image.fromarray(original).save(root / "original.png")
+        Image.fromarray(generated).save(root / "generated.png")
+        request = {"directory": str(root), "target": [0, 0, 64, 64],
+                   "box": [0, 0, 64, 64], "prompt": "test"}
+        result = finish_request(request, {"path": str(root / "generated.png")})
+        with Image.open(result["ai_processed_path"]) as image:
+            pixels = np.asarray(image)
+        np.testing.assert_array_equal(pixels[30, 25:40], generated[30, 25:40])
+        np.testing.assert_array_equal(pixels[:, 0], original[:, 0])
+
+        generated[30, 24:40] = 255
+        Image.fromarray(generated).save(root / "generated.png")
+        with self.assertRaisesRegex(ValueError, "변경 영역을 찾지"):
+            finish_request(request, {"path": str(root / "generated.png")})
 
     def test_boundary_preservation_does_not_erase_new_reversed_lettering(self):
         from core.ai_image_region import preserve_boundary_artwork

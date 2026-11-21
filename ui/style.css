@@ -178,6 +178,48 @@
     box-shadow: none !important;
 }
 
+/* Outside text controls */
+#config-content-area .settings-group .outside-text-switch input[type="checkbox"] {
+    appearance: none;
+    display: inline-grid;
+    align-items: center;
+    flex: none;
+    width: 34px;
+    height: 20px;
+    padding: 2px;
+    border: 1px solid var(--border-color-primary);
+    border-radius: 999px;
+    background: var(--background-fill-secondary);
+}
+
+#config-content-area .settings-group .outside-text-switch input[type="checkbox"]::before {
+    content: "";
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--body-text-color-subdued);
+    transform: none;
+}
+
+#config-content-area .settings-group .outside-text-switch input[type="checkbox"]:checked {
+    background: var(--primary-600);
+    border-color: var(--primary-600);
+}
+
+#config-content-area .settings-group .outside-text-switch input[type="checkbox"]:checked::before {
+    justify-self: end;
+    background: #fff;
+}
+
+#config-content-area .settings-group .outside-text-switch input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--primary-500);
+    outline-offset: 2px;
+}
+
+#config-content-area .settings-group .outside-text-effects label {
+    margin-inline-start: 20px;
+}
+
 /* Radio Buttons */
 #config-content-area .settings-group .gradio-radio .radio-buttons {
     display: flex;

@@ -119,7 +119,6 @@ from core.editor_session import (
     _region_is_baseline,
     _region_render_signature,
     _region_text_transform,
-    _resolve_repo_relative_path,
     add_region,
     apply_region_tag_font,
     delete_region,
@@ -130,14 +129,20 @@ from core.editor_session import (
     render_session_background,
     render_session_image,
     rerender_session,
+    resolve_editor_font_path,
     resolve_region_font_size,
     resolve_tag_font_path,
     save_session,
     set_region_font_size,
     write_editor_json_if_changed,
 )
-from core.text.font_manager import font_size_multiplier, is_default_yoon_font, yoon_font_variant
-from core.text.text_processing import extract_translation_tag, visible_editor_text
+from core.text.font_manager import (
+    find_font_variants,
+    font_size_multiplier,
+    is_default_yoon_font,
+    yoon_font_variant,
+)
+from core.text.text_processing import extract_translation_tag, split_ai_lettering_text, visible_editor_text
 
 DEFAULT_EXPORT_DIRECTORY = Path(r"C:\Users\dongw\Documents\Mana")
 
@@ -1016,7 +1021,7 @@ class EditorCanvas(QWidget):
         return QSize(900, 900)
 
     def keyPressEvent(self, event) -> None:
-        if self.tool == "inpaint_brush" and self.stroke_points:
+        if self.tool in {"inpaint_brush", "restore_brush"} and self.stroke_points:
             x, y = self.stroke_points[-1]
             width, height = self.window.image_size
             endpoint = {
@@ -1355,7 +1360,7 @@ class EditorCanvas(QWidget):
         self._draw_textbox_preview(painter)
 
     def _preview_text(self, region: dict[str, Any]) -> str:
-        text = str(region.get("translation") or "").strip()
+        text = visible_editor_text(str(region.get("translation") or "")).strip()
         _tag, text = extract_translation_tag(text)
         text = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", text)
         return text.replace("\\n", "\n")
@@ -1830,6 +1835,13 @@ class AdvancedEditorWindow(QMainWindow):
         self._build_ui()
         self.apply_editor_preset(1, persist=False, show_status=False)
         self._fit_initial_window()
+        layout = self._saved_section("window_layout")
+        geometry = layout.get("geometry")
+        if isinstance(geometry, str) and self.restoreGeometry(QByteArray.fromHex(geometry.encode())):
+            self._start_maximized = self.isMaximized()
+        splitter = layout.get(self._splitter_layout_key())
+        if isinstance(splitter, str):
+            self.splitter.restoreState(QByteArray.fromHex(splitter.encode()))
         self.reload_display_image()
         self.refresh_region_list()
         self.load_selected_region_to_form()
@@ -1838,6 +1850,9 @@ class AdvancedEditorWindow(QMainWindow):
             self.startup_warnings.append(recovery_warning)
         if self.startup_warnings:
             self.status_label.setText("\n".join(self.startup_warnings))
+
+    def _splitter_layout_key(self) -> str:
+        return "without_page_list" if self.session_panel.isHidden() else "with_page_list"
 
     def _fit_initial_window(self) -> None:
         screen = QApplication.primaryScreen()
@@ -4079,7 +4094,10 @@ class AdvancedEditorWindow(QMainWindow):
         layout.setSpacing(4)
         self.ai_sfx_button = QPushButton(_editor_icon("inpaint_brush", "#334155"), "AI 식자")
         self.ai_sfx_button.setAccessibleName("선택 영역 AI 효과음 식자 생성")
-        self.ai_sfx_button.setToolTip("선택 영역을 한국어 효과음 이미지로 식자합니다. 아래 텍스트를 문구로 사용하며, 비워두면 일본어를 읽습니다.")
+        self.ai_sfx_button.setToolTip(
+            "편집할 텍스트를 식자합니다. 맨 앞에 [AI: 연출 지시]를 넣을 수 있고, "
+            "문구를 비워두면 원문에서 문구를 정합니다."
+        )
         self.ai_sfx_button.clicked.connect(self.start_ai_sfx_generation)
         self.translation_reroll_button = TranslationRerollButton()
         self.translation_reroll_button.setObjectName("TranslationRerollButton")
@@ -5233,12 +5251,15 @@ class AdvancedEditorWindow(QMainWindow):
         return ""
 
     def _font_combo_target(self, value: Any) -> str:
-        text = _resolve_repo_relative_path(value)
+        text = resolve_editor_font_path(value)
         if text:
             try:
                 path = Path(text)
                 if not path.is_absolute():
                     path = (Path(__file__).resolve().parents[1] / path).resolve()
+                if "_backup" in (part.casefold() for part in path.parts):
+                    font = self._font_file_for_render({"font_dir": str(path)})
+                    return str(font) if font else self._default_font_choice()
                 if path.is_file() and path.suffix.lower() in SUPPORTED_FONT_SUFFIXES:
                     return str(path.resolve())
                 if path.is_dir():
@@ -5293,6 +5314,7 @@ class AdvancedEditorWindow(QMainWindow):
             normalized = os.path.normcase(str(target_path.resolve()))
             if (
                 normalized not in self._font_path_index
+                and all(part.casefold() != "_backup" for part in target_path.parts)
                 and target_path.is_file()
                 and target_path.suffix.lower() in SUPPORTED_FONT_SUFFIXES
             ):
@@ -5374,6 +5396,15 @@ class AdvancedEditorWindow(QMainWindow):
         if not target:
             self.font_style_combo.clear()
             return ""
+        if "_backup" in (part.casefold() for part in Path(target).parts):
+            with (
+                QSignalBlocker(self.font_family_combo),
+                QSignalBlocker(self.font_style_combo),
+            ):
+                self.font_family_combo.setCurrentIndex(-1)
+                self.font_style_combo.clear()
+            self._update_font_preview(target)
+            return target
         normalized = os.path.normcase(str(Path(target).resolve()))
         indexed = self._font_path_index.get(normalized)
         if indexed is None:
@@ -5425,10 +5456,10 @@ class AdvancedEditorWindow(QMainWindow):
             self._font_change_requested = True
             self.commit_region_form()
 
-    def _update_font_preview(self) -> None:
+    def _update_font_preview(self, path: str = "") -> None:
         if not hasattr(self, "font_preview_label"):
             return
-        path = str(self.font_style_combo.currentData() or "")
+        path = path or str(self.font_style_combo.currentData() or "")
         if not path or not Path(path).is_file():
             self.font_preview_label.setFont(QFont("Segoe UI", 13))
             self.font_preview_label.setStyleSheet(
@@ -6275,6 +6306,24 @@ class AdvancedEditorWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def handle_editor_key_event(self, event) -> bool:
+        if (
+            event.key() == Qt.Key.Key_Space
+            and self.focusWidget() is self.canvas
+            and self.canvas.tool == "inpaint_brush"
+        ):
+            modifiers = event.modifiers()
+            if modifiers in (
+                Qt.KeyboardModifier.NoModifier,
+                Qt.KeyboardModifier.ShiftModifier,
+            ):
+                if not event.isAutoRepeat() and not self.canvas.stroke_points:
+                    if modifiers == Qt.KeyboardModifier.ShiftModifier:
+                        self.clear_inpaint_mask()
+                    else:
+                        self.run_inpainting_task()
+                event.accept()
+                return True
+
         if event.key() in {Qt.Key.Key_Delete, Qt.Key.Key_Backspace}:
             focus = self.focusWidget()
             if isinstance(focus, (QTextEdit, QLineEdit)):
@@ -6742,7 +6791,8 @@ class AdvancedEditorWindow(QMainWindow):
             self.region_combo.clear()
             for index, region in enumerate(self.session.get("regions", []), start=1):
                 applied_wording = (region.get("ai_image") or {}).get("wording")
-                text = str(applied_wording or region.get("translation") or "").replace("\n", " ").strip()
+                text = (applied_wording or visible_editor_text(str(region.get("translation") or "")))
+                text = text.replace("\n", " ").strip()
                 if len(text) > 34:
                     text = text[:34] + "..."
                 region_type = str(region.get("type") or "region")
@@ -7203,11 +7253,11 @@ class AdvancedEditorWindow(QMainWindow):
         self, region: dict[str, Any], input_source: str
     ) -> str:
         if input_source == "translation":
-            return str(region.get("translation") or "").strip()
+            return visible_editor_text(str(region.get("translation") or "")).strip()
         source_text = str(region.get("source_text") or "").strip()
         if source_text:
             return source_text
-        return str(region.get("translation") or "").strip()
+        return visible_editor_text(str(region.get("translation") or "")).strip()
 
     @staticmethod
     def _clean_editor_translation(text: str) -> tuple[str, str]:
@@ -7235,6 +7285,9 @@ class AdvancedEditorWindow(QMainWindow):
             if regions[index].get("ai_image"):
                 continue
             text, tag = self._clean_editor_translation(translated)
+            instruction, _wording = split_ai_lettering_text(str(regions[index].get("translation") or ""))
+            if instruction is not None:
+                text = f"[AI: {instruction}] {text}"
             regions[index]["translation"] = text
             if tag:
                 regions[index]["render_tag"] = tag
@@ -7401,8 +7454,16 @@ class AdvancedEditorWindow(QMainWindow):
             return
         self._push_history("텍스트 강조 변경")
         cursor = self.translation_edit.textCursor()
+        raw_text = self.translation_edit.toPlainText()
+        text = visible_editor_text(raw_text)
+        prefix = raw_text[:len(raw_text) - len(text)]
         if cursor.hasSelection():
-            selection_start = cursor.selectionStart()
+            selection_end = cursor.selectionEnd()
+            selection_start = max(cursor.selectionStart(), len(prefix.encode("utf-16-le")) // 2)
+            if selection_start >= selection_end:
+                return
+            cursor.setPosition(selection_start)
+            cursor.setPosition(selection_end, QTextCursor.MoveMode.KeepAnchor)
             selected = cursor.selectedText().replace("\u2029", "\n")
             if (
                 len(selected) >= len(marker) * 2
@@ -7415,13 +7476,12 @@ class AdvancedEditorWindow(QMainWindow):
             cursor.insertText(replacement)
             cursor.setPosition(selection_start)
             cursor.setPosition(
-                selection_start + len(replacement),
+                selection_start + len(replacement.encode("utf-16-le")) // 2,
                 QTextCursor.MoveMode.KeepAnchor,
             )
             self.translation_edit.setTextCursor(cursor)
             self._sync_text_style_buttons()
             return
-        text = self.translation_edit.toPlainText()
         if text.strip():
             if (
                 len(text) >= len(marker) * 2
@@ -7431,7 +7491,9 @@ class AdvancedEditorWindow(QMainWindow):
                 text = text[len(marker) : -len(marker)]
             else:
                 text = f"{marker}{text}{marker}"
-            self.translation_edit.setPlainText(text)
+            self.translation_edit.setPlainText(prefix + text)
+            return
+        if prefix:
             return
         cursor.insertText(marker + marker)
         cursor.movePosition(
@@ -7462,7 +7524,7 @@ class AdvancedEditorWindow(QMainWindow):
             if cursor.hasSelection()
             else self.translation_edit.toPlainText()
         )
-        active_marker = self._text_style_marker(target)
+        active_marker = self._text_style_marker(visible_editor_text(target))
         for marker, button in self.text_style_buttons.items():
             button.blockSignals(True)
             button.setChecked(marker == active_marker)
@@ -8174,10 +8236,14 @@ class AdvancedEditorWindow(QMainWindow):
         return self._load_base_image().copy()
 
     def _font_file_for_render(self, render: dict[str, Any]) -> Optional[Path]:
-        value = _resolve_repo_relative_path(render.get("font_dir"))
+        value = resolve_editor_font_path(render.get("font_dir"))
         if not value:
             return None
         path = Path(str(value))
+        if "_backup" in (part.casefold() for part in path.parts):
+            if path.name.casefold() == "_backup":
+                return None
+            return find_font_variants(str(path)).get("regular")
         fonts = self._font_files_under(path)
         if fonts:
 
@@ -8241,7 +8307,7 @@ class AdvancedEditorWindow(QMainWindow):
         return self._font_style_cache[key]
 
     def _preview_text(self, region: dict[str, Any]) -> str:
-        text = str(region.get("translation") or "").strip()
+        text = visible_editor_text(str(region.get("translation") or "")).strip()
         _tag, text = extract_translation_tag(text)
         text = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", text)
         return text.replace("\\n", "\n")
@@ -8281,7 +8347,7 @@ class AdvancedEditorWindow(QMainWindow):
         if font_style:
             font.setStyleName(font_style)
         font.setPixelSize(pixel_size)
-        raw_text = str(region.get("translation") or "")
+        raw_text = visible_editor_text(str(region.get("translation") or ""))
         if "**" in raw_text:
             font.setBold(True)
         if re.search(r"(?<!\*)\*[^*].*?\*(?!\*)", raw_text):
@@ -9229,6 +9295,10 @@ class AdvancedEditorWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self._ai_jobs.close()
         self._ai_sfx_timer.stop()
+        layout = self._saved_section("window_layout")
+        layout["geometry"] = bytes(self.saveGeometry().toHex()).decode("ascii")
+        layout[self._splitter_layout_key()] = bytes(self.splitter.saveState().toHex()).decode("ascii")
+        self.editor_settings["window_layout"] = layout
         try:
             self.commit_region_form(mark_dirty=False)
             self._persist_editor_control_settings()
@@ -9288,7 +9358,6 @@ def launch(session_path: str | None = None, *, draft=None) -> int:
             import ctypes
 
             hwnd = int(window.winId())
-            ctypes.windll.user32.ShowWindow(hwnd, 9)
             ctypes.windll.user32.SetForegroundWindow(hwnd)
         except Exception:
             pass

@@ -26,7 +26,7 @@ from core.editor_paths import (
 )
 from core.config import MangaTranslatorConfig, RenderingConfig
 from core.image.image_utils import save_image_with_compression, upscale_image
-from core.text.text_processing import extract_translation_tag
+from core.text.text_processing import extract_translation_tag, visible_editor_text
 from core.text.text_renderer import render_text_skia
 from utils.logging import log_message
 
@@ -132,9 +132,11 @@ def _resolve_repo_relative_path(value: Any) -> str:
     return text
 
 
-def _path_contains_font(path: Path) -> bool:
+def _path_contains_font(path: Path, *, allow_backup: bool = False) -> bool:
     try:
-        if any(part.casefold() == "_backup" for part in path.parts):
+        if path.name.casefold() == "_backup" or (
+            not allow_backup and any(part.casefold() == "_backup" for part in path.parts)
+        ):
             return False
         if path.is_file():
             return path.suffix.lower() in {".ttf", ".otf", ".ttc"}
@@ -143,11 +145,49 @@ def _path_contains_font(path: Path) -> bool:
                 item.suffix.lower() in {".ttf", ".otf", ".ttc"}
                 for item in path.rglob("*")
                 if item.is_file()
-                and all(part.casefold() != "_backup" for part in item.parts)
+                and all(
+                    part.casefold() != "_backup" for part in item.relative_to(path).parts
+                )
             )
     except Exception:
         return False
     return False
+
+
+def resolve_editor_font_path(value: Any) -> str:
+    """Recover archived session fonts without changing the stored reference."""
+    resolved = _resolve_repo_relative_path(value)
+    if not resolved:
+        return resolved
+    path = Path(resolved)
+    if _path_contains_font(path, allow_backup=True):
+        return resolved
+    parts = path.parts
+    folded = [part.casefold() for part in parts]
+    if "fonts" not in folded:
+        return resolved
+    relative = Path(*parts[folded.index("fonts") + 1 :])
+    if not relative.name or ".." in relative.parts or "_backup" in folded:
+        return resolved
+    backup = (_repo_root() / "fonts" / "_BACKUP").resolve()
+    wants_file = relative.suffix.lower() in {".ttf", ".otf", ".ttc"}
+
+    def matches(candidate: Path) -> bool:
+        return (
+            candidate.resolve().is_relative_to(backup)
+            and (candidate.is_file() if wants_file else candidate.is_dir())
+            and _path_contains_font(candidate, allow_backup=True)
+        )
+
+    mirrored = backup / relative
+    if matches(mirrored):
+        return str(mirrored.resolve())
+    found = {
+        candidate.resolve()
+        for candidate in backup.rglob("*")
+        if candidate.name.casefold() == relative.name.casefold() and matches(candidate)
+    }
+    return str(found.pop()) if len(found) == 1 else resolved
 
 
 def _default_editor_font_path() -> str:
@@ -201,10 +241,12 @@ def _ensure_render_font_path(render: Dict[str, Any], *, persist: bool = True) ->
     _resolve_render_font_paths(render)
     for key in FONT_PATH_KEYS - {"font_dir"}:
         value = str(render.get(key) or "").strip()
-        if value and not _path_contains_font(Path(value)):
+        if value and not _path_contains_font(
+            Path(resolve_editor_font_path(value)), allow_backup=True
+        ):
             render[key] = None
-    font_dir = str(render.get("font_dir") or "").strip()
-    if font_dir and _path_contains_font(Path(font_dir)):
+    font_dir = resolve_editor_font_path(render.get("font_dir"))
+    if font_dir and _path_contains_font(Path(font_dir), allow_backup=True):
         return font_dir
     fallback = _default_editor_font_path()
     if fallback and persist:
@@ -242,10 +284,13 @@ def apply_region_tag_font(region: Dict[str, Any], tag_styles: Dict[str, Any]) ->
     return True
 
 
-def _resolve_render_font_paths(render: Dict[str, Any]) -> Dict[str, Any]:
+def _resolve_render_font_paths(
+    render: Dict[str, Any], *, allow_backup: bool = False
+) -> Dict[str, Any]:
+    resolve = resolve_editor_font_path if allow_backup else _resolve_repo_relative_path
     for key in FONT_PATH_KEYS:
         if key in render and render.get(key):
-            render[key] = _resolve_repo_relative_path(render[key])
+            render[key] = resolve(render[key])
     return render
 
 
@@ -487,7 +532,7 @@ def _region_render_signature(region: Dict[str, Any]) -> Dict[str, Any]:
     signature = {
         "enabled": bool(region.get("enabled", True)),
         "type": region.get("type", "region"),
-        "translation": str(region.get("translation") or ""),
+        "translation": visible_editor_text(str(region.get("translation") or "")),
         "bbox": _bbox_to_list(region.get("bbox")),
         "rotation_deg": float(region.get("rotation_deg") or 0.0),
         "vertical_stack": bool(region.get("vertical_stack", False)),
@@ -518,7 +563,7 @@ def _auto_vertical_candidate(region: Dict[str, Any]) -> bool:
         return False
     if height / width < 1.7:
         return False
-    text = str(region.get("translation") or "")
+    text = visible_editor_text(str(region.get("translation") or ""))
     _tag, text = extract_translation_tag(text)
     text = re.sub(r"(\*{1,3})(.*?)\1", r"\2", text)
     limit_chars = sum(1 for ch in re.sub(r"\s+", " ", text.strip()) if ch.isalnum())
@@ -703,7 +748,7 @@ def _resolve_auto_vertical_orientation(
     render = region.get("render")
     if not isinstance(render, dict) or not bool(render.get("auto_vertical_text", False)):
         return "horizontal"
-    text = str(region.get("translation") or "")
+    text = visible_editor_text(str(region.get("translation") or ""))
     if not text.strip():
         return "horizontal"
     snapshot_orientation = _infer_orientation_from_rendered_snapshot(
@@ -976,6 +1021,8 @@ def _region_patch_cache_key(image_size: Tuple[int, int], region: Dict[str, Any])
     signature = _region_render_signature(region)
     if signature["use_mask"]:
         signature["use_mask"] = not _region_geometry_changed(region)
+    if isinstance(signature["render"], dict):
+        _resolve_render_font_paths(signature["render"], allow_backup=True)
     return f"{image_size}|" + json.dumps(
         _jsonable(signature),
         ensure_ascii=False,
@@ -1393,7 +1440,10 @@ def save_pipeline_edit_session(
             }
         )
 
-    if not regions:
+    if not regions and not any(
+        bubble.get("skip_reason") in ("source_punctuation_only", "outside_text_processing_mode")
+        for bubble in sorted_bubble_data
+    ):
         return None
 
     data = {
@@ -1694,7 +1744,7 @@ def link_edit_session_group(session_paths: List[Any]) -> List[Path]:
 def region_choices(session: Dict[str, Any]) -> List[Tuple[str, str]]:
     choices = []
     for index, region in enumerate(session.get("regions", []), start=1):
-        text = str(region.get("translation") or "").replace("\n", " ").strip()
+        text = visible_editor_text(str(region.get("translation") or "")).replace("\n", " ").strip()
         if len(text) > 32:
             text = f"{text[:32]}..."
         label = f"{index}. {region.get('type', 'region')} | {text or '(empty)'}"
@@ -1871,7 +1921,7 @@ def delete_region(session_path: Any, region_id: Any) -> Tuple[Dict[str, Any], Op
 
 def _render_config_from_region(region: Dict[str, Any]) -> RenderingConfig:
     data = dict(region.get("render", {}))
-    _resolve_render_font_paths(data)
+    _resolve_render_font_paths(data, allow_backup=True)
     fixed_font_size = data.pop("font_size", None)
     try:
         fixed_font_size = int(round(float(fixed_font_size)))
@@ -1945,7 +1995,7 @@ def resolve_region_font_size(
             update_baseline=True,
         )
 
-    text = str(region.get("translation") or "")
+    text = visible_editor_text(str(region.get("translation") or ""))
     font_dir = _ensure_render_font_path(render, persist=False)
     if text.strip() and font_dir:
         try:
@@ -2073,7 +2123,7 @@ def _editor_overflow_bboxes(
     box_height = max(1.0, y2 - y1)
     center_x = (x1 + x2) / 2.0
     center_y = (y1 + y2) / 2.0
-    text = str(region.get("translation") or "")
+    text = visible_editor_text(str(region.get("translation") or ""))
     visible_chars = max(1, len(re.sub(r"\s+", "", text)))
     text_span = font_size * max(1.0, math.sqrt(float(visible_chars)))
     vertical = bool(region.get("vertical_stack", False))
@@ -2126,7 +2176,7 @@ def _render_region_layer(
 ) -> Optional[Image.Image]:
     if region.get("ai_image") or not region.get("enabled", True):
         return None
-    text = str(region.get("translation") or "")
+    text = visible_editor_text(str(region.get("translation") or ""))
     if not text.strip():
         return None
     render = region.get("render", {})

@@ -4,7 +4,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List
 
-from core.config import DEFAULT_FLUX_KLEIN_PROMPT, DEFAULT_FLUX_KONTEXT_PROMPT
+from core.config import OUTSIDE_TEXT_STORY_MODE, DEFAULT_FLUX_KLEIN_PROMPT, DEFAULT_FLUX_KONTEXT_PROMPT
 from core.llm_defaults import DEFAULT_LLM_PROVIDER, get_provider_sampling_defaults
 from core.tag_styles import normalize_tag_style_table
 from core.validation import clamp_settings
@@ -258,8 +258,9 @@ DEFAULT_SETTINGS = {
     "context_image_max_side_pixels": 1024,
     "osb_min_side_pixels": 128,
     # Outside text removal settings
-    "outside_text_enabled": False,
-    "outside_text_processing_mode": "prose",
+    "outside_text_enabled": True,
+    "outside_text_processing_mode": OUTSIDE_TEXT_STORY_MODE,
+    "outside_text_preferred_mode": OUTSIDE_TEXT_STORY_MODE,
     "outside_text_seed": 1,
     "outside_text_huggingface_token": "",
     "outside_text_inpainting_method": "flux_klein_4b",
@@ -428,6 +429,7 @@ CANONICAL_CONFIG_KEY_ORDER: List[str] = [
     # Outside Text Removal
     "outside_text_enabled",
     "outside_text_processing_mode",
+    "outside_text_preferred_mode",
     "outside_text_seed",
     "outside_text_huggingface_token",
     "outside_text_inpainting_method",
@@ -677,8 +679,7 @@ def get_saved_settings() -> Dict[str, Any]:
                     if "padding_vertical_pixels" not in saved_config:
                         settings["padding_vertical_pixels"] = legacy_padding_pixels
 
-                # 6) Preserve the old checkbox meaning when upgrading to the
-                # three-state outside-text menu.
+                # 6) Preserve the old checkbox meaning for older config files.
                 if "outside_text_processing_mode" not in saved_config:
                     settings["outside_text_processing_mode"] = (
                         "all" if saved_config.get("outside_text_enabled", False) else "off"
@@ -692,9 +693,9 @@ def get_saved_settings() -> Dict[str, Any]:
             )
             saved_model_for_provider = provider_models_dict.get(loaded_provider)
 
-            if (
-                loaded_provider == "OpenRouter"
-                or loaded_provider == "OpenAI-Compatible"
+            # The standalone editor may read a saved Codex model before the list refreshes.
+            if loaded_provider in ("OpenRouter", "OpenAI-Compatible") or (
+                loaded_provider == "Codex" and saved_model_for_provider
             ):
                 settings["model_name"] = saved_model_for_provider
             else:

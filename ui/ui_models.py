@@ -7,6 +7,7 @@ import torch
 
 from core.tag_styles import default_tag_style_rows, normalize_tag_style_table, tag_styles_to_table
 from core.config import (
+    OUTSIDE_TEXT_STORY_MODE,
     CleaningConfig,
     DEFAULT_FLUX_KLEIN_PROMPT,
     DEFAULT_FLUX_KONTEXT_PROMPT,
@@ -20,6 +21,25 @@ from core.config import (
     TranslationConfig,
     normalize_outside_text_processing_mode,
 )
+
+
+def outside_text_mode_from_options(effects: bool, include_scene_text: bool) -> str:
+    if include_scene_text:
+        return "all"
+    return OUTSIDE_TEXT_STORY_MODE if effects else "prose"
+
+
+def outside_text_modes_from_settings(settings: Dict[str, Any]) -> tuple[str, str]:
+    mode = normalize_outside_text_processing_mode(
+        settings.get("outside_text_processing_mode"),
+        enabled=bool(settings.get("outside_text_enabled")),
+    )
+    preferred = normalize_outside_text_processing_mode(
+        settings.get("outside_text_preferred_mode")
+    )
+    if mode != "off":
+        return mode, mode
+    return mode, preferred if preferred != "off" else OUTSIDE_TEXT_STORY_MODE
 
 
 def normalize_flux_offload_mode(
@@ -221,7 +241,8 @@ class UIOutsideTextSettings:
     """UI state for outside speech bubble text removal settings."""
 
     enabled: bool = False
-    processing_mode: str = "prose"
+    processing_mode: str = "off"
+    preferred_mode: str = OUTSIDE_TEXT_STORY_MODE
     enable_page_number_filtering: bool = False
     page_filter_margin_threshold: float = 0.1
     page_filter_min_area_ratio: float = 0.05
@@ -440,6 +461,7 @@ class UIConfigState:
             "outside_dark_outline_width": self.rendering.outside_dark_outline_width,
             "outside_text_enabled": self.outside_text.enabled,
             "outside_text_processing_mode": self.outside_text.processing_mode,
+            "outside_text_preferred_mode": self.outside_text.preferred_mode,
             "outside_text_seed": self.outside_text.seed,
             "outside_text_huggingface_token": self.outside_text.huggingface_token,
             "outside_text_inpainting_method": self.outside_text.inpainting_method,
@@ -565,23 +587,9 @@ class UIConfigState:
         padding_vertical_pixels = data.get(
             "padding_vertical_pixels", legacy_padding_pixels
         )
-        legacy_outside_text_enabled = bool(
-            data.get(
-                "outside_text_enabled",
-                defaults.get("outside_text_enabled", False),
-            )
-        )
-        outside_text_processing_mode = normalize_outside_text_processing_mode(
-            data.get("outside_text_processing_mode")
-            if "outside_text_processing_mode" in data
-            else (
-                "all"
-                if legacy_outside_text_enabled
-                else "off"
-                if "outside_text_enabled" in data
-                else defaults.get("outside_text_processing_mode", "prose")
-            ),
-            enabled=legacy_outside_text_enabled,
+        outside_text_processing_mode, outside_text_preferred_mode = outside_text_modes_from_settings(
+            data if "outside_text_processing_mode" in data or "outside_text_enabled" in data
+            else defaults
         )
 
         return UIConfigState(
@@ -645,6 +653,7 @@ class UIConfigState:
             outside_text=UIOutsideTextSettings(
                 enabled=outside_text_processing_mode != "off",
                 processing_mode=outside_text_processing_mode,
+                preferred_mode=outside_text_preferred_mode,
                 enable_page_number_filtering=data.get(
                     "outside_text_enable_page_number_filtering",
                     defaults.get("outside_text_enable_page_number_filtering", False),

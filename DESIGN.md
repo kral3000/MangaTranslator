@@ -263,6 +263,7 @@ Controls use gently restrained corners: 6px for most buttons, fields, tabs, help
 ### Canvas Controls
 
 - **Zoom Bar:** A dark strip with compact 4px controls, white labels, and explicit pan, zoom, fit, and 100% actions.
+- **AI Jobs:** A fixed-height summary in the existing zoom bar opens a 420px scrolling popup with per-job target, stage, elapsed time, cancel and result actions. A compact concurrency spinbox changes image request slots; retranslation has its own slot. Ready results remain accessible while other jobs run, including through the popup on narrow canvases. The inspector fields and action buttons keep their existing positions.
 - **Scrollbars:** 18px native bars with 36px minimum handles; handles turn blue on hover.
 - **Region Overlays:** Selected regions use a 2px blue outline; enabled unselected regions use a 1px translucent amber outline; disabled regions use gray. Every number uses the same square-cornered dark tab fixed to the box's top-left border with a one-pixel overlap, making tab and outline read as one component. Badge placement never moves dynamically. Selected resize handles are 7px squares placed two pixels beyond each corner so the box geometry stays visible; their invisible hit targets remain larger for usability.
 

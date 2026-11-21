@@ -13,7 +13,7 @@ import torch
 from PIL import Image
 
 import runtime_logging
-from core.config import MangaTranslatorConfig, normalize_outside_text_processing_mode
+from core.config import MangaTranslatorConfig
 from core.editor_session_catalog import discover_existing_editor_sessions as _discover_existing_editor_sessions
 from core.pipeline import (
     BATCH_EMBEDDED_OUTPUT_DIR_NAME,
@@ -46,6 +46,7 @@ from .ui_models import (
     UITranslationProviderSettings,
     flux_offload_flags,
     map_ui_to_backend_config,
+    outside_text_mode_from_options,
 )
 
 ERROR_PREFIX = "오류: "
@@ -756,6 +757,8 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         padding_vertical_pixels_val,
         supersampling_factor_val,
         outside_text_enabled_val,
+        outside_text_effects_val,
+        outside_text_include_scene_val,
         outside_text_seed_val,
         outside_text_inpainting_method_val,
         outside_text_kontext_backend_val,
@@ -827,8 +830,8 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
     flux_cpu_offload, flux_low_vram = flux_offload_flags(
         outside_text_flux_offload_mode_val
     )
-    outside_text_processing_mode = normalize_outside_text_processing_mode(
-        outside_text_enabled_val
+    outside_text_preferred_mode = outside_text_mode_from_options(
+        outside_text_effects_val, outside_text_include_scene_val,
     )
 
     return UIConfigState(
@@ -861,8 +864,9 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
             ),
         ),
         outside_text=UIOutsideTextSettings(
-            enabled=outside_text_processing_mode != "off",
-            processing_mode=outside_text_processing_mode,
+            enabled=outside_text_enabled_val,
+            processing_mode=outside_text_preferred_mode if outside_text_enabled_val else "off",
+            preferred_mode=outside_text_preferred_mode,
             seed=int(outside_text_seed_val),
             huggingface_token=outside_text_huggingface_token_val,
             inpainting_method=outside_text_inpainting_method_val,
@@ -2428,6 +2432,8 @@ def handle_save_config_click(*args: Any) -> str:
         padding_vertical_pixels_val,
         supersampling_factor_val,
         outside_text_enabled_val,
+        outside_text_effects_val,
+        outside_text_include_scene_val,
         outside_text_seed_val,
         outside_text_inpainting_method_val,
         outside_text_kontext_backend_val,
@@ -2482,8 +2488,8 @@ def handle_save_config_click(*args: Any) -> str:
     flux_cpu_offload, flux_low_vram = flux_offload_flags(
         outside_text_flux_offload_mode_val
     )
-    outside_text_processing_mode = normalize_outside_text_processing_mode(
-        outside_text_enabled_val
+    outside_text_preferred_mode = outside_text_mode_from_options(
+        outside_text_effects_val, outside_text_include_scene_val,
     )
 
     ui_state = UIConfigState(
@@ -2516,8 +2522,9 @@ def handle_save_config_click(*args: Any) -> str:
             roi_shrink_px=int(max(0, min(8, roi_shrink_px))),
         ),
         outside_text=UIOutsideTextSettings(
-            enabled=outside_text_processing_mode != "off",
-            processing_mode=outside_text_processing_mode,
+            enabled=outside_text_enabled_val,
+            processing_mode=outside_text_preferred_mode if outside_text_enabled_val else "off",
+            preferred_mode=outside_text_preferred_mode,
             seed=int(outside_text_seed_val),
             huggingface_token=outside_text_huggingface_token_val,
             inpainting_method=outside_text_inpainting_method_val,
@@ -3012,10 +3019,19 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
         default_ui_state.llm_settings.special_instructions or "",
         default_ui_state.batch_special_instructions or "",
         default_ui_state.outside_text.enabled,
+        gr.update(
+            value=default_ui_state.outside_text.preferred_mode != "prose",
+            interactive=default_ui_state.outside_text.enabled
+            and default_ui_state.outside_text.preferred_mode != "all",
+        ),
+        gr.update(
+            value=default_ui_state.outside_text.preferred_mode == "all",
+            interactive=default_ui_state.outside_text.enabled,
+        ),
         default_ui_state.outside_text.seed,
         gr.update(value=default_ui_state.outside_text.inpainting_method),
         gr.update(value=default_ui_state.outside_text.kontext_backend),
-        default_ui_state.outside_text.flux_low_vram,
+        default_settings_dict["outside_text_flux_offload_mode"],
         default_ui_state.outside_text.flux_num_inference_steps,
         default_ui_state.outside_text.flux_kontext_prompt,
         default_ui_state.outside_text.flux_klein_prompt,
@@ -3023,6 +3039,7 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> List[gr.update]:
         default_ui_state.outside_text.flux_upscale_small_crops,
         gr.update(value=default_ui_state.outside_text.flux_group_regions),
         default_ui_state.outside_text.flux_residual_diff_threshold,
+        default_ui_state.outside_text.osb_residual_render_guard_action,
         default_ui_state.outside_text.osb_confidence,
         gr.update(value=default_ui_state.outside_text.enable_page_number_filtering),
         gr.update(

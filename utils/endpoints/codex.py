@@ -22,6 +22,21 @@ _IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 def _codex_command() -> List[str]:
     if os.name == "nt":
+        # The desktop install can have a newer model catalog than the npm shim.
+        native_on_path = shutil.which("codex.exe")
+        if native_on_path:
+            return [native_on_path]
+        # Explorer-launched apps don't inherit the Codex desktop app's PATH.
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            desktop_bin = Path(local_app_data) / "OpenAI" / "Codex" / "bin"
+            desktop_cli = max(
+                desktop_bin.glob("*/codex.exe"),
+                key=lambda path: path.stat().st_mtime_ns,
+                default=None,
+            )
+            if desktop_cli is not None:
+                return [str(desktop_cli)]
         npm_root = (
             Path(os.environ.get("APPDATA", "")) / "npm/node_modules/@openai/codex"
         )

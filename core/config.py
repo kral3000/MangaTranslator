@@ -201,7 +201,7 @@ class OutsideTextConfig:
     """Configuration for outside speech bubble text detection and removal."""
 
     enabled: bool = False
-    processing_mode: str = "all"  # "off", "prose", or "all"
+    processing_mode: str = "all"
     enable_page_number_filtering: bool = False
     page_filter_margin_threshold: float = 0.1
     page_filter_min_area_ratio: float = 0.05
@@ -251,15 +251,19 @@ class OutsideTextConfig:
     flux_klein_prompt: str = DEFAULT_FLUX_KLEIN_PROMPT
 
 
-OUTSIDE_TEXT_PROCESSING_MODES = {"off", "prose", "all"}
 OUTSIDE_TEXT_PROSE_TAGS = {"BN", "BE", "BS", "BT", "BW", "ON", "OM", "OD", "OE"}
+OUTSIDE_TEXT_STORY_MODE = "story"
+OUTSIDE_TEXT_SELECTIVE_TAGS = {
+    "prose": OUTSIDE_TEXT_PROSE_TAGS,
+    OUTSIDE_TEXT_STORY_MODE: {"OD", "OM", "ON", "OE", "SFX", "SFXI", "SFXS"},
+}
 
 
 def normalize_outside_text_processing_mode(value: Any, enabled: bool = False) -> str:
     if isinstance(value, bool):
         return "all" if value else "off"
     mode = str(value or "").strip().lower()
-    if mode in OUTSIDE_TEXT_PROCESSING_MODES:
+    if mode in ("off", "all") or mode in OUTSIDE_TEXT_SELECTIVE_TAGS:
         return mode
     return "all" if enabled else "off"
 
@@ -270,7 +274,7 @@ def should_process_outside_text_tag(mode: Any, render_tag: Any) -> bool:
         return False
     if normalized_mode == "all":
         return True
-    return str(render_tag or "").strip().upper() in OUTSIDE_TEXT_PROSE_TAGS
+    return str(render_tag or "").strip().upper() in OUTSIDE_TEXT_SELECTIVE_TAGS[normalized_mode]
 
 
 @dataclass

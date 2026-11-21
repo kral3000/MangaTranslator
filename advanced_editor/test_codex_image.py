@@ -22,6 +22,7 @@ class ImagePeer:
         self.thread_config = {}
         self.calls = []
         self.thread_params = None
+        self.turn_params = None
 
     def rpc(self, method, params, *_args):
         self.calls.append(method)
@@ -29,6 +30,7 @@ class ImagePeer:
             self.thread_params = params
             return {"thread": {"id": "t"}}
         if method == "turn/start":
+            self.turn_params = params
             if self.cancel:
                 self.cancel.set()
             data = io.BytesIO()
@@ -64,6 +66,8 @@ class CodexImageTest(unittest.TestCase):
             generate_image("lettering", [], Path(directory) / "layer.png", transparent_background=True)
         self.assertIn("transparent_background=true", peer.thread_params["baseInstructions"])
         self.assertEqual(peer.calls.count("turn/start"), 1)
+        self.assertEqual(peer.thread_params["model"], "gpt-6.1-sol")
+        self.assertEqual(peer.turn_params["effort"], "high")
 
     def test_cancellation_interrupts_once_and_never_writes_result(self):
         cancel = threading.Event()

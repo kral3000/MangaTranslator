@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import numpy as np
 from PIL import Image
 
 from core.config import (
@@ -13,7 +14,12 @@ from core.config import (
     TranslationConfig,
 )
 from core.editor_session import load_session, save_pipeline_edit_session
-from core.pipeline import INSIDE_BUBBLE_RENDER_TAGS, _apply_tag_style_overrides
+from core.pipeline import (
+    INSIDE_BUBBLE_RENDER_TAGS,
+    _apply_tag_style_overrides,
+    _is_punctuation_only_speech,
+    _restore_punctuation_only_speech,
+)
 from core.services.translation import (
     _normalize_local_gemma_tag,
     call_translation_api_batch,
@@ -27,6 +33,50 @@ from core.text.text_processing import extract_translation_tag
 
 
 class DialogueTagsTest(unittest.TestCase):
+    def test_only_ocr_verified_ellipsis_or_reaction_marks_qualify(self):
+        for text in ("…", "......", "<BE>！</BE>", "？\n！？", "⁉", "⋮", "・・・"):
+            with self.subTest(text=text):
+                self.assertTrue(_is_punctuation_only_speech(text))
+        for text in ("", "[OCR FAILED]", ".", "・", "え…", "なに？", "あっ！", "3.5"):
+            with self.subTest(text=text):
+                self.assertFalse(_is_punctuation_only_speech(text))
+
+    def test_punctuation_restores_only_its_own_cleaned_pixels_and_has_no_edit_box(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = Image.new("RGB", (24, 20), "black")
+            cleaned = Image.new("RGB", original.size, "white")
+            punctuation, dialogue = (1, 1, 16, 18), (8, 1, 20, 18)
+            bubbles = [
+                {"bbox": punctuation, "skip_render": True, "skip_reason": "source_punctuation_only"},
+                {"bbox": dialogue},
+            ]
+            punctuation_mask = np.zeros((20, 24), dtype=np.uint8)
+            punctuation_mask[9, 6:13] = 255
+            dialogue_mask = np.zeros_like(punctuation_mask)
+            dialogue_mask[9, 12:19] = 255
+            restored = _restore_punctuation_only_speech(cleaned, original, bubbles, [
+                {"bbox": punctuation, "clean_mask": punctuation_mask},
+                {"bbox": dialogue, "clean_mask": dialogue_mask},
+            ])
+            expected = np.full((20, 24, 3), 255, dtype=np.uint8)
+            expected[9, 6:12] = 0
+            np.testing.assert_array_equal(restored, expected)
+            source = root / "source.png"
+            original.save(source)
+            for count, expected_texts in ((2, ["뭐야?"]), (1, [])):
+                path = save_pipeline_edit_session(
+                    session_path=root / f"session{count}.json", source_image_path=source,
+                    translated_output_path=None, base_image=restored,
+                    sorted_bubble_data=bubbles[:count], translated_texts=["…", "뭐야?"][:count],
+                    source_ocr_texts=["…", "なに？"][:count], processed_bubbles_info=[],
+                    config=MangaTranslatorConfig(yolo_model_path=""),
+                    main_min_font=8, main_max_font=24, osb_min_font=8, osb_max_font=24,
+                    padding_pixels=2, osb_padding_pixels=2, osb_outline_width=0,
+                )
+                session = load_session(path)
+                self.assertEqual([region["translation"] for region in session["regions"]], expected_texts)
+
     def test_shouting_is_recognized_as_dialogue_and_removed_before_drawing(self):
         self.assertEqual(extract_translation_tag("<BS>그만해!</BS>"), ("BS", "그만해!"))
         self.assertIn("BS", INSIDE_BUBBLE_RENDER_TAGS)

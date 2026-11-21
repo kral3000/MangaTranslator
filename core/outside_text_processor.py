@@ -12,7 +12,11 @@ import numpy as np
 from PIL import Image
 from sklearn.cluster import KMeans
 
-from core.config import MangaTranslatorConfig, normalize_outside_text_processing_mode
+from core.config import (
+    OUTSIDE_TEXT_SELECTIVE_TAGS,
+    MangaTranslatorConfig,
+    normalize_outside_text_processing_mode,
+)
 from core.image.image_utils import cv2_to_pil, pil_to_cv2, process_bubble_image_cached
 from core.image.inpaint_composite import finish_outside_inpaint
 from core.image.inpainting import FluxKleinInpainter, FluxKontextInpainter
@@ -1784,6 +1788,20 @@ def _osb_bbox_overlaps_bubble(
     return False
 
 
+def _crop_with_scene_context(image, bbox):
+    """Give OCR nearby artwork while marking the original input bounds."""
+    x1, y1, x2, y2 = bbox
+    height, width = image.shape[:2]
+    padding = max(12, min(48, round(min(x2 - x1, y2 - y1) * 0.4)))
+    left, top = max(0, x1 - padding), max(0, y1 - padding)
+    crop = image[top:min(height, y2 + padding), left:min(width, x2 + padding)].copy()
+    cv2.rectangle(
+        crop, (x1 - left - 1, y1 - top - 1), (x2 - left, y2 - top),
+        (255, 160, 0), 1,
+    )
+    return crop
+
+
 def _build_outside_text_translation_data(
     pil_image: Image.Image,
     config: MangaTranslatorConfig,
@@ -1796,23 +1814,14 @@ def _build_outside_text_translation_data(
     img_w: int,
     img_h: int,
     verbose: bool = False,
-    group_render_bboxes: Optional[
-        Dict[Tuple[int, int, int, int], Tuple[int, int, int, int]]
-    ] = None,
-    extracted_text_colors: Optional[
-        Dict[Tuple[int, int, int, int], Tuple[int, int, int]]
-    ] = None,
-    none_skipped_clip_bboxes: Optional[set] = None,
     allowed_bubble_overlap_bboxes: Optional[set] = None,
     edge_sfx_full_glyph_bboxes: Optional[set] = None,
     injected_metadata_by_bbox: Optional[
         Dict[Tuple[int, int, int, int], Dict[str, Any]]
     ] = None,
+    include_scene_context: bool = False,
 ) -> List[Dict[str, Any]]:
     """Build OSB crop metadata for translation without requiring inpainting output."""
-    group_render_bboxes = group_render_bboxes or {}
-    extracted_text_colors = extracted_text_colors or {}
-    none_skipped_clip_bboxes = none_skipped_clip_bboxes or set()
     allowed_bubble_overlap_bboxes = allowed_bubble_overlap_bboxes or set()
     edge_sfx_full_glyph_bboxes = edge_sfx_full_glyph_bboxes or set()
     injected_metadata_by_bbox = injected_metadata_by_bbox or {}
@@ -1833,7 +1842,6 @@ def _build_outside_text_translation_data(
         x1, y1, x2, y2 = [int(c) for c in bbox_coords]
         bbox_tuple = (x1, y1, x2, y2)
         raw_bbox_tuple = tuple(int(c) for c in raw_coords)
-        render_bbox_tuple = group_render_bboxes.get(raw_bbox_tuple)
         forced_bubble_overlap_rescue = raw_bbox_tuple in allowed_bubble_overlap_bboxes
         mask_outside_bubble_overlap = _osb_bbox_is_mask_outside_bubble(
             raw_bbox_tuple,
@@ -1877,6 +1885,10 @@ def _build_outside_text_translation_data(
         outside_text_image_cv = original_cv_image[y1:y2, x1:x2].copy()
         outside_text_image_pil = cv2_to_pil(outside_text_image_cv)
         original_crop_pil = outside_text_image_pil.copy()
+        if include_scene_context:
+            outside_text_image_pil = cv2_to_pil(
+                _crop_with_scene_context(original_cv_image, bbox_tuple)
+            )
 
         osb_upscale_method = (
             "none" if config.test_mode else config.translation.upscale_method
@@ -1975,16 +1987,6 @@ def _build_outside_text_translation_data(
                 img_h=img_h,
             )
 
-        needs_text_bg = False
-        if none_skipped_clip_bboxes:
-            bcx = (x1 + x2) / 2
-            bcy = (y1 + y2) / 2
-            for clip_bbox in none_skipped_clip_bboxes:
-                cx1, cy1, cx2, cy2 = clip_bbox
-                if cx1 <= bcx <= cx2 and cy1 <= bcy <= cy2:
-                    needs_text_bg = True
-                    break
-
         try:
             is_success, buffer = cv2.imencode(cv2_ext, outside_text_image_cv)
             if is_success:
@@ -1997,14 +1999,11 @@ def _build_outside_text_translation_data(
                     "image_b64": image_b64,
                     "mime_type": mime_type,
                     "is_dark_text": is_dark_text_val,
-                    "text_color_rgb": extracted_text_colors.get(raw_bbox_tuple),
                     "aspect_ratio": aspect_ratio,
                     "rotation_deg": rotation_deg,
                     "sfx_rotation_deg": sfx_rotation_deg,
                     "horizontal_rotation_deg": horizontal_rotation_deg,
-                    "render_bbox": render_bbox_tuple,
                     "render_mask": render_mask,
-                    "needs_text_background": needs_text_bg,
                     "mask_outside_bubble_overlap": mask_outside_bubble_overlap,
                     "bubble_overlap_rescue": bubble_overlap_rescue,
                     "edge_sfx_full_glyph": (
@@ -2053,7 +2052,7 @@ def process_outside_text(
     """
     Process outside text detection, inpainting, and prepare data for translation.
 
-    In prose mode the callback returns selected original bboxes. Missing
+    In selective modes the callback returns selected original bboxes. Missing
     classification preserves all outside text; it never authorizes a fill.
 
     This function handles the complete outside text processing pipeline:
@@ -2519,28 +2518,40 @@ def process_outside_text(
                 verbose=verbose,
             )
 
-        selective = normalize_outside_text_processing_mode(
+        processing_mode = normalize_outside_text_processing_mode(
             config.outside_text.processing_mode
-        ) == "prose"
+        )
+        selective = processing_mode in OUTSIDE_TEXT_SELECTIVE_TAGS
         selected_bboxes = set() if selective else None
-        pre_inpaint_outside_text_data = []
+        pre_inpaint_outside_text_data = None
+        crop_options = dict(
+            pil_image=pil_image,
+            config=config,
+            image_format=image_format,
+            outside_text_results=outside_text_results,
+            raw_outside_text_results=raw_outside_text_results,
+            original_text_colors=original_text_colors,
+            bubble_boxes=bubble_boxes,
+            bubble_core_mask=bubble_core_mask,
+            img_w=img_w,
+            img_h=img_h,
+            verbose=verbose,
+            allowed_bubble_overlap_bboxes=allowed_bubble_overlap_bboxes,
+            edge_sfx_full_glyph_bboxes=edge_sfx_expanded_bboxes,
+            injected_metadata_by_bbox=injected_metadata_by_bbox,
+            include_scene_context=(
+                selective
+                and pre_inpaint_data_callback is not None
+                and (
+                    config.translation.translation_mode == "one-step"
+                    or config.translation.ocr_method == "LLM"
+                )
+            ),
+        )
         if pre_inpaint_data_callback is not None or selective:
             try:
                 pre_inpaint_outside_text_data = _build_outside_text_translation_data(
-                    pil_image=pil_image,
-                    config=config,
-                    image_format=image_format,
-                    outside_text_results=outside_text_results,
-                    raw_outside_text_results=raw_outside_text_results,
-                    original_text_colors=original_text_colors,
-                    bubble_boxes=bubble_boxes,
-                    bubble_core_mask=bubble_core_mask,
-                    img_w=img_w,
-                    img_h=img_h,
-                    verbose=verbose,
-                    allowed_bubble_overlap_bboxes=allowed_bubble_overlap_bboxes,
-                    edge_sfx_full_glyph_bboxes=edge_sfx_expanded_bboxes,
-                    injected_metadata_by_bbox=injected_metadata_by_bbox,
+                    **crop_options
                 )
                 if pre_inpaint_data_callback is not None:
                     selection = pre_inpaint_data_callback(pre_inpaint_outside_text_data)
@@ -2565,28 +2576,31 @@ def process_outside_text(
         selected_indices = [
             i for i, result in enumerate(raw_outside_text_results)
             # Crop metadata truncates YOLO float coordinates to integer pixels.
-            # Compare using that same key so valid prose is not silently skipped.
+            # Compare using that same key so approved items are not silently skipped.
             if selected_bboxes is None
             or tuple(int(c) for c in result[0]) in selected_bboxes
         ]
-        preserve_mask = np.zeros((img_h, img_w), dtype=bool)
-        for i, (coords, _) in enumerate(outside_text_results):
-            if (
-                selected_bboxes is not None
-                and tuple(int(c) for c in raw_outside_text_results[i][0])
-                not in selected_bboxes
-            ):
-                x1, y1, x2, y2 = [int(c) for c in coords]
-                preserve_mask[
-                    max(0, y1):min(img_h, y2), max(0, x1):min(img_w, x2)
-                ] = True
-        if not selected_indices:
+        if selected_bboxes is not None:
             for item in pre_inpaint_outside_text_data:
-                item.update(
-                    skip_render=True, skip_reason="outside_text_processing_mode",
-                    outside_text_preserve_bbox=item["bbox"],
-                )
-            return pil_image, pre_inpaint_outside_text_data
+                if item["original_bbox"] in selected_bboxes:
+                    item["outside_text_selected"] = True
+                else:
+                    item.update(
+                        skip_render=True, skip_reason="outside_text_processing_mode",
+                        outside_text_preserve_bbox=item["bbox"],
+                    )
+        if not selected_indices:
+            return pil_image, pre_inpaint_outside_text_data or []
+
+        preserve_mask = np.zeros((img_h, img_w), dtype=bool)
+        if len(selected_indices) < len(outside_text_results):
+            selected_index_set = set(selected_indices)
+            for i, (coords, _) in enumerate(outside_text_results):
+                if i not in selected_index_set:
+                    x1, y1, x2, y2 = [int(c) for c in coords]
+                    preserve_mask[
+                        max(0, y1):min(img_h, y2), max(0, x1):min(img_w, x2)
+                    ] = True
 
         log_message("Inpainting outside text regions...", verbose=verbose)
 
@@ -3816,25 +3830,23 @@ def process_outside_text(
                 total_bubble_mask, _dilate_bool_mask(preserve_mask, 15)
             ),
         )
-        outside_text_data = _build_outside_text_translation_data(
-            pil_image=pil_image,
-            config=config,
-            image_format=image_format,
-            outside_text_results=outside_text_results,
-            raw_outside_text_results=raw_outside_text_results,
-            original_text_colors=original_text_colors,
-            bubble_boxes=bubble_boxes,
-            bubble_core_mask=bubble_core_mask,
-            img_w=img_w,
-            img_h=img_h,
-            verbose=verbose,
-            group_render_bboxes=group_render_bboxes,
-            extracted_text_colors=extracted_text_colors,
-            none_skipped_clip_bboxes=none_skipped_clip_bboxes,
-            allowed_bubble_overlap_bboxes=allowed_bubble_overlap_bboxes,
-            edge_sfx_full_glyph_bboxes=edge_sfx_expanded_bboxes,
-            injected_metadata_by_bbox=injected_metadata_by_bbox,
-        )
+        outside_text_data = pre_inpaint_outside_text_data
+        if outside_text_data is None:
+            outside_text_data = _build_outside_text_translation_data(**crop_options)
+        for item in outside_text_data:
+            if item.get("skip_render"):
+                continue
+            raw_bbox = item["original_bbox"]
+            x1, y1, x2, y2 = item["bbox"]
+            cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+            item.update(
+                text_color_rgb=extracted_text_colors.get(raw_bbox),
+                render_bbox=group_render_bboxes.get(raw_bbox),
+                needs_text_background=any(
+                    left <= cx <= right and top <= cy <= bottom
+                    for left, top, right, bottom in none_skipped_clip_bboxes
+                ),
+            )
 
         if np.any(preserve_mask):
             # Last shared compositor guard covers grouped Flux and every fallback.
@@ -3842,13 +3854,6 @@ def process_outside_text(
             source = np.asarray(pil_image)
             preserved[preserve_mask] = source[preserve_mask]
             current_image = Image.fromarray(preserved)
-        if selected_bboxes is not None:
-            for item in outside_text_data:
-                if tuple(item["original_bbox"]) not in selected_bboxes:
-                    item.update(
-                        skip_render=True, skip_reason="outside_text_processing_mode",
-                        outside_text_preserve_bbox=item["bbox"],
-                    )
         return current_image, outside_text_data
 
     except (TranslationError, CancellationError):

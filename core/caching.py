@@ -213,6 +213,7 @@ class UnifiedCache:
         config,
         previous_context_images: Optional[List[Dict[str, str]]] = None,
         previous_context_texts: Optional[List[List[str]]] = None,
+        outside_text_policy: str = "",
     ) -> Optional[str]:
         """Compute cache key for LLM translation.
 
@@ -224,6 +225,7 @@ class UnifiedCache:
             config: TranslationConfig object
             previous_context_images: Previous page context images, in request order
             previous_context_texts: Previous page OCR transcripts (oldest-to-newest)
+            outside_text_policy: Classification instruction for this request
 
         Returns:
             str: Cache key, or None if not deterministic
@@ -272,6 +274,8 @@ class UnifiedCache:
                 config, "context_image_max_side_pixels", None
             ),
         }
+        if outside_text_policy:
+            cache_params["outside_text_policy"] = outside_text_policy
         if previous_context_images:
             previous_hash = hashlib.sha256(
                 "".join(

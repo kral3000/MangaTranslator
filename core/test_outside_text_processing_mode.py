@@ -1,5 +1,8 @@
+import base64
+import json
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +12,7 @@ from PIL import Image
 from core import outside_text_processor as processor
 from core import pipeline
 from core.config import (
+    OUTSIDE_TEXT_STORY_MODE,
     MangaTranslatorConfig,
     normalize_outside_text_processing_mode,
     should_process_outside_text_tag,
@@ -345,6 +349,118 @@ class OutsideSelectionTest(unittest.TestCase):
                 np.testing.assert_array_equal(
                     np.asarray(result.convert("RGB")), np.asarray(self.original)
                 )
+
+    def test_story_mode_preserves_scene_pixels_and_renders_only_the_approved_item(self):
+        from core.editor_session import load_session
+
+        self.config.outside_text.processing_mode = OUTSIDE_TEXT_STORY_MODE
+        self.config.translation.provider = "Codex"
+        self.config.translation.output_language = "Korean"
+        self.config.translation.reading_direction = "ltr"
+        cache = MagicMock()
+        cache.get_translation.return_value = (None, None)
+        response = json.dumps({
+            "1": "<OT>新刊案内</OT> || <OT>KEEP</OT>",
+            "2": "<SFX>ガッ</SFX> || <SFX>턱!</SFX>",
+        })
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.png"
+            session = Path(folder) / "source_edit_session.json"
+            self.original.save(source)
+            with (
+                patch.object(pipeline, "detect_speech_bubbles", return_value=([], [])),
+                patch.object(processor, "OutsideTextDetector", self.detector),
+                patch.object(processor, "FluxKleinInpainter", self.inpainter),
+                patch.object(translation, "get_cache", return_value=cache),
+                patch.object(translation, "_call_llm_endpoint", return_value=response) as api,
+                patch.object(processor, "_build_outside_text_translation_data",
+                             wraps=processor._build_outside_text_translation_data) as crops,
+            ):
+                result = pipeline.translate_and_render(
+                    source, self.config, edit_session_path=session,
+                )
+            self.assertEqual(
+                [(region["render_tag"], region["translation"]) for region in load_session(session)["regions"]],
+                [("SFX", "턱!")],
+            )
+        api.assert_called_once()
+        crops.assert_called_once()
+        self.assertIn("books, signs, banners", api.call_args.kwargs["system_prompt"])
+        self.assertEqual(self.mask_inputs, [[self.raw[1]]])
+        np.testing.assert_array_equal(
+            np.asarray(result.convert("RGB"))[30:60, 30:60],
+            np.asarray(self.original)[30:60, 30:60],
+        )
+        self.assertFalse(np.array_equal(
+            np.asarray(result.convert("RGB"))[30:60, 65:95],
+            np.asarray(self.original)[30:60, 65:95],
+        ))
+
+    def test_story_crop_marks_target_without_changing_its_pixels(self):
+        original = np.asarray(self.original)[:, :, ::-1].copy()
+        crop = processor._crop_with_scene_context(original, (30, 30, 60, 60))
+        np.testing.assert_array_equal(crop[12:42, 12:42], original[30:60, 30:60])
+        self.assertEqual(tuple(crop[11, 20]), (255, 160, 0))
+        np.testing.assert_array_equal(crop[:10, :10], original[18:28, 18:28])
+
+    def test_selective_modes_share_scene_protection_and_only_differ_on_effects(self):
+        image = BytesIO()
+        Image.new("RGB", (32, 32), "white").save(image, format="PNG")
+        encoded_image = base64.b64encode(image.getvalue()).decode("ascii")
+        self.config.translation.provider = "Codex"
+        cache = MagicMock()
+        cache.get_translation.return_value = (None, None)
+        source = {"1": "<OT>開店</OT>", "2": "<SFX>ドン</SFX>",
+                  "3": "<ON>翌日</ON>", "4": "ただいま", "5": "<BN>おかえり</BN>"}
+        target = {"1": "<OE>개점</OE>", "2": "<SFX>쿵</SFX>",
+                  "3": "<ON>다음 날</ON>", "4": "<OD>다녀왔어</OD>", "5": "<BN>어서 와</BN>"}
+        for mode, outside_mode in (
+            ("one-step", OUTSIDE_TEXT_STORY_MODE), ("two-step", OUTSIDE_TEXT_STORY_MODE),
+            ("one-step", "prose"), ("two-step", "prose"),
+        ):
+            with self.subTest(mode=mode, outside_mode=outside_mode):
+                self.config.translation.translation_mode = mode
+                replies = (
+                    [json.dumps({key: f"{value} || {target[key]}" for key, value in source.items()})]
+                    if mode == "one-step" else [json.dumps(source), json.dumps(target)]
+                )
+                with (
+                    patch.object(translation, "get_cache", return_value=cache),
+                    patch.object(translation, "_call_llm_endpoint", side_effect=replies) as api,
+                ):
+                    result = translation.call_translation_api_batch(
+                        self.config.translation, [encoded_image] * 5, "", ["image/png"] * 5,
+                        "image/png", [{"is_outside_text": i < 4} for i in range(5)],
+                        outside_text_mode=outside_mode,
+                    )
+                self.assertEqual(result, [
+                    "<OT>KEEP</OT>", target["2"] if outside_mode == OUTSIDE_TEXT_STORY_MODE else "<OT>KEEP</OT>",
+                    target["3"], "<OT>KEEP</OT>", target["5"],
+                ])
+                self.assertEqual(api.call_count, len(replies))
+                self.assertIn("Outside-bubble items [1, 2, 3, 4]",
+                              api.call_args_list[0].kwargs["system_prompt"])
+                self.assertTrue(cache.get_translation_cache_key.call_args.kwargs["outside_text_policy"])
+
+    def test_story_only_preserved_items_skip_second_model_call(self):
+        image = BytesIO()
+        Image.new("RGB", (32, 32), "white").save(image, format="PNG")
+        encoded_image = base64.b64encode(image.getvalue()).decode("ascii")
+        self.config.translation.translation_mode = "two-step"
+        self.config.translation.provider = "Codex"
+        cache = MagicMock()
+        cache.get_translation.return_value = (None, None)
+        with (
+            patch.object(translation, "get_cache", return_value=cache),
+            patch.object(translation, "_call_llm_endpoint",
+                         return_value=json.dumps({"1": "<OT>営業時間</OT>"})) as api,
+        ):
+            result = translation.call_translation_api_batch(
+                self.config.translation, [encoded_image], "", ["image/png"], "image/png",
+                [{"is_outside_text": True}], outside_text_mode=OUTSIDE_TEXT_STORY_MODE,
+            )
+        self.assertEqual(result, ["<OT>KEEP</OT>"])
+        api.assert_called_once()
 
     def test_all_and_off_modes_keep_their_meaning(self):
         self.config.outside_text.processing_mode = "all"

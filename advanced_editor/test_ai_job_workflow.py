@@ -90,6 +90,25 @@ class AiJobWorkflowTest(unittest.TestCase):
         self.addCleanup(self.close_window)
         self.app.processEvents()
 
+    def test_window_layout_survives_reopen(self):
+        self.window.resize(self.window.minimumWidth(), self.window.minimumHeight())
+        self.window.splitter.setSizes([475, 640, 0])
+        self.app.processEvents()
+        size = self.window.size()
+        inspector_width = self.window.splitter.sizes()[0]
+        self.window.close()
+        reopened = AdvancedEditorWindow(str(self.path))
+        self.addCleanup(reopened.close)
+        reopened.show()
+        self.app.processEvents()
+        self.assertEqual(reopened.size(), size)
+        self.assertEqual(reopened.splitter.sizes()[0], inspector_width)
+        reopened.showMaximized()
+        reopened.close()
+        maximized = AdvancedEditorWindow(str(self.path))
+        self.addCleanup(maximized.close)
+        self.assertTrue(maximized._start_maximized)
+
     def remove_test_fonts(self):
         for font_id in self.loaded_fonts:
             QFontDatabase.removeApplicationFont(font_id)

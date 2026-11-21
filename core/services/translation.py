@@ -10,13 +10,22 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from core.caching import get_cache
-from core.config import TranslationConfig, calculate_reasoning_budget
+from core.config import (
+    OUTSIDE_TEXT_SELECTIVE_TAGS,
+    TranslationConfig,
+    calculate_reasoning_budget,
+    should_process_outside_text_tag,
+)
 from core.image.image_utils import cv2_to_pil, pil_to_cv2, process_bubble_image_cached
 from core.image.ocr_detection import (
     extract_text_with_manga_ocr,
     extract_text_with_paddle_ocr_vl,
 )
-from core.text.text_processing import TRANSLATION_TAGS, strip_translation_terminal_periods
+from core.text.text_processing import (
+    TRANSLATION_TAGS,
+    extract_translation_tag,
+    strip_translation_terminal_periods,
+)
 from utils.token_usage import accumulate_usage
 from utils.endpoints import (
     call_anthropic_endpoint,
@@ -2023,6 +2032,25 @@ _TWO_STEP_TAG_FORMAT_OVERRIDE = """
 
 _LEADING_TAG_RE = re.compile(r"^\s*<\s*([A-Za-z0-9]+)\s*>")
 
+_PRESERVED_OUTSIDE_TEXT = "<OT>KEEP</OT>"
+_OUTSIDE_TEXT_ROLE_POLICY = """
+For these numbered outside-bubble items only, classify by the role of the original
+lettering in the artwork. When an item has a blue outline, transcribe only inside
+it and use the surrounding pixels only as visual context.
+- Use OD for spoken dialogue, OM for thoughts, ON for narration including
+  scene/time captions, and OE only for clearly emphasized speech or thoughts.
+- Use SFX, SFXI, or SFXS for author-added sound effects, movements, and reactions.
+- Use OT for any lettering physically printed, displayed, painted, or written
+  in the scene (screens/messages, books, signs, banners, posters, labels, clothing,
+  letters or notes), and for series/chapter branding, ads, and credits. Keep this
+  rule even if the writing is prominent or important to the plot. Speech presented
+  separately from the physical object is judged by its own role.
+- Use OT when uncertain or when protected writing and story lettering are
+  inseparable within one item. Never decide from the wording or size alone.
+This policy takes priority over general tag definitions and translation instructions
+for these items. Return every numbered key as usual.
+""".strip()
+
 
 def _normalize_two_step_tagged_value(value: Any) -> str:
     """Repair a two-step value that echoed the one-step `source || translation` form.
@@ -2295,6 +2323,9 @@ def _perform_llm_ocr(
     reading_direction: str,
     debug: bool = False,
     usage_output: Optional[Dict[str, int]] = None,
+    *,
+    classified_parts: Optional[List[Dict[str, Any]]] = None,
+    classification_policy: str = "",
 ) -> List[str]:
     """Perform OCR using vision LLM.
 
@@ -2312,20 +2343,28 @@ def _perform_llm_ocr(
         List of extracted text strings, or early return with failure list
     """
     total_elements = len(images_b64)
-    ocr_parts = []
-    for i, img_b64 in enumerate(images_b64):
-        mime_type = mime_types[i] if i < len(mime_types) else "image/jpeg"
-        bubble_part = {"inline_data": {"mime_type": mime_type, "data": img_b64}}
+    ocr_parts = classified_parts
+    if ocr_parts is None:
         supports_per_part_res = (
             provider == "Google" and is_gemini_3_model(config.model_name)
         ) or provider == "xAI"
-        if supports_per_part_res:
-            bubble_part = _add_media_resolution_to_part(
-                bubble_part, config.media_resolution_bubbles
+        ocr_parts = [
+            _make_inline_image_part(
+                img_b64,
+                mime_types[i] if i < len(mime_types) else "image/jpeg",
+                config.media_resolution_bubbles,
+                supports_per_part_res,
             )
-        ocr_parts.append(bubble_part)
+            for i, img_b64 in enumerate(images_b64)
+        ]
 
     ocr_system = _build_system_prompt_ocr(input_language, reading_direction)
+    if classification_policy:
+        ocr_system += (
+            "\n\n" + classification_policy
+            + "\nWrap the source in its role tag for the specified items, e.g. "
+              "\u0060<OT>source OCR</OT>\u0060. This markup is the only exception to plain transcription."
+        )
     ocr_response_text = _call_llm_endpoint(
         config,
         ocr_parts,
@@ -2364,6 +2403,8 @@ def call_translation_api_batch(
     ocr_texts_output: Optional[List[str]] = None,
     usage_output: Optional[Dict[str, int]] = None,
     debug: bool = False,
+    *,
+    outside_text_mode: str = "",
 ) -> List[str]:
     """
     Generates prompts and calls the appropriate LLM API endpoint based on the provider and mode
@@ -2432,6 +2473,15 @@ def call_translation_api_batch(
         for i, meta in enumerate(bubble_metadata)
         if meta.get("is_outside_text", False)
     ]
+    outside_text_policy = ""
+    if osb_indices and outside_text_mode in OUTSIDE_TEXT_SELECTIVE_TAGS:
+        outside_items = ", ".join(map(str, osb_indices))
+        outside_text_policy = f"Outside-bubble items [{outside_items}]\n{_OUTSIDE_TEXT_ROLE_POLICY}"
+        if not should_process_outside_text_tag(outside_text_mode, "SFX"):
+            outside_text_policy += (
+                "\nSound effects are preserved in this request. Still classify the source with "
+                "its SFX tag, and use KEEP in place of the translation if applicable."
+            )
 
     hints = []
     if dialogue_indices:
@@ -2463,6 +2513,7 @@ def call_translation_api_batch(
         config,
         previous_context_images=previous_context_images,
         previous_context_texts=cleaned_previous_texts,
+        outside_text_policy=outside_text_policy,
     )
     cached_translation, cached_ocr_texts = cache.get_translation(cache_key)
     if cached_translation is not None:
@@ -2478,42 +2529,6 @@ def call_translation_api_batch(
     )
     is_gemini_3 = provider == "Google" and is_gemini_3_model(model_name)
     supports_per_part_res = is_gemini_3 or provider == "xAI"
-
-    base_parts = []
-    for i, img_b64 in enumerate(images_b64):
-        mime_type = mime_types[i] if i < len(mime_types) else "image/jpeg"
-        bubble_part = {"inline_data": {"mime_type": mime_type, "data": img_b64}}
-        if supports_per_part_res:
-            bubble_part = _add_media_resolution_to_part(
-                bubble_part, config.media_resolution_bubbles
-            )
-        base_parts.append(bubble_part)
-
-    if config.send_full_page_context and full_image_b64:
-        context_part = {
-            "inline_data": {
-                "mime_type": full_image_mime_type,
-                "data": full_image_b64,
-            }
-        }
-        if supports_per_part_res:
-            context_part = _add_media_resolution_to_part(
-                context_part, config.media_resolution_context
-            )
-        base_parts.append(context_part)
-
-    for image in previous_context_images:
-        previous_part = {
-            "inline_data": {
-                "mime_type": image.get("mime_type", "image/jpeg"),
-                "data": image.get("data", ""),
-            }
-        }
-        if supports_per_part_res:
-            previous_part = _add_media_resolution_to_part(
-                previous_part, config.media_resolution_context
-            )
-        base_parts.append(previous_part)
 
     try:
         if translation_mode == "two-step":
@@ -2542,6 +2557,12 @@ Apply your OCR transcription rules to each image provided.{special_instructions_
                     debug,
                 )
             else:
+                classified_parts = None
+                if outside_text_policy:
+                    classified_parts = _build_labeled_one_step_parts(
+                        images_b64, mime_types, full_image_b64, full_image_mime_type,
+                        [], config, supports_per_part_res,
+                    )
                 extracted_texts = _perform_llm_ocr(
                     config,
                     images_b64,
@@ -2552,14 +2573,39 @@ Apply your OCR transcription rules to each image provided.{special_instructions_
                     reading_direction,
                     debug,
                     usage_output=usage_output,
+                    classified_parts=classified_parts,
+                    classification_policy=outside_text_policy,
                 )
 
-            log_message("Starting translation step", verbose=debug)
+            outside_tags = {}
+            preserved_indices = set()
+            if outside_text_policy:
+                for item_number in osb_indices:
+                    i = item_number - 1
+                    source_tag, source_text = extract_translation_tag(extracted_texts[i])
+                    if (
+                        config.ocr_method == "LLM"
+                        and source_text
+                        and source_text != "[OCR FAILED]"
+                        and should_process_outside_text_tag(outside_text_mode, source_tag)
+                    ):
+                        outside_tags[i] = source_tag
+                    else:
+                        preserved_indices.add(i)
+                if len(preserved_indices) == total_elements:
+                    results = [_PRESERVED_OUTSIDE_TEXT] * total_elements
+                    cache.set_translation(cache_key, results, ocr_texts=extracted_texts)
+                    if ocr_texts_output is not None:
+                        ocr_texts_output.extend(extracted_texts)
+                    return results
 
+            log_message("Starting translation step", verbose=debug)
             formatted_texts = []
             ocr_failed_indices = set()
             for i, text in enumerate(extracted_texts):
-                if f"[{provider}-OCR:" in text or text == "[OCR FAILED]":
+                if i in preserved_indices:
+                    formatted_texts.append("KEEP")
+                elif f"[{provider}-OCR:" in text or text == "[OCR FAILED]":
                     formatted_texts.append("[OCR FAILED]")
                     ocr_failed_indices.add(i)
                 else:
@@ -2614,6 +2660,11 @@ Do not repeat the source text and do not add labels or explanations.
                 # Rosetta replaces this prompt entirely further down, so the
                 # override only ever reaches the standard two-step path.
                 translation_prompt += _TWO_STEP_TAG_FORMAT_OVERRIDE
+            if outside_text_policy:
+                translation_prompt += (
+                    "\nFor story items tagged during OCR, translate the text inside the tag. "
+                    "Return any input value equal to KEEP unchanged."
+                )
 
             translation_parts = []
             if (
@@ -2730,7 +2781,9 @@ Do not repeat the source text and do not add labels or explanations.
 
             combined_results = []
             for i in range(total_elements):
-                if i in ocr_failed_indices:
+                if i in preserved_indices:
+                    combined_results.append(_PRESERVED_OUTSIDE_TEXT)
+                elif i in ocr_failed_indices:
                     if final_translations[i] == "[OCR FAILED]":
                         combined_results.append("[OCR FAILED]")
                     else:
@@ -2739,6 +2792,14 @@ Do not repeat the source text and do not add labels or explanations.
                             verbose=debug,
                         )
                         combined_results.append("[OCR FAILED]")
+                elif i in outside_tags:
+                    target_tag, text = extract_translation_tag(final_translations[i])
+                    tag = outside_tags[i]
+                    combined_results.append(
+                        _PRESERVED_OUTSIDE_TEXT
+                        if not text or text == "KEEP" or target_tag in {"OT", "OH"}
+                        else strip_translation_terminal_periods(f"<{tag}>{text}</{tag}>")
+                    )
                 else:
                     combined_results.append(strip_translation_terminal_periods(final_translations[i]))
 
@@ -2803,6 +2864,13 @@ after `||`.
                 previous_context_image_count=previous_context_image_count,
                 previous_context_text_count=previous_context_text_count,
             )
+            if outside_text_policy:
+                one_step_system += (
+                    "\n\n" + outside_text_policy
+                    + "\nFor these items wrap both halves in the same role tag. "
+                      "For OT use \u0060<OT>source OCR</OT> || <OT>KEEP</OT>\u0060. "
+                      "For other roles translate the transcription as usual."
+                )
             one_step_parts = _build_labeled_one_step_parts(
                 images_b64,
                 mime_types,
@@ -2892,6 +2960,20 @@ after `||`.
                         ocr_texts.append("[OCR FAILED]")
                         translations.append(line)
 
+            if outside_text_policy:
+                for item_number in osb_indices:
+                    i = item_number - 1
+                    source_tag, source_text = extract_translation_tag(ocr_texts[i])
+                    target_tag, target_text = extract_translation_tag(translations[i])
+                    if (
+                        source_tag != target_tag
+                        or not source_text
+                        or source_text == "[OCR FAILED]"
+                        or not target_text
+                        or target_text == "KEEP"
+                        or not should_process_outside_text_tag(outside_text_mode, source_tag)
+                    ):
+                        translations[i] = _PRESERVED_OUTSIDE_TEXT
             translations = [strip_translation_terminal_periods(text) for text in translations]
             cache.set_translation(cache_key, translations, ocr_texts=ocr_texts)
             if ocr_texts_output is not None:

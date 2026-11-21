@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from core.caching import get_cache
 from core.config import (
+    OUTSIDE_TEXT_SELECTIVE_TAGS,
     MangaTranslatorConfig,
     PreprocessingConfig,
     RenderingConfig,
@@ -2806,7 +2807,11 @@ def _speech_edge_merge_target_index(
     best_index: Optional[int] = None
     best_score = 0.0
     for candidate_index, candidate in enumerate(sorted_items):
-        if candidate_index == split_index or candidate.get("is_outside_text", False):
+        if (
+            candidate_index == split_index
+            or candidate.get("is_outside_text", False)
+            or candidate.get("skip_reason") == "source_punctuation_only"
+        ):
             continue
         try:
             candidate_bbox = tuple(
@@ -10965,10 +10970,11 @@ def _select_outside_text_for_inpainting(items, translations, mode, provider):
         if not item.get("is_outside_text"):
             continue
         bbox = tuple(item.get("original_bbox") or item["bbox"])
-        if not _is_invalid_translation_text(
+        tag, payload = extract_translation_tag(translation)
+        if payload and not _is_invalid_translation_text(
             translation, provider
         ) and should_process_outside_text_tag(
-            mode, extract_translation_tag(translation)[0]
+            mode, tag
         ):
             selected.add(bbox)
         else:
@@ -10988,12 +10994,15 @@ def _restore_excluded_outside_text(
             item.get("skip_reason") == "outside_text_processing_mode"
             or (
                 not item.get("skip_render")
+                and not item.get("outside_text_selected")
                 and not should_process_outside_text_tag(
                     mode, extract_translation_tag(translations[index])[0]
                 )
             )
         )
     }
+    if not excluded:
+        return image
     protected = [
         bbox
         for index, item in enumerate(items)
@@ -11001,6 +11010,9 @@ def _restore_excluded_outside_text(
         for bbox in [_text_region_restore_protection_bbox(item, image.size)]
         if bbox is not None
     ]
+    # All explicitly preserved areas take the same pixels from one source image.
+    # Copy the page once instead of copying it again for each sign or label.
+    original_patch_source = None
     for index in sorted(excluded):
         item = items[index]
         preserve_bbox = item.get("outside_text_preserve_bbox")
@@ -11009,13 +11021,20 @@ def _restore_excluded_outside_text(
         )
         if bbox is None:
             bbox = _osb_layout_bbox(item, image.size)
-        image, _ = _restore_original_region_excluding_bboxes(
-            image,
-            original,
-            tuple(int(round(float(v))) for v in bbox),
-            [] if preserve_bbox is not None else protected,
-            None,
-        )
+        bbox = tuple(int(round(float(v))) for v in bbox)
+        if preserve_bbox is not None:
+            clipped_bbox = _clip_bbox_to_image(bbox, image.size)
+            if clipped_bbox is not None:
+                if original_patch_source is None:
+                    image = image.copy()
+                    original_patch_source = (
+                        original if original.mode == image.mode else original.convert(image.mode)
+                    )
+                image.paste(original_patch_source.crop(clipped_bbox), clipped_bbox)
+        else:
+            image, _ = _restore_original_region_excluding_bboxes(
+                image, original, bbox, protected, None,
+            )
         item["skip_render"] = True
         item["skip_reason"] = "outside_text_processing_mode"
         log_message(
@@ -11024,6 +11043,51 @@ def _restore_excluded_outside_text(
             always_print=True,
         )
     return image
+
+
+def _is_punctuation_only_speech(text: str) -> bool:
+    _, source = extract_translation_tag(text)
+    normalized = unicodedata.normalize("NFKC", source).replace("\\n", "")
+    marks = "".join(normalized.split())
+    characters = set(marks)
+    if characters == {"・"}:
+        return len(marks) >= 3
+    return characters <= set(".。⋯⋮!?") and (len(marks) > 1 or marks in {"⋯", "⋮", "!", "?"})
+
+
+def _restore_punctuation_only_speech(image, original, items, processed_bubbles):
+    punctuation_boxes = {
+        tuple(item["bbox"]) for item in items
+        if item.get("skip_reason") == "source_punctuation_only"
+    }
+    if not punctuation_boxes:
+        return image
+    restore = np.zeros((image.height, image.width), dtype=bool)
+    protected_masks = []
+    for info in processed_bubbles:
+        mask = info.get("lama_inpaint_mask") if info.get("inpainted") else info.get("clean_mask")
+        if mask is None:
+            mask = info.get("clean_mask")
+        if mask is None:
+            continue
+        if tuple(info["bbox"]) in punctuation_boxes:
+            restore |= mask > 0
+        else:
+            protected_masks.append(mask)
+    if not restore.any():
+        return image
+    # Shared cleaning pixels belong to the text that still needs to be translated.
+    for mask in protected_masks:
+        restore &= mask == 0
+    for item in items:
+        if item.get("is_outside_text") and not item.get("skip_render"):
+            bbox = _text_region_restore_protection_bbox(item, image.size)
+            if bbox is not None:
+                x1, y1, x2, y2 = bbox
+                restore[y1:y2, x1:x2] = False
+    if not restore.any():
+        return image
+    return _restore_original_region(image, original, (0, 0, *image.size), restore)
 
 
 def _should_overlap_inpaint_translation(config: MangaTranslatorConfig) -> bool:
@@ -11364,9 +11428,12 @@ def translate_and_render(
 
     _panels_detected_early = panels
 
+    outside_text_mode = normalize_outside_text_processing_mode(
+        config.outside_text.processing_mode
+    )
     select_before_inpaint = (
         config.outside_text.enabled
-        and normalize_outside_text_processing_mode(config.outside_text.processing_mode) == "prose"
+        and outside_text_mode in OUTSIDE_TEXT_SELECTIVE_TAGS
         and not config.test_mode and not config.cleaning_only
     )
     overlap_inpaint_translation = select_before_inpaint or _should_overlap_inpaint_translation(config)
@@ -11389,7 +11456,6 @@ def translate_and_render(
             )
     async_translation_executor = None
     async_translation_future = None
-    async_translation_source_items: List[Dict[str, Any]] = []
     async_prepared_bubble_data: Optional[List[Dict[str, Any]]] = None
     async_full_image_b64: Optional[str] = None
     async_full_image_mime_type: Optional[str] = None
@@ -11463,7 +11529,6 @@ def translate_and_render(
         nonlocal overlap_inpaint_translation
         nonlocal async_translation_executor
         nonlocal async_translation_future
-        nonlocal async_translation_source_items
         nonlocal async_prepared_bubble_data
 
         if not overlap_inpaint_translation:
@@ -11495,14 +11560,9 @@ def translate_and_render(
                 return
 
             reading_direction = config.translation.reading_direction
-            sorted_for_translation = sort_bubbles_by_reading_order(
+            translatable_for_translation = sort_bubbles_by_reading_order(
                 all_text_data, reading_direction, panels=panels
             )
-            translatable_for_translation = [
-                item for item in sorted_for_translation if item.get("image_b64")
-            ]
-            if not translatable_for_translation:
-                return
 
             bubble_images_b64 = [
                 item["image_b64"] for item in translatable_for_translation
@@ -11531,10 +11591,10 @@ def translate_and_render(
                     ocr_texts_output=captured_ocr_texts,
                     usage_output=usage_out,
                     debug=verbose,
+                    outside_text_mode=outside_text_mode,
                 )
                 return translated, captured_ocr_texts, translatable_for_translation
 
-            async_translation_source_items = translatable_for_translation
             async_translation_executor = ThreadPoolExecutor(max_workers=1)
             async_translation_future = async_translation_executor.submit(
                 _translation_worker
@@ -12245,6 +12305,11 @@ def translate_and_render(
                                 for bubble in sorted_bubble_data
                             ]
 
+                        for bubble, source in zip(sorted_bubble_data, source_ocr_texts):
+                            if not bubble.get("is_outside_text") and _is_punctuation_only_speech(source):
+                                bubble["skip_render"] = True
+                                bubble["skip_reason"] = "source_punctuation_only"
+
                         valid_translations = [
                             t
                             for t in translated_texts
@@ -12254,7 +12319,12 @@ def translate_and_render(
                             )
                         ]
 
-                        if bubble_images_b64 and not valid_translations:
+                        if bubble_images_b64 and not valid_translations and not all(
+                            bubble.get("skip_reason") in (
+                                "source_punctuation_only", "outside_text_processing_mode"
+                            )
+                            for bubble in sorted_bubble_data
+                        ):
                             raise TranslationError("All bubbles failed.")
 
                 if len(translated_texts) == len(sorted_bubble_data):
@@ -12294,6 +12364,10 @@ def translate_and_render(
                         pil_cleaned_image, original_restore_image, sorted_bubble_data,
                         translated_texts, config.outside_text.processing_mode, verbose,
                     )
+                    pil_cleaned_image = _restore_punctuation_only_speech(
+                        pil_cleaned_image, original_restore_image, sorted_bubble_data,
+                        processed_bubbles_info,
+                    )
                     final_image_to_save = pil_cleaned_image
                     editor_session_base_image = (
                         pil_cleaned_image.copy() if edit_session_path is not None else None
@@ -12321,7 +12395,7 @@ def translate_and_render(
                     )
                     translated_speech_regions = []
                     for item in sorted_bubble_data:
-                        if item.get("is_outside_text", False):
+                        if item.get("is_outside_text", False) or item.get("skip_render"):
                             continue
                         item_bbox = item.get("bbox")
                         if item_bbox is None:

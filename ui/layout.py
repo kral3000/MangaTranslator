@@ -4,11 +4,11 @@ from typing import Any
 
 import gradio as gr
 
-from core.config import normalize_outside_text_processing_mode
 from core.tag_styles import TAG_DEFINITIONS, TAG_STYLE_COLUMNS, tag_styles_to_table
 
 from . import callbacks, character_profiles, korean, settings_manager, utils
 from .cleanup import build_cleanup_panel
+from .ui_models import outside_text_modes_from_settings
 
 korean.install_gradio_korean(gr)
 
@@ -2456,48 +2456,46 @@ def create_layout(
                         with gr.Group(
                             visible=False, elem_classes="settings-group"
                         ) as group_outside_text:
-                            gr.Markdown("### Outside Speech Bubble Text")
-                            outside_text_huggingface_token = gr.Textbox(
-                                value=saved_settings.get(
-                                    "outside_text_huggingface_token", ""
-                                ),
-                                label="HuggingFace Token (Required for certain features)",
-                                type="password",
-                                info=(
-                                    "Required for downloading AnimeText YOLO (required for OSB detection), "
-                                    "Flux.1 Kontext Nunchaku, and/or SAM 3 models from HuggingFace Hub. "
-                                    "Can also set via HF_TOKEN env var."
-                                ),
+                            gr.Markdown("### 말풍선 밖 텍스트")
+                            outside_mode, outside_preferred_mode = outside_text_modes_from_settings(
+                                saved_settings
                             )
-                            outside_text_enabled = gr.Dropdown(
-                                choices=[
-                                    ("처리 안 함", "off"),
-                                    ("대사·독백·나레이션만", "prose"),
-                                    ("전체 처리", "all"),
-                                ],
-                                value=normalize_outside_text_processing_mode(
-                                    saved_settings.get("outside_text_processing_mode"),
-                                    enabled=bool(
-                                        saved_settings.get("outside_text_enabled", False)
+                            outside_enabled = outside_mode != "off"
+                            outside_include_scene = outside_preferred_mode == "all"
+                            outside_text_enabled = gr.Checkbox(
+                                value=outside_enabled,
+                                label="말풍선 밖 번역",
+                                info="대사·독백·나레이션을 번역합니다.",
+                                elem_classes=["outside-text-switch"],
+                            )
+                            outside_text_effects = gr.Checkbox(
+                                value=outside_preferred_mode != "prose",
+                                interactive=outside_enabled and not outside_include_scene,
+                                label="효과음도 번역",
+                                elem_classes=["outside-text-effects"],
+                            )
+                            with gr.Accordion(
+                                "고급 설정", open=outside_enabled and outside_include_scene
+                            ):
+                                outside_text_include_scene = gr.Checkbox(
+                                    value=outside_include_scene,
+                                    interactive=outside_enabled,
+                                    label="전체 처리",
+                                    info="화면·간판·책 제목처럼 그림 속에 있는 글씨도 번역합니다.",
+                                )
+                                gr.Markdown("2단계 번역에서 글씨를 구분하려면 OCR을 LLM으로 설정하세요.")
+                                outside_text_huggingface_token = gr.Textbox(
+                                    value=saved_settings.get(
+                                        "outside_text_huggingface_token", ""
                                     ),
-                                ),
-                                label="말풍선 밖 텍스트 처리",
-                                info=(
-                                    "권장 모드는 대사·독백·나레이션만 번역하고 "
-                                    "효과음·제목·종이 위 손글씨는 원본으로 유지합니다."
-                                ),
-                            )
-
-                            # Wrap all settings except the enable checkbox and token in a Column with visibility control
-                            with gr.Column(
-                                visible=normalize_outside_text_processing_mode(
-                                    saved_settings.get("outside_text_processing_mode"),
-                                    enabled=bool(
-                                        saved_settings.get("outside_text_enabled", False)
+                                    label="HuggingFace Token (Required for certain features)",
+                                    type="password",
+                                    info=(
+                                        "Required for downloading AnimeText YOLO (required for OSB detection), "
+                                        "Flux.1 Kontext Nunchaku, and/or SAM 3 models from HuggingFace Hub. "
+                                        "Can also set via HF_TOKEN env var."
                                     ),
                                 )
-                                != "off"
-                            ) as outside_text_settings_wrapper:
                                 gr.Markdown("### Detection")
                                 outside_text_osb_confidence = gr.Slider(
                                     0.0,
@@ -3328,6 +3326,9 @@ def create_layout(
                         setting_groups.append(group_other)
 
         # --- Define Event Handlers ---
+        outside_text_mode_controls = [
+            outside_text_enabled, outside_text_effects, outside_text_include_scene,
+        ]
         save_config_inputs = [
             confidence,
             conjoined_confidence,
@@ -3445,7 +3446,7 @@ def create_layout(
             padding_horizontal_pixels,
             padding_vertical_pixels,
             supersampling_factor,
-            outside_text_enabled,
+            *outside_text_mode_controls,
             outside_text_seed,
             outside_text_inpainting_method,
             outside_text_kontext_backend,
@@ -3597,6 +3598,7 @@ def create_layout(
             reasoning_effort_dropdown,
             effort_dropdown,
             verbosity_dropdown,
+            config_status,
             send_full_page_context,
             parallel_inpaint_translation,
             whiteout_conjoined_bubbles,
@@ -3611,7 +3613,7 @@ def create_layout(
             padding_vertical_pixels,
             special_instructions,
             batch_special_instructions,
-            outside_text_enabled,
+            *outside_text_mode_controls,
             outside_text_seed,
             outside_text_inpainting_method,
             outside_text_kontext_backend,
@@ -3767,7 +3769,7 @@ def create_layout(
             padding_horizontal_pixels,
             padding_vertical_pixels,
             supersampling_factor,
-            outside_text_enabled,
+            *outside_text_mode_controls,
             outside_text_seed,
             outside_text_inpainting_method,
             outside_text_kontext_backend,
@@ -3932,7 +3934,7 @@ def create_layout(
             padding_horizontal_pixels,
             padding_vertical_pixels,
             supersampling_factor,
-            outside_text_enabled,
+            *outside_text_mode_controls,
             outside_text_seed,
             outside_text_inpainting_method,
             outside_text_kontext_backend,
@@ -4234,12 +4236,16 @@ def create_layout(
             queue=False,
         )
 
-        # OSB enable/disable handler
-        outside_text_enabled.change(
-            fn=lambda mode: gr.update(visible=mode != "off"),
-            inputs=outside_text_enabled,
-            outputs=outside_text_settings_wrapper,
+        gr.on(
+            triggers=[outside_text_enabled.change, outside_text_include_scene.change],
+            fn=lambda enabled, include_scene: (
+                gr.update(interactive=enabled and not include_scene),
+                gr.update(interactive=enabled),
+            ),
+            inputs=[outside_text_enabled, outside_text_include_scene],
+            outputs=[outside_text_effects, outside_text_include_scene],
             queue=False,
+            show_progress="hidden",
         )
 
         # Page-number filtering toggle -> enable/disable related sliders
