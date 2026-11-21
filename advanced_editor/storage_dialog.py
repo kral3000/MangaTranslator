@@ -230,16 +230,17 @@ class StorageDialog(QDialog):
         self.resize(1110, 635)
         self.setMinimumSize(760, 440)
         self.setObjectName("WorkLibrary")
-        self.setStyleSheet(
-            Path(__file__).with_name("work_library.qss").read_text(encoding="utf-8")
-        )
+        stylesheet = Path(__file__).with_name("work_library.qss")
+        self.setStyleSheet(stylesheet.read_text(encoding="utf-8").replace(
+            "@chevron", stylesheet.with_name("library_chevron.svg").as_posix()
+        ))
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         bar = QWidget()
         bar.setObjectName("LibraryBar")
         toolbar = QHBoxLayout(bar)
-        toolbar.setContentsMargins(20, 11, 18, 11)
+        toolbar.setContentsMargins(16, 9, 16, 9)
         title = QLabel(TITLES[self.kind])
         title.setObjectName("LibraryTitle")
         toolbar.addWidget(title)
@@ -258,6 +259,7 @@ class StorageDialog(QDialog):
             self.storage_button = QToolButton()
             self.storage_button.setText("저장 공간 관리")
             self.storage_button.setAccessibleName("저장 공간 관리")
+            self.storage_button.setToolTip("출력·다운로드 열기 · 화살표로 정리 메뉴 보기")
             self.storage_button.setPopupMode(
                 QToolButton.ToolButtonPopupMode.MenuButtonPopup
             )
@@ -276,6 +278,7 @@ class StorageDialog(QDialog):
         right.setContentsMargins(16, 14, 16, 12)
         right.setSpacing(10)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setHandleWidth(1)
         self.splitter.setChildrenCollapsible(False)
         right.addWidget(self.splitter, 1)
         left = QWidget()

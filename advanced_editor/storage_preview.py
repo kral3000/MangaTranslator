@@ -13,10 +13,11 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
     QLabel,
-    QListView,
     QListWidget,
     QListWidgetItem,
     QSizePolicy,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
@@ -113,6 +114,19 @@ class ImagePane(QLabel):
             self.fit()
 
 
+class PageThumbnailDelegate(QStyledItemDelegate):
+    height = 98
+
+    def sizeHint(self, option, index):
+        return QSize(72, self.height)
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.decorationPosition = QStyleOptionViewItem.Position.Top
+        option.decorationAlignment = Qt.AlignmentFlag.AlignCenter
+        option.displayAlignment = Qt.AlignmentFlag.AlignCenter
+
+
 class SessionPages(QWidget):
     loaded = pyqtSignal(int, int, bool, object)
 
@@ -125,22 +139,22 @@ class SessionPages(QWidget):
         self.loaded.connect(self._receive)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
         self.position = QLabel()
+        self.position.setObjectName("PagePosition")
         layout.addWidget(self.position)
         body = QHBoxLayout()
+        body.setSpacing(6)
         layout.addLayout(body, 1)
         self.pages = QListWidget()
+        self.pages.setObjectName("PageThumbnails")
         self.pages.setAccessibleName("페이지 썸네일 목록")
-        self.pages.setViewMode(QListView.ViewMode.IconMode)
-        self.pages.setFlow(QListView.Flow.TopToBottom)
-        self.pages.setWrapping(False)
-        self.pages.setMovement(QListView.Movement.Static)
+        self.pages.setItemDelegate(PageThumbnailDelegate(self.pages))
+        self.pages.setUniformItemSizes(True)
         self.pages.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.pages.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.pages.setIconSize(QSize(70, 86))
-        self.pages.setGridSize(QSize(84, 112))
-        self.pages.setFixedWidth(106)
-        self.pages.setStyleSheet("QListWidget::item {padding: 0; border-radius: 3px;}")
+        self.pages.setIconSize(QSize(68, 78))
+        self.pages.setFixedWidth(86)
         body.addWidget(self.pages)
         self.large = ImagePane()
         self.large.setObjectName("StoragePreviewImage")
@@ -218,7 +232,7 @@ class SessionPages(QWidget):
     def _load_visible(self):
         if not self.paths or False in self.pending:
             return
-        height = self.pages.gridSize().height()
+        height = PageThumbnailDelegate.height
         top = self.pages.verticalScrollBar().value() // height
         end = top + self.pages.viewport().height() // height + 3
         for index in range(max(0, top - 1), min(len(self.paths), end)):
@@ -235,7 +249,10 @@ class SessionPages(QWidget):
         else:
             self.loaded_small.add(index)
             if image is not None:
-                self.pages.item(index).setIcon(QIcon(QPixmap.fromImage(image)))
+                pixmap = QPixmap.fromImage(image)
+                icon = QIcon(pixmap)
+                icon.addPixmap(pixmap, QIcon.Mode.Selected)
+                self.pages.item(index).setIcon(icon)
             else:
                 self.pages.item(index).setText(f"{index + 1} · 없음")
             self._load_visible()
