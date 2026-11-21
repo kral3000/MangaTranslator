@@ -1,9 +1,19 @@
+/* An inset outline keeps the native button dimensions and focus ring. */
+.gradio-container button.secondary:not(.nav-button):not(.config-button):not(:focus-visible) {
+    outline: 1px solid var(--button-secondary-border-color);
+    outline-offset: -1px;
+}
+
 /* --- SETTINGS LAYOUT --- */
 #settings-tab-container {
     padding-top: 15px;
 }
 
 /* --- NAVIGATION SIDEBAR --- */
+#compact-settings-nav {
+    display: none !important;
+}
+
 #settings-nav {
     width: 15em !important;
     padding: 10px 5px 10px 10px !important;
@@ -34,6 +44,22 @@
 #settings-nav button.nav-button:hover {
     background-color: var(--background-fill-secondary-hover) !important;
     color: var(--body-text-color-hover) !important;
+}
+
+@media (max-width: 700px) {
+    #settings-tab-container #settings-nav {
+        flex-basis: 100% !important;
+        width: 100% !important;
+        min-width: 0 !important;
+        padding: 0 !important;
+        border: 0;
+    }
+    #settings-tab-container #settings-nav button.nav-button {
+        display: none !important;
+    }
+    #settings-nav #compact-settings-nav {
+        display: flex !important;
+    }
 }
 
 #settings-nav button.nav-button-selected {
@@ -683,7 +709,6 @@
     overflow: auto;
     scrollbar-gutter: stable;
     overscroll-behavior: contain;
-    scrollbar-color: var(--border-color-primary) var(--block-background-fill);
 }
 .cleanup-panel:has(.cleanup-dates) .cleanup-picker [data-testid="checkbox-group"] {
     max-height: clamp(224px, calc(100dvh - 428px), 444px);

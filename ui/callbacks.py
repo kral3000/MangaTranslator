@@ -194,7 +194,10 @@ def _status_update(message: str) -> gr.update:
 
 
 def _download_file_update(path: Any = None) -> gr.update:
-    return gr.update(value=str(path) if path else None, visible=True)
+    file = Path(path) if path else None
+    if file and file.is_file():
+        return gr.update(value=str(file), visible=True)
+    return gr.update(value=None, visible=False)
 
 
 def _editor_button_update(path: Any = None) -> gr.update:
@@ -2176,7 +2179,7 @@ def handle_batch_click(
 
         if not zip_file_path and not input_files:
             raise gr.Error(
-                f"{ERROR_PREFIX}Please upload images, a folder, or a ZIP archive."
+                f"{ERROR_PREFIX}번역할 이미지 폴더나 ZIP 파일을 선택하세요."
             )
 
         if zip_file_path and input_files:
@@ -3164,17 +3167,21 @@ def update_process_buttons(
     global CANCELLATION_MANAGER
     if not processing:
         CANCELLATION_MANAGER = None
+    # Lock immediately on start. On completion the browser checks its current
+    # inputs, including any files removed while the translation was running.
+    lock = {"interactive": False} if processing else {}
     return (
         gr.update(
-            interactive=not processing,
-            value=button_text_processing if processing else button_text_idle,
+            value=ko(button_text_processing if processing else button_text_idle),
+            **lock,
         ),
         gr.update(visible=not processing),  # Clear button
         gr.update(visible=processing),  # Cancel button
         # Also update the other tab's buttons to prevent concurrent runs
-        gr.update(interactive=not processing),
+        gr.update(**lock),
         gr.update(visible=not processing),
         gr.update(visible=processing),
+        processing,
     )
 
 

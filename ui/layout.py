@@ -134,6 +134,20 @@ function() {
 """
 
 startup_preference_head = """
+<!-- Document scrollbar rules belong in the head. Gradio scopes media queries
+     from css_paths to descendants of the component container. -->
+<style>
+@media (pointer: fine) and (forced-colors: none) {
+    :root { --translator-scroll-thumb: #788580; }
+    :root.dark, :root:has(body.dark, .gradio-container.dark) {
+        --translator-scroll-thumb: #93a09c;
+    }
+    :root, .gradio-container :where(textarea, [role="listbox"], .options, .gallery-container, [data-testid="checkbox-group"]) {
+        scrollbar-color: var(--translator-scroll-thumb) transparent;
+        scrollbar-width: thin;
+    }
+}
+</style>
 <script>
 (() => {
     const themeStorageKey = 'mangatranslator.theme-preference';
@@ -626,11 +640,24 @@ def create_layout(
 
     with gr.Blocks(
         title="MangaTranslator",
+        theme=gr.themes.Default(
+            font=["Noto Sans KR", "Malgun Gothic", "Segoe UI", "sans-serif"],
+        ).set(
+            border_color_primary="#d9ddda",
+            border_color_primary_dark="#454d50",
+            input_border_color="#cdd2d1",
+            input_border_color_dark="#65706d",
+            input_border_color_focus="#507585",
+            input_border_color_focus_dark="#a5c5da",
+            button_secondary_border_color="#cdd2d1",
+            button_secondary_border_color_dark="#65706d",
+        ),
         js=js_credits,
         head=startup_preference_head,
         css_paths=str(css_path),
     ) as app:
 
+        translation_busy = gr.Checkbox(value=False, visible=False)
         runtime_log_open_state = gr.State(False)
         with gr.Row(elem_id="app-header-row"):
             gr.Markdown("# MangaTranslator", elem_classes=["app-title"])
@@ -804,16 +831,16 @@ def create_layout(
                             translator_saved_file = gr.File(
                                 label="저장된 결과 파일",
                                 interactive=False,
-                                visible=True,
+                                visible=False,
                             )
                             translator_plain_file = gr.File(
                                 label="일반 이미지 사본",
                                 interactive=False,
-                                visible=True,
+                                visible=False,
                             )
                         editor_session_state = gr.State(value="")
                         with gr.Row():
-                            translate_button = gr.Button("Translate", variant="primary")
+                            translate_button = gr.Button("Translate", variant="primary", interactive=False)
                             clear_button = gr.Button("Clear")
                             cancel_button = gr.Button(
                                 "Cancel", variant="stop", visible=False
@@ -1093,12 +1120,12 @@ def create_layout(
                             batch_success_zip_file = gr.File(
                                 label="Successful Files ZIP",
                                 interactive=False,
-                                visible=True,
+                                visible=False,
                             )
                             batch_failed_zip_file = gr.File(
                                 label="Failed Files ZIP",
                                 interactive=False,
-                                visible=True,
+                                visible=False,
                             )
                         batch_editor_session_select = gr.Dropdown(
                             choices=[],
@@ -1109,7 +1136,7 @@ def create_layout(
                         )
                         with gr.Row():
                             batch_process_button = gr.Button(
-                                "Start Batch Translating", variant="primary"
+                                "Start Batch Translating", variant="primary", interactive=False
                             )
                             batch_cancel_button = gr.Button(
                                 "Cancel", variant="stop", visible=False
@@ -1139,37 +1166,23 @@ def create_layout(
                     with gr.Column(scale=1, elem_id="settings-nav"):
                         nav_buttons = []
                         setting_groups = []
-                        nav_button_detection = gr.Button(
-                            "Detection",
-                            elem_classes=["nav-button", "nav-button-selected"],
+                        categories = (
+                            "Detection", "Cleaning", "Translation", "Rendering",
+                            "태그별 렌더링", "OSB Text", "Output", "Other",
                         )
-                        nav_buttons.append(nav_button_detection)
-                        nav_button_cleaning = gr.Button(
-                            "Cleaning", elem_classes="nav-button"
-                        )
-                        nav_buttons.append(nav_button_cleaning)
-                        nav_button_translation = gr.Button(
-                            "Translation", elem_classes="nav-button"
-                        )
-                        nav_buttons.append(nav_button_translation)
-                        nav_button_rendering = gr.Button(
-                            "Rendering", elem_classes="nav-button"
-                        )
-                        nav_buttons.append(nav_button_rendering)
-                        nav_button_tag_styles = gr.Button(
-                            "태그별 렌더링", elem_classes="nav-button"
-                        )
-                        nav_buttons.append(nav_button_tag_styles)
-                        nav_button_outside_text = gr.Button(
-                            "OSB Text", elem_classes="nav-button"
-                        )
-                        nav_buttons.append(nav_button_outside_text)
-                        nav_button_output = gr.Button(
-                            "Output", elem_classes="nav-button"
-                        )
-                        nav_buttons.append(nav_button_output)
-                        nav_button_other = gr.Button("Other", elem_classes="nav-button")
-                        nav_buttons.append(nav_button_other)
+                        for index, title in enumerate(categories):
+                            classes = ["nav-button"]
+                            if index == 0:
+                                classes.append("nav-button-selected")
+                            nav_buttons.append(gr.Button(title, elem_classes=classes))
+                        with gr.Row(elem_id="compact-settings-nav"):
+                            settings_category = gr.Dropdown(
+                                choices=[(title, i) for i, title in enumerate(categories)],
+                                value=0,
+                                label="설정 항목",
+                                filterable=False,
+                                allow_custom_value=False,
+                            )
 
                     with gr.Column(scale=4, elem_id="config-content-area"):
                         # --- Detection Settings ---
@@ -4048,61 +4061,20 @@ def create_layout(
             queue=False,
         )
 
-        output_components_for_switch = setting_groups + nav_buttons
-        nav_button_detection.click(
-            fn=lambda idx=0: utils.switch_settings_view(
-                idx, setting_groups, nav_buttons
-            ),
-            outputs=output_components_for_switch,
-            queue=False,
-        )
-        nav_button_cleaning.click(
-            fn=lambda idx=1: utils.switch_settings_view(
-                idx, setting_groups, nav_buttons
-            ),
-            outputs=output_components_for_switch,
-            queue=False,
-        )
-        nav_button_translation.click(
-            fn=lambda idx=2: utils.switch_settings_view(
-                idx, setting_groups, nav_buttons
-            ),
-            outputs=output_components_for_switch,
-            queue=False,
-        )
-        nav_button_rendering.click(
-            fn=lambda idx=3: utils.switch_settings_view(
-                idx, setting_groups, nav_buttons
-            ),
-            outputs=output_components_for_switch,
-            queue=False,
-        )
-        nav_button_tag_styles.click(
-            fn=lambda idx=4: utils.switch_settings_view(
-                idx, setting_groups, nav_buttons
-            ),
-            outputs=output_components_for_switch,
-            queue=False,
-        )
-        nav_button_outside_text.click(
-            fn=lambda idx=5: utils.switch_settings_view(
-                idx, setting_groups, nav_buttons
-            ),
-            outputs=output_components_for_switch,
-            queue=False,
-        )
-        nav_button_output.click(
-            fn=lambda idx=6: utils.switch_settings_view(
-                idx, setting_groups, nav_buttons
-            ),
-            outputs=output_components_for_switch,
-            queue=False,
-        )
-        nav_button_other.click(
-            fn=lambda idx=7: utils.switch_settings_view(
-                idx, setting_groups, nav_buttons
-            ),
-            outputs=output_components_for_switch,
+        def select_settings_category(index):
+            return [*utils.switch_settings_view(index, setting_groups, nav_buttons), index]
+
+        category_outputs = [*setting_groups, *nav_buttons, settings_category]
+        for index, button in enumerate(nav_buttons):
+            button.click(
+                fn=functools.partial(select_settings_category, index),
+                outputs=category_outputs,
+                queue=False,
+            )
+        settings_category.input(
+            fn=select_settings_category,
+            inputs=settings_category,
+            outputs=category_outputs,
             queue=False,
         )
 
@@ -4596,8 +4568,8 @@ def create_layout(
                 None,
                 None,
                 gr.update(value="", lines=1),
-                gr.update(value=None, visible=True),
-                gr.update(value=None, visible=True),
+                gr.update(value=None, visible=False),
+                gr.update(value=None, visible=False),
                 "",
                 gr.update(visible=False),
             ),
@@ -4753,8 +4725,8 @@ def create_layout(
                 "",
                 None,
                 gr.update(value="", lines=1),
-                gr.update(value=None, visible=True),
-                gr.update(value=None, visible=True),
+                gr.update(value=None, visible=False),
+                gr.update(value=None, visible=False),
                 gr.update(choices=[], value=None, visible=False),
                 gr.update(visible=False),
             ),
@@ -4772,6 +4744,23 @@ def create_layout(
             ],
             queue=False,
         ).then(fn=None, js=js_reset_status_height, queue=False)
+        # Gradio already holds the upload metadata in the browser. Checking it
+        # here avoids decoding images or sending directory file lists again.
+        readiness_inputs = [
+            input_image, input_files, input_zip, batch_native_folder_path,
+            batch_native_zip_path, translation_busy,
+        ]
+        gr.on(
+            triggers=[component.change for component in readiness_inputs],
+            fn=None,
+            inputs=readiness_inputs,
+            outputs=[translate_button, batch_process_button],
+            js="""(image, files, zip, folderPath, zipPath, busy) => {
+                const ready = input => ({__type__: "update", interactive: !busy && Boolean(input)});
+                return [ready(image), ready(files?.length || zip || folderPath || zipPath)];
+            }""",
+            queue=False,
+        )
         translate_event = translate_button.click(
             fn=functools.partial(
                 callbacks.update_process_buttons,
@@ -4786,6 +4775,7 @@ def create_layout(
                 batch_process_button,
                 batch_clear_button,
                 batch_cancel_button,
+                translation_busy,
             ],
             queue=False,
         ).then(
@@ -4819,6 +4809,7 @@ def create_layout(
                 batch_process_button,
                 batch_clear_button,
                 batch_cancel_button,
+                translation_busy,
             ],
             queue=False,
         ).then(fn=None, js=js_reset_status_height, queue=False)
@@ -4844,6 +4835,7 @@ def create_layout(
                 translate_button,
                 clear_button,
                 cancel_button,
+                translation_busy,
             ],
             queue=False,
         ).then(
@@ -4891,6 +4883,7 @@ def create_layout(
                 translate_button,
                 clear_button,
                 cancel_button,
+                translation_busy,
             ],
             queue=False,
         ).then(fn=None, js=js_reset_status_height, queue=False)
