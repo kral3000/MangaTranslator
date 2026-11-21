@@ -40,3 +40,4 @@ Thumbs.db
 # one-off backup files created during risky edits
 *.bak_before_*
 *.bak_*
+/editor_history/

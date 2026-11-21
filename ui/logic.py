@@ -304,7 +304,8 @@ def _create_zip_from_files(
             archive_name = _dedupe_archive_name(
                 archive_name.replace("\\", "/"), used_names
             )
-            zip_ref.write(file_path, archive_name)
+            method = zipfile.ZIP_STORED if file_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} else zipfile.ZIP_DEFLATED
+            zip_ref.write(file_path, archive_name, compress_type=method)
             added_count += 1
 
     if added_count == 0:

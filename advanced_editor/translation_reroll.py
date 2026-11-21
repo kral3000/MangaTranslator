@@ -1,7 +1,7 @@
 """One-off translation suggestions using the editor's existing translation provider."""
 import json
 
-from advanced_editor.backend import _build_translation_config
+from core.config import TranslationConfig
 
 REROLL_STYLES = {
     "natural": ("자연스럽게", "Use natural spoken Korean manga dialogue rather than stiff literal wording."),
@@ -16,7 +16,9 @@ REROLL_STYLES = {
 }
 
 
-def reroll_translation(source, current, settings, *, style="natural", request="", context=None, tag=""):
+def reroll_translation(
+    source, current, config: TranslationConfig, *, style="natural", request="", context=None, tag=""
+):
     if not str(source or "").strip():
         raise ValueError("원문이 없습니다. 원문을 입력하거나 OCR을 먼저 실행해 주세요.")
     if style not in REROLL_STYLES:
@@ -31,7 +33,6 @@ def reroll_translation(source, current, settings, *, style="natural", request=""
     )
     from core.text.text_processing import strip_translation_terminal_periods
 
-    config = _build_translation_config(settings)
     data = json.dumps({"source": str(source), "current_translation": str(current or ""),
                        "style_tag": str(tag or ""), "nearby_dialogue": context or []}, ensure_ascii=False)
     prompt = f"""You are a professional manga localization editor reviewing one unsatisfactory translation.

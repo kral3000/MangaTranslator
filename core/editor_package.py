@@ -157,9 +157,11 @@ def _collect_asset_files(
 
     assets_dir = _path_from_value(session.get("assets_dir"))
     if assets_dir is not None and assets_dir.is_dir():
-        for path in assets_dir.rglob("*"):
-            if path.is_file():
-                _add_file_candidate(files, path, skip_paths=skip_paths)
+        for parent, folders, names in os.walk(assets_dir, followlinks=False):
+            # Explicitly referenced region files are collected below, including legacy attempts.
+            folders[:] = [name for name in folders if not re.fullmatch(r"ai_sfx_[0-9a-f]{32}", name)]
+            for name in names:
+                _add_file_candidate(files, Path(parent) / name, skip_paths=skip_paths)
 
     for region in session.get("regions", []) or []:
         if not isinstance(region, dict):

@@ -114,14 +114,25 @@ class SeparatedLetteringTest(unittest.TestCase):
 
     def test_one_native_generation_and_cancellation_do_not_replace_existing_files(self):
         def generate(_prompt, _references, destination, *_args, **kwargs):
-            self.assertTrue(kwargs["transparent_background"])
-            path = self.layer()["path"]
-            Path(destination).write_bytes(Path(path).read_bytes())
+            self.assertFalse(kwargs.get("transparent_background", False))
+            image = Image.new("RGB", (1024, 1024), "white")
+            ImageDraw.Draw(image).rectangle((300, 300, 600, 600), fill="black")
+            image.save(destination)
             return {"path": str(destination)}
 
-        with patch(
-            "utils.endpoints.codex_image.generate_image", side_effect=generate
-        ) as generate_mock:
+        with (
+            patch(
+                "utils.endpoints.codex_image.generate_image", side_effect=generate
+            ) as generate_mock,
+            patch(
+                "advanced_editor.ai_sfx_layers.prepare_layers",
+                side_effect=AssertionError("legacy preparation must not run"),
+            ),
+            patch(
+                "advanced_editor.ai_sfx_layers.repair_source",
+                side_effect=AssertionError("local source removal must not run"),
+            ),
+        ):
             result = generate_sfx_patch(
                 {"source_image_path": str(self.page)},
                 {"bbox": [20, 20, 120, 120]},
@@ -130,7 +141,8 @@ class SeparatedLetteringTest(unittest.TestCase):
                 Mock(),
             )
         self.assertEqual(generate_mock.call_count, 1)
-        self.assertEqual(result["ai_image"]["pipeline"], "separated_v1")
+        self.assertNotEqual(result["ai_image"].get("pipeline"), "separated_v1")
+        self.assertNotIn("ai_lettering_path", result)
         raw = self.page.read_bytes()
         cancel = threading.Event()
         cancel.set()
@@ -196,7 +208,7 @@ class SeparatedLetteringTest(unittest.TestCase):
             _mark_region_dirty=Mock(),
             refresh_region_list=Mock(),
             load_selected_region_to_form=Mock(),
-            reload_display_image=Mock(),
+            reload_display_image=Mock(), reload_page_preview=Mock(),
             schedule_exact_preview=Mock(),
             _sync_ai_sfx_controls=Mock(),
             status_label=Mock(),

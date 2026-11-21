@@ -1,0 +1,29 @@
+QDialog#WorkLibrary { background: #f6f7f8; }
+#WorkLibrary QWidget { font-family: "Malgun Gothic", "Segoe UI"; font-size: 13px; color: #202933; }
+#LibraryBar { background: #26313c; }
+#LibraryBar QLabel#LibraryTitle { color: #ffffff; font-size: 21px; font-weight: 700; }
+#LibraryBar QLabel#ContextTitle { color: #d4dce4; padding-left: 10px; }
+#LibraryBar QToolButton { color: #f8fafb; background: #34424f; border: 1px solid #546370; border-radius: 5px; padding: 6px 20px 6px 12px; }
+#LibraryBar QToolButton:hover { background: #435564; }
+#LibraryBar QToolButton::menu-button { width: 18px; border-left: 1px solid #546370; }
+#WorkLibrary QPushButton, #WorkLibrary QComboBox, #WorkLibrary QDateEdit, #WorkLibrary QLineEdit {
+    background: #ffffff; border: 1px solid #cbd2d8; border-radius: 5px; padding: 6px 10px;
+}
+#WorkLibrary QPushButton:hover, #WorkLibrary QPushButton:checked { background: #e7edf1; border-color: #a2afbc; }
+#WorkLibrary QPushButton:disabled { color: #87929d; background: #eef1f3; }
+#WorkLibrary QPushButton:focus, #WorkLibrary QLineEdit:focus, #WorkLibrary QComboBox:focus,
+#WorkLibrary QTreeWidget:focus, #WorkLibrary QListWidget:focus { border: 1px solid #457298; }
+#WorkLibrary QPushButton#Primary { background: #254d69; color: white; border-color: #254d69; font-weight: 600; padding: 7px 18px; }
+#WorkLibrary QPushButton#Primary:hover { background: #193c57; }
+#WorkLibrary QPushButton#Primary:disabled { background: #e2e7eb; color: #70808c; border-color: #d2dae0; }
+#WorkLibrary QPushButton#Trash:enabled { color: #903d36; }
+#WorkLibrary QLabel#LibraryStatus { color: #566470; }
+#WorkLibrary QLabel#SelectionTitle { font-size: 15px; font-weight: 700; }
+#WorkLibrary QTreeWidget, #WorkLibrary QListWidget { background: white; border: 1px solid #d1d8dc; border-radius: 5px; outline: 0; }
+#WorkLibrary QTreeWidget::item { height: 31px; border-bottom: 1px solid #eff1f3; }
+#WorkLibrary QTreeWidget::item:hover { background: #edf2f5; }
+#WorkLibrary QTreeWidget::item:selected, #WorkLibrary QListWidget::item:selected { color: #153e5d; background: #dceaf3; }
+#WorkLibrary QHeaderView::section { padding: 5px 4px; background: #e9edf0; color: #445360; border: 0; border-bottom: 1px solid #ccd3d8; }
+#WorkLibrary QSplitter::handle { background: #d6dde0; }
+#WorkLibrary QWidget#StoragePreview { background: #e3e8eb; border-radius: 5px; }
+#WorkLibrary QLabel#StoragePreviewImage { background: #d9dfe3; color: #45515d; border-radius: 3px; }

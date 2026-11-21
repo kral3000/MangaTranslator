@@ -1,11 +1,13 @@
 """Saved editor job discovery shared by the native editor and WebUI."""
 
+import os
 import json
 import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .editor_paths import editor_session_context_label, related_edit_session_paths
 from .editor_batch_progress import read_editor_batches
 
 
@@ -27,26 +29,40 @@ def _read_editor_session_summary(path: Path, modified_ns: int, size: int) -> Dic
     return summary
 
 
+def scan_session_files(repo_root):
+    files = {}
+    for folder in ("editor_sessions", "editor_imports"):
+        root = repo_root / folder
+        if not root.is_dir() or getattr(root.lstat(), "st_file_attributes", 0) & 0x400 or root.is_symlink():
+            continue
+        pending = [root]
+        while pending:
+            directory = pending.pop()
+            try:
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        if entry.is_dir(follow_symlinks=False):
+                            if entry.name.startswith("ai_sfx_") or entry.name == "batch_download_zips":
+                                continue
+                            if not getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0) & 0x400:
+                                pending.append(Path(entry.path))
+                        elif entry.name.lower().endswith("edit_session.json") and entry.is_file(follow_symlinks=False):
+                            path = Path(entry.path)
+                            files[str(path).casefold()] = (path, entry.stat())
+            except (FileNotFoundError, PermissionError):
+                continue
+    return files
+
+
 def discover_existing_editor_sessions(
     repo_root: Optional[Path] = None,
     *, include_members: bool = False, recent_files: Optional[int] = None,
-    include_active: bool = False,
+    include_active: bool = False, files=None,
 ) -> tuple[List[Tuple[str, str]], int] | tuple[List[Tuple[str, str]], int, List[Dict[str, Any]]]:
-    from core.editor_session import (
-        editor_session_context_label,
-        related_edit_session_paths,
-    )
-
     repo_root = (repo_root or Path(__file__).resolve().parents[1]).resolve()
-    session_paths: Dict[str, Path] = {}
-    for folder_name in ("editor_sessions", "editor_imports"):
-        root = repo_root / folder_name
-        if not root.is_dir():
-            continue
-        for path in root.rglob("*.json"):
-            if path.name.casefold().endswith("edit_session.json"):
-                resolved = path.resolve()
-                session_paths.setdefault(str(resolved).casefold(), resolved)
+    if files is None:
+        files = scan_session_files(repo_root)
+    session_paths = {key: value[0] for key, value in files.items()}
 
     batches = sorted(read_editor_batches(repo_root), key=lambda batch: -batch["modified"])
     managed = {
@@ -62,16 +78,10 @@ def discover_existing_editor_sessions(
     )
     paths = [path for key, path in session_paths.items() if key not in managed]
     if recent_files is not None:
-        def modified(path: Path) -> int:
-            try:
-                return path.stat().st_mtime_ns
-            except OSError:
-                return 0
-
-        paths = sorted(paths, key=modified, reverse=True)[:recent_files]
+        paths = sorted(paths, key=lambda p: files[str(p).casefold()][1].st_mtime_ns, reverse=True)[:recent_files]
     for path in paths:
         try:
-            stat = path.stat()
+            stat = files[str(path).casefold()][1]
             data = _read_editor_session_summary(path, stat.st_mtime_ns, stat.st_size)
             display_name = str(data.get("source_display_path") or "").strip()
             if not display_name:
@@ -97,10 +107,8 @@ def discover_existing_editor_sessions(
         )
         if stored_group:
             groups.setdefault(stored_group, []).append(path)
-            group_positions.setdefault(
-                stored_group,
-                {member: index for index, member in enumerate(stored_group)},
-            )
+            if stored_group not in group_positions:
+                group_positions[stored_group] = {member: index for index, member in enumerate(stored_group)}
             continue
         # Legacy imports share one directory; discovering it per page rereads
         # every member for sorting, turning a large import into quadratic I/O.
@@ -204,6 +212,7 @@ def discover_existing_editor_sessions(
     return result, invalid_count
 
 
+@lru_cache(maxsize=32768)
 def _group_member_key(value: Any) -> str:
     parts = Path(str(value)).parts
     for index, part in enumerate(parts):

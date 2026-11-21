@@ -75,7 +75,7 @@ class TextCoverTest(TestCase):
                 status_label=Mock(),
                 canvas=Mock(),
                 _push_history=Mock(),
-                reload_display_image=Mock(),
+                reload_display_image=Mock(), reload_page_preview=Mock(),
                 schedule_exact_preview=Mock(),
             )
             window._stroke_mask = lambda points, size: (

@@ -328,7 +328,6 @@ def finish_request(request, generated):
 def generate_sfx_patch(
     session, region, directory, cancel, progress, *, current_page=None
 ):
-    from advanced_editor.ai_sfx_layers import finish_layers, prepare_layers
     from utils.endpoints.codex_image import GenerationCancelled, generate_image
 
     complete = False
@@ -340,20 +339,18 @@ def generate_sfx_patch(
         request = prepare_request(session, region, directory, current_page=current_page)
         if cancel.is_set():
             raise GenerationCancelled()
-        request = prepare_layers(request, cancel, progress)
-        progress("배경과 분리된 새 글자 레이어를 생성하고 있습니다…")
+        progress("선택 영역을 식자하고 있습니다…")
         generated = generate_image(
             request["prompt"],
             request["references"],
             Path(directory) / "generated.png",
             cancel,
             progress,
-            transparent_background=True,
         )
         if cancel.is_set():
             raise GenerationCancelled()
-        progress("수복 배경과 새 글자를 합성하고 있습니다…")
-        patch = finish_layers(request, generated)
+        progress("결과를 적용할 준비를 하고 있습니다…")
+        patch = finish_request(request, generated)
         (directory / "generation.json").write_text(
             json.dumps({"request": request, "generation": generated}, ensure_ascii=False, indent=2),
             encoding="utf-8",

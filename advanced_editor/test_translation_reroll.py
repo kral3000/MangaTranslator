@@ -13,17 +13,14 @@ class RerollBackendTest(unittest.TestCase):
         self.config = TranslationConfig()
         self.config.provider = 'Codex'
         self.config.model_name = 'saved-model'
+        self.config.reasoning_effort = 'high'
         self.config.special_instructions = '真白 = 마시로\nさん = 씨'
-        self.builder = patch('advanced_editor.translation_reroll._build_translation_config', return_value=self.config)
-        self.builder.start()
-        self.addCleanup(self.builder.stop)
         self.endpoint_patch = patch('core.services.translation._call_llm_endpoint', return_value='{"1":"뭔가 한 방이 더 필요한데."}')
         self.endpoint = self.endpoint_patch.start()
         self.addCleanup(self.endpoint_patch.stop)
 
-    def test_uses_saved_provider_and_rules_without_images_or_changing_settings(self):
-        settings = {'input_source': 'source'}
-        result = reroll_translation('<BN>他に何かあと一押し…</BN>', '다른 무언가 한 번 더 밀기…', settings)
+    def test_uses_selected_provider_and_rules_without_images_or_changing_settings(self):
+        result = reroll_translation('<BN>他に何かあと一押し…</BN>', '다른 무언가 한 번 더 밀기…', self.config)
         args, kwargs = self.endpoint.call_args
         self.assertIs(args[0], self.config)
         self.assertEqual(args[1], [])
@@ -31,12 +28,12 @@ class RerollBackendTest(unittest.TestCase):
         self.assertIn('さん = 씨', args[2])
         self.assertIn('다른 무언가 한 번 더 밀기…', args[2])
         self.assertEqual(result['text'], '뭔가 한 방이 더 필요한데')
-        self.assertEqual(settings, {'input_source': 'source'})
         self.assertEqual(self.config.model_name, 'saved-model')
+        self.assertEqual(self.config.reasoning_effort, 'high')
         self.assertIn('system_prompt', kwargs)
 
     def test_dialect_direction_and_local_context_are_sent_in_one_request(self):
-        result = reroll_translation('ありがとう', '고맙다', {}, style='gyeongsang', context=[{'source':'やあ', 'translation':'안녕'}])
+        result = reroll_translation('ありがとう', '고맙다', self.config, style='gyeongsang', context=[{'source':'やあ', 'translation':'안녕'}])
         self.endpoint.assert_called_once()
         self.assertIn('youthful Gyeongsang', self.endpoint.call_args.args[2])
         self.assertIn('やあ', self.endpoint.call_args.args[2])
@@ -44,28 +41,28 @@ class RerollBackendTest(unittest.TestCase):
 
     def test_custom_direction_is_one_off(self):
         request = '난처해서 얼버무리는 느낌으로, 존댓말은 유지해 줘'
-        reroll_translation('ありがとう', '감사합니다', {}, style='request', request=request)
+        reroll_translation('ありがとう', '감사합니다', self.config, style='request', request=request)
         self.assertIn(request, self.endpoint.call_args.args[2])
         self.assertEqual(self.config.special_instructions, '真白 = 마시로\nさん = 씨')
 
     def test_invalid_inputs_do_not_call_endpoint(self):
         for source, style, request in [('', 'natural', ''), ('x','unknown',''), ('x','request','')]:
             with self.subTest(style=style), self.assertRaises(ValueError):
-                reroll_translation(source, '', {}, style=style, request=request)
+                reroll_translation(source, '', self.config, style=style, request=request)
         self.endpoint.assert_not_called()
 
     def test_invalid_or_missing_response_is_not_a_translation(self):
         for response in ['', None, 'not indexed', '{"2":"wrong index"}', '{"1":""}']:
             with self.subTest(response=response), self.assertRaises(ValueError):
                 self.endpoint.return_value = response
-                reroll_translation('ありがとう', '', {})
+                reroll_translation('ありがとう', '', self.config)
 
     def test_usage_is_returned_and_exclamations_are_preserved(self):
         def endpoint(*args, **kwargs):
             kwargs['usage_output'].update(input_tokens=150, output_tokens=14)
             return '{"1":"고마워!?"}'
         self.endpoint.side_effect = endpoint
-        result = reroll_translation('ありがとう!?', '', {})
+        result = reroll_translation('ありがとう!?', '', self.config)
         self.assertEqual(result['text'], '고마워!?')
         self.assertEqual(result['usage']['input_tokens'], 150)
 
@@ -98,6 +95,27 @@ class RerollSafetyTest(unittest.TestCase):
         self.assertTrue(AdvancedEditorWindow._apply_translation_reroll(self.window, self.draft, '고마워요'))
         self.window._apply_editor_translations.assert_called_once_with([0], ['고마워요'], settings={'input_source':'current'})
         self.assertIsNone(self.window._translation_reroll_draft)
+
+    def test_pending_rerolls_keep_the_model_selected_at_each_click(self):
+        self.window._inpainting_running = False
+        self.window._export_running = False
+        self.window.commit_region_form = Mock()
+        self.window._ai_job_metadata = Mock(return_value={})
+        self.window._submit_ai_job = Mock(return_value=True)
+        self.window.session["regions"] = [self.region]
+        first = TranslationConfig(provider="Codex", model_name="gpt-6.2-sol", reasoning_effort="high")
+        second = TranslationConfig(provider="Codex", model_name="gpt-6.2-astra", reasoning_effort="medium")
+        with (
+            patch("advanced_editor.launcher._build_translation_config", side_effect=[first, second]),
+            patch("advanced_editor.translation_reroll.reroll_translation") as reroll,
+        ):
+            self.assertTrue(AdvancedEditorWindow.start_translation_reroll(self.window))
+            self.assertTrue(AdvancedEditorWindow.start_translation_reroll(self.window))
+            pending = [call.args[2] for call in self.window._submit_ai_job.call_args_list]
+            for run in reversed(pending):
+                run(None, Mock())
+        self.assertIs(reroll.call_args_list[0].args[2], second)
+        self.assertIs(reroll.call_args_list[1].args[2], first)
 
 
 if __name__ == '__main__':

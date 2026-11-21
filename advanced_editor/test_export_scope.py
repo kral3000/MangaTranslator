@@ -102,7 +102,7 @@ class ExportScopeTest(TestCase):
             _persist_output_settings=Mock(),
             _load_base_image=Mock(return_value=Image.new("RGBA", (2, 2))),
             _restore_output_widgets_from_saved_settings=Mock(),
-            reload_display_image=Mock(),
+            reload_display_image=Mock(), reload_page_preview=Mock(),
             refresh_region_list=Mock(),
             load_selected_region_to_form=Mock(),
             _refresh_history_menu=Mock(),

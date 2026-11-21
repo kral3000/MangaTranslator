@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import io
 import json
 import math
@@ -10,7 +9,6 @@ import re
 import sys
 import tempfile
 import threading
-import time
 import traceback
 import zipfile
 from datetime import datetime
@@ -102,11 +100,13 @@ from PyQt6.QtWidgets import (
 )
 
 from advanced_editor.backend import (
+    _build_translation_config,
     detect_and_recognize,
     get_translation_defaults,
     run_inpainting,
     translate_texts,
 )
+from advanced_editor.job_picker import OpenEditorJobDialog
 from advanced_editor.font_picker import FontPicker
 from advanced_editor.standalone import EDITOR_ICON, startup_dialog
 from core.ai_image_region import apply_ai_image_regions
@@ -134,9 +134,10 @@ from core.editor_session import (
     resolve_tag_font_path,
     save_session,
     set_region_font_size,
+    write_editor_json_if_changed,
 )
 from core.text.font_manager import font_size_multiplier, is_default_yoon_font, yoon_font_variant
-from core.text.text_processing import extract_translation_tag
+from core.text.text_processing import extract_translation_tag, visible_editor_text
 
 DEFAULT_EXPORT_DIRECTORY = Path(r"C:\Users\dongw\Documents\Mana")
 
@@ -582,266 +583,18 @@ class TaskSignals(QObject):
     progress = pyqtSignal(int, int, str)
 
 
-class EditorJobTitleDelegate(QStyledItemDelegate):
-    STATUS_ROLE = Qt.ItemDataRole.UserRole + 2
-
-    def paint(self, painter, option, index):
-        badge = index.data(self.STATUS_ROLE)
-        if not badge:
-            super().paint(painter, option, index)
-            return
-        row = QStyleOptionViewItem(option)
-        self.initStyleOption(row, index)
-        title = row.text
-        row.text = ""
-        style = row.widget.style() if row.widget else QApplication.style()
-        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, row, painter, row.widget)
-        badge_width = row.fontMetrics.horizontalAdvance(badge) + 14
-        pill = QRect(row.rect.left() + 7, row.rect.center().y() - 10, badge_width, 21)
-        label = row.rect.adjusted(badge_width + 15, 0, -6, 0)
-        painter.save()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setFont(row.font)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#dce9fc"))
-        painter.drawRoundedRect(pill, 5, 5)
-        painter.setPen(QColor("#1e40af"))
-        painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, badge)
-        painter.setPen(QColor("#1e3a8a" if row.state & QStyle.StateFlag.State_Selected else "#172033"))
-        elided = row.fontMetrics.elidedText(title, Qt.TextElideMode.ElideRight, max(0, label.width()))
-        painter.drawText(label, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, elided)
-        painter.restore()
-
-
-class OpenEditorJobDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("작업 열기")
-        self.setObjectName("OpenEditorJob")
-        self.resize(720, 500)
-        self.setMinimumSize(490, 350)
-        self.setStyleSheet("""
-            QDialog#OpenEditorJob { background: #f4f7fb; }
-            QDialog#OpenEditorJob QWidget {
-                color: #172033; font-family: "Segoe UI", "Malgun Gothic"; font-size: 13px;
-            }
-            QDialog#OpenEditorJob QLabel#JobTitle { font-size: 21px; font-weight: 700; }
-            QDialog#OpenEditorJob QLabel#JobStatus { color: #475569; }
-            QLineEdit, QTreeWidget {
-                background: #ffffff; border: 1px solid #c4cfdd; border-radius: 7px;
-            }
-            QLineEdit { padding: 8px 10px; placeholder-text-color: #526176; }
-            QLineEdit:focus, QTreeWidget:focus, QPushButton:focus { border: 1px solid #2563eb; }
-            QTreeWidget { alternate-background-color: #f8fafc; outline: 0; }
-            QTreeWidget::item { height: 34px; border-bottom: 1px solid #edf2f7; }
-            QTreeWidget::item:hover { background: #eff6ff; }
-            QTreeWidget::item:selected { background: #dbeafe; color: #1e3a8a; }
-            QHeaderView { background: #edf2f7; }
-            QHeaderView::section {
-                background: #edf2f7; color: #334155; padding: 8px;
-                border: none; border-bottom: 1px solid #d5dde8; font-weight: 600;
-            }
-            QPushButton { min-width: 74px; padding: 7px 12px; border-radius: 6px;
-                          background: #ffffff; border: 1px solid #c4cfdd; }
-            QPushButton:hover { background: #eff6ff; }
-            QDialog#OpenEditorJob QPushButton#OpenJobButton {
-                background: #2563eb; color: #ffffff; border: 1px solid #2563eb;
-            }
-            QDialog#OpenEditorJob QPushButton#OpenJobButton:focus { border: 1px solid #172033; }
-            QDialog#OpenEditorJob QPushButton#OpenJobButton:hover { background: #1d4ed8; }
-            QDialog#OpenEditorJob QPushButton#OpenJobButton:disabled {
-                background: #e2e8f0; color: #526176; border-color: #c4cfdd;
-            }
-            QProgressBar { border: none; background: #dbeafe; border-radius: 2px; }
-            QProgressBar::chunk { background: #2563eb; }
-        """)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 16)
-        layout.setSpacing(11)
-        title = QLabel("저장된 편집 작업")
-        title.setObjectName("JobTitle")
-        layout.addWidget(title)
-        self.search = QLineEdit(placeholderText="작업 이름 검색")
-        self.search.setAccessibleName("작업 이름 검색")
-        self.search.setClearButtonEnabled(True)
-        self.search.addAction(_editor_icon("search", "#475569"), QLineEdit.ActionPosition.LeadingPosition)
-        self.status = QLabel("저장된 작업을 찾는 중…")
-        self.status.setObjectName("JobStatus")
-        self.jobs = QTreeWidget()
-        self.jobs.setRootIsDecorated(False)
-        self.jobs.setUniformRowHeights(True)
-        self.jobs.setAlternatingRowColors(True)
-        self.jobs.setHeaderLabels(["작업", "이미지", "수정일"])
-        self.jobs.setItemDelegateForColumn(0, EditorJobTitleDelegate(self.jobs))
-        header = self.jobs.header()
-        header.setStretchLastSection(False)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.resizeSection(1, 92)
-        header.resizeSection(2, 146)
-        self.jobs.setAccessibleName("최근 편집 작업")
-        filters = QHBoxLayout()
-        filters.setSpacing(8)
-        filters.addWidget(self.search, 1)
-        self.refresh_button = QPushButton("새로고침")
-        self.refresh_button.setToolTip("번역 중인 작업과 완료 장수를 다시 확인합니다.")
-        self.refresh_button.clicked.connect(self._refresh)
-        filters.addWidget(self.refresh_button)
-        layout.addLayout(filters)
-        layout.addWidget(self.jobs, 1)
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
-        self.progress.setTextVisible(False)
-        self.progress.setFixedHeight(3)
-        layout.addWidget(self.progress)
-        footer = QHBoxLayout()
-        footer.addWidget(self.status, 1)
-        buttons = QDialogButtonBox()
-        self.open_button = buttons.addButton("열기", QDialogButtonBox.ButtonRole.AcceptRole)
-        self.open_button.setObjectName("OpenJobButton")
-        buttons.addButton("취소", QDialogButtonBox.ButtonRole.RejectRole)
-        footer.addWidget(buttons)
-        layout.addLayout(footer)
-        self.open_button.setEnabled(False)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        self.jobs.itemActivated.connect(lambda _item, _column: self.accept())
-        self.jobs.currentItemChanged.connect(
-            lambda current, _previous: self.open_button.setEnabled(
-                bool(current and current.data(0, Qt.ItemDataRole.UserRole))
-            )
-        )
-        self.search.textChanged.connect(self._filter)
-        self.search.returnPressed.connect(self.accept)
-        self.search.setFocus()
-
-        self._signals = TaskSignals()
-        self._signals.finished.connect(self._on_discovery)
-        self._scan_lock = threading.Lock()
-        self._scan_cancel = threading.Event()
-        self._job_records = []
-        self._refresh()
-
-    def _refresh(self):
-        self._scan_cancel.set()
-        self._scan_cancel = threading.Event()
-        self.refresh_button.setEnabled(False)
-        self.progress.show()
-        self.status.setText("저장된 작업을 찾는 중…")
-        threading.Thread(
-            target=self._discover,
-            args=(self._signals, self._scan_lock, self._scan_cancel),
-            daemon=True,
-        ).start()
-
-    @staticmethod
-    def _discover(signals, scan_lock, cancelled):
-        try:
-            from core.editor_session_catalog import discover_existing_editor_sessions
-
-            _, _invalid, recent = discover_existing_editor_sessions(
-                recent_files=96, include_members=True, include_active=True
-            )
-            signals.finished.emit((cancelled, (recent, 0, False)))
-            with scan_lock:
-                if cancelled.is_set():
-                    return
-                _, invalid, choices = discover_existing_editor_sessions(
-                    include_members=True, include_active=True
-                )
-            signals.finished.emit((cancelled, (choices, invalid, True)))
-        except Exception as exc:
-            signals.finished.emit((cancelled, str(exc)))
-
-    def _on_discovery(self, update):
-        request, result = update
-        if request is not self._scan_cancel:
-            return
-        self.refresh_button.setEnabled(True)
-        if isinstance(result, str):
-            self._show_error(result)
-        else:
-            self._populate(result)
-
-    def _populate(self, result):
-        choices, invalid, complete = result
-        if not complete:
-            fresh_keys = {job["group_key"] or job["id"] for job in choices}
-            choices = choices + [
-                job for job in self._job_records
-                if not job.get("output_dir") and (job["group_key"] or job["id"]) not in fresh_keys
-            ]
-        self._job_records = choices
-        selection = self.jobs.currentItem()
-        selected_key = selection.data(0, Qt.ItemDataRole.UserRole + 1) if selection else None
-        self.jobs.clear()
-        for job in choices:
-            modified = datetime.fromtimestamp(job["modified"]).strftime("%Y-%m-%d %H:%M")
-            title = job["title"]
-            count = f"{job['page_count']}장"
-            if job.get("translating"):
-                count = f"{job['page_count']} / {job['total_pages']}장"
-            item = QTreeWidgetItem([title, count, modified])
-            item.setTextAlignment(1, Qt.AlignmentFlag.AlignCenter)
-            item.setData(0, Qt.ItemDataRole.UserRole, job["paths"][0] if job["paths"] else None)
-            item.setData(0, Qt.ItemDataRole.UserRole + 1, job["group_key"] or job["id"])
-            tooltip = job["label"]
-            if job.get("translating"):
-                item.setData(0, EditorJobTitleDelegate.STATUS_ROLE, "번역 중")
-                item.setData(0, Qt.ItemDataRole.AccessibleTextRole, f"번역 중 · {title}")
-                tooltip = f"번역 중 · {title} · 편집 가능 {count}"
-            if job.get("output_dir"):
-                tooltip += f"\n{job['output_dir']}"
-            item.setToolTip(0, tooltip)
-            self.jobs.addTopLevelItem(item)
-        self.progress.setVisible(not complete)
-        if not complete:
-            self.status.setText("최근 작업 표시 중 · 나머지 작업을 찾는 중…")
-        elif invalid:
-            self.status.setText(f"읽을 수 없는 세션 {invalid}개를 제외했습니다.")
-        elif not choices:
-            self.status.setText("저장된 편집 작업이 없습니다.")
-        else:
-            self.status.setText(f"저장된 작업 {len(choices)}개")
-        self._filter(self.search.text())
-        if selected_key:
-            for row in range(self.jobs.topLevelItemCount()):
-                item = self.jobs.topLevelItem(row)
-                if item.data(0, Qt.ItemDataRole.UserRole + 1) == selected_key and not item.isHidden():
-                    self.jobs.setCurrentItem(item)
-                    break
-
-    def _show_error(self, message):
-        self.progress.hide()
-        self.status.setText("작업 목록을 불러오지 못했습니다.")
-        self.status.setToolTip(message)
-
-    def _filter(self, query):
-        first = None
-        query = query.strip().casefold()
-        for row in range(self.jobs.topLevelItemCount()):
-            item = self.jobs.topLevelItem(row)
-            match = query in item.toolTip(0).casefold()
-            item.setHidden(not match)
-            if match and first is None:
-                first = item
-        self.jobs.setCurrentItem(first)
-
-    def accept(self):
-        current = self.jobs.currentItem()
-        if current is not None and not current.isHidden():
-            path = current.data(0, Qt.ItemDataRole.UserRole)
-            if not path:
-                return
-            self.session_path = Path(path)
-            super().accept()
-
-
 REGION_TYPE_LABELS = {
     "speech_bubble": "말풍선",
     "outside_text": "말풍선 밖 텍스트",
     "added_text": "추가한 텍스트",
     "region": "영역",
 }
+
+
+def _preview_needs_layers(session):
+    return any(region.get("ai_image") for region in session.get("regions", [])) or Path(
+        session.get("restore_mask_path") or ""
+    ).is_file() or Path(session.get("text_cover_mask_path") or "").is_file()
 
 
 def _pil_to_qimage(image: Image.Image) -> QImage:
@@ -1220,11 +973,7 @@ def _load_editor_settings() -> dict[str, Any]:
 
 def _save_editor_settings(settings: dict[str, Any]) -> None:
     try:
-        EDITOR_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        temporary = EDITOR_SETTINGS_FILE.with_suffix(".tmp")
-        with open(temporary, "w", encoding="utf-8") as file:
-            json.dump(settings, file, ensure_ascii=False, indent=2)
-        temporary.replace(EDITOR_SETTINGS_FILE)
+        write_editor_json_if_changed(EDITOR_SETTINGS_FILE, settings)
     except Exception:
         pass
 
@@ -2042,13 +1791,14 @@ class AdvancedEditorWindow(QMainWindow):
         self._font_path_index: dict[str, tuple[str, str]] = {}
         self._font_change_requested = False
         self._task_signals: list[TaskSignals] = []
-        self._ai_sfx_job = None
         self._ai_sfx_draft = None
-        self._ai_sfx_message = ""
-        self._ai_sfx_closed = False
-        self._translation_reroll_job = None
         self._translation_reroll_draft = None
-        self._ai_feedback_notice = None
+        from advanced_editor.ai_jobs import AiJobQueue
+        self._ai_session_paths = set()
+        self._ai_jobs = AiJobQueue(self, self.editor_settings.get("ai_sfx_concurrency", 2))
+        self._ai_previews = {}
+        self._ai_jobs.changed.connect(self._sync_ai_sfx_controls)
+        self._ai_jobs.completed.connect(self._ai_job_finished)
         self._ai_sfx_timer = QTimer(self)
         self._ai_sfx_timer.setInterval(1000)
         self._ai_sfx_timer.timeout.connect(self._sync_ai_sfx_controls)
@@ -2537,10 +2287,12 @@ class AdvancedEditorWindow(QMainWindow):
         from advanced_editor.ai_job_feedback import AiJobFeedback
 
         self.ai_job_feedback = AiJobFeedback(zoom_bar)
-        self.ai_job_feedback.dismiss_button.setIcon(_editor_icon("clear", "#e5e7eb"))
-        self.ai_job_feedback.stopRequested.connect(self._stop_ai_job)
+        self.ai_job_feedback.jobStopRequested.connect(self._ai_jobs.cancel)
+        self.ai_job_feedback.jobResultRequested.connect(self._open_ai_job_result)
         self.ai_job_feedback.resultRequested.connect(self._open_ai_job_result)
-        self.ai_job_feedback.dismissed.connect(self._dismiss_ai_job_notice)
+        self.ai_job_feedback.concurrencyChanged.connect(self._set_ai_concurrency)
+        self.ai_job_feedback.historyRequested.connect(self._show_lettering_history)
+        self.ai_job_feedback.clearRequested.connect(self._ai_jobs.clear_finished)
         zoom_layout.addWidget(self.ai_job_feedback)
 
         canvas_layout.addWidget(zoom_bar)
@@ -3809,6 +3561,8 @@ class AdvancedEditorWindow(QMainWindow):
                     self._switch_editor_session(target)
                 finally:
                     loading.close()
+            if getattr(dialog, "draft", None):
+                self._preview_history_draft(dialog.draft)
         dialog.deleteLater()
 
     def _switch_editor_session(self, target: Path) -> None:
@@ -3852,7 +3606,6 @@ class AdvancedEditorWindow(QMainWindow):
             self.redo_stack.clear()
 
             self._restore_output_widgets_from_saved_settings()
-            self.reload_display_image()
             self.refresh_region_list()
             self.load_selected_region_to_form()
             if switching_group:
@@ -3865,7 +3618,7 @@ class AdvancedEditorWindow(QMainWindow):
             self.setWindowTitle(
                 f"MangaTranslator 고급 편집기 - {self.session_path.name}"
             )
-            self.schedule_exact_preview()
+            self.reload_page_preview()
             self.status_label.setText(
                 f"편집 이미지를 전환했습니다: {self._session_display_name(target)}"
             )
@@ -6196,11 +5949,9 @@ class AdvancedEditorWindow(QMainWindow):
                 self.session = prepared
                 self._dirty_region_ids = dirty_ids
                 break
-        self.reload_display_image()
         self.refresh_region_list()
         self.load_selected_region_to_form()
-        self.canvas.update()
-        self.schedule_exact_preview()
+        self.reload_page_preview()
         self.status_label.setText(
             f"일괄 서식 변경 완료: {len(prepared_sessions)}개 이미지 · "
             f"{changed_count}개 영역"
@@ -6387,6 +6138,8 @@ class AdvancedEditorWindow(QMainWindow):
             self._preview_running = False
             if signals in self._task_signals:
                 self._task_signals.remove(signals)
+            if getattr(self, "_completed_preview_serial", None) == self._preview_request_serial:
+                return
             if self._preview_pending or request_serial != self._preview_request_serial:
                 self._preview_pending = False
                 self._set_render_status("pending")
@@ -6609,136 +6362,41 @@ class AdvancedEditorWindow(QMainWindow):
                 str(region.get("source_text") or ""), str(region.get("translation") or ""),
                 (region.get("ai_image") or {}).get("id"), region.get("ai_sfx_wording"))
 
-    def _ai_sfx_draft_is_current(self, draft=None):
-        draft = draft or self._ai_sfx_draft
-        region = self.selected_region()
-        return bool(draft and region and str(self.session_path.resolve()) == draft["session_path"]
-                    and self._ai_sfx_region_stamp(region) == draft["stamp"]
-                    and draft.get("preview_serial", self._preview_request_serial)
-                    == self._preview_request_serial)
-
-    def _sync_ai_sfx_controls(self):
-        if not hasattr(self, "ai_sfx_button"):
-            return
-        region = self.selected_region()
-        image_region = bool(region and region.get("ai_image"))
-        job, translation_job = self._ai_sfx_job, self._translation_reroll_job
-        busy = job is not None or translation_job is not None
-        self.ai_sfx_button.setEnabled(region is not None and not busy
-            and not self._inpainting_running and not self._export_running)
-        self.ai_sfx_button.setText("AI 식자")
-        self.translation_reroll_button.setEnabled(bool(region and not image_region
-            and str(region.get("source_text") or "").strip())
-            and not busy and not self._inpainting_running and not self._export_running)
-        self.translation_reroll_button.setText("재번역")
-        self.enabled_checkbox.setText("식자 표시" if image_region else "영역 렌더링")
-        self.enabled_checkbox.setToolTip("켜면 AI 식자 결과, 끄면 일본어 원본을 표시합니다." if image_region
-                                       else "선택한 텍스트 영역을 결과 이미지에 렌더링합니다.")
-        if not hasattr(self, "ai_job_feedback"):
-            return
-        active = job or translation_job
-        if active:
-            kind = "AI 식자" if job else "재번역"
-            elapsed = int(time.monotonic() - active["started"])
-            cancelled = active["cancel"].is_set()
-            stage = self._ai_sfx_message if job else "번역 응답 대기"
-            if cancelled:
-                stage = "중단 요청됨 · 응답 정리 중"
-            title = active.get("target", kind)
-            self.ai_job_feedback.set_state(title=title, detail=f"{stage} · {elapsed}초",
-                busy=True, cancelled=cancelled, state="busy",
-                tooltip=f"{title}\n{stage} · {elapsed}초\n{active['session_path']}",
-                compact_text=f"{'식자' if job else '번역'} {elapsed}초")
-            return
-        notice = self._ai_feedback_notice
-        if notice:
-            self.ai_job_feedback.set_state(title=notice["target"], detail=notice["detail"],
-                ready=notice["state"] == "ready" or bool(notice.get("failure_preview")), state=notice["state"],
-                result_text="비교·적용" if notice["state"] == "ready" else "결과 보기",
-                tooltip=notice["detail"] + "\n" + notice["session_path"],
-                compact_text="결과 준비" if notice["state"] == "ready" else "작업 현황")
-        else:
-            ready = image_region or self._ai_sfx_draft_is_current() or self._translation_reroll_draft_is_current()
-            self.ai_job_feedback.set_state(ready=ready)
-
-    def _stop_ai_job(self):
-        if self._ai_sfx_job:
-            self.cancel_ai_sfx_generation()
-        else:
-            self.cancel_translation_reroll()
-
-    def _dismiss_ai_job_notice(self):
-        self._ai_feedback_notice = None
-        self.ai_job_feedback.popup.hide()
-        self._sync_ai_sfx_controls()
-
-    def _open_ai_job_result(self):
-        if self._ai_sfx_job or self._translation_reroll_job:
-            return
-        notice = self._ai_feedback_notice
-        if notice and notice.get("failure_preview"):
-            from advanced_editor.ai_sfx_preview import SfxPreviewDialog
-            SfxPreviewDialog(notice["failure_preview"], None, self).show()
-            return
-        kind = notice.get("kind") if notice and notice["state"] == "ready" else None
-        if not kind:
-            if self._translation_reroll_draft_is_current():
-                self.show_translation_reroll_preview()
-            elif self._ai_sfx_draft_is_current() or (self.selected_region() or {}).get("ai_image"):
-                self.show_ai_sfx_preview()
-            return
-        draft = self._ai_sfx_draft if kind == "sfx" else self._translation_reroll_draft
-        if not draft:
-            return
-        self.commit_region_form(mark_dirty=False)
-        target = Path(draft["session_path"])
-        if self.session_path.resolve() != target.resolve():
-            self._switch_editor_session(target)
-            if self.session_path.resolve() != target.resolve():
-                return
-        stamp = self._ai_sfx_region_stamp if kind == "sfx" else self._translation_reroll_stamp
-        regions = self.session.get("regions", [])
-        matches = [index for index, region in enumerate(regions) if stamp(region) == draft["stamp"]]
-        target_index = draft.get("region_index")
-        if target_index not in matches:
-            target_index = matches[0] if len(matches) == 1 else None
-        for index, region in enumerate(regions):
-            if index == target_index:
-                self.selected_index = index
-                self.refresh_region_list()
-                self.load_selected_region_to_form()
-                self.canvas.update()
-                break
-        else:
-            self._ai_feedback_notice = {**notice, "state": "error", "detail": "결과를 만든 영역이 변경되거나 삭제됐습니다. 다시 요청해 주세요."}
-            self.status_label.setText(self._ai_feedback_notice["detail"])
-            self._sync_ai_sfx_controls()
-            return
-        if kind == "sfx" and draft.get("background_digest"):
-            # Navigation changes preview serials; validate actual artwork before rebinding.
-            digest = hashlib.sha256(render_session_background(self.session).tobytes()).hexdigest()
-            if digest == draft["background_digest"]:
-                draft["preview_serial"] = self._preview_request_serial
-            else:
-                self._ai_feedback_notice = {**notice, "state": "error", "detail": "생성 후 배경이 바뀌었습니다. 다시 요청해 주세요."}
-                self.status_label.setText(self._ai_feedback_notice["detail"])
-                self._sync_ai_sfx_controls()
-                return
-        current = self._ai_sfx_draft_is_current(draft) if kind == "sfx" else self._translation_reroll_draft_is_current(draft)
-        if not current:
-            self._ai_feedback_notice = {**notice, "state": "error", "detail": "생성 후 내용이 바뀌었습니다. 다시 요청해 주세요."}
-            self.status_label.setText(self._ai_feedback_notice["detail"])
-            self._sync_ai_sfx_controls()
-            return
-        if kind == "sfx":
-            self.show_ai_sfx_preview()
-        else:
-            self.show_translation_reroll_preview()
-
     @staticmethod
     def _translation_reroll_stamp(region):
         return (str(region.get("id")), str(region.get("source_text") or ""),
                 str(region.get("translation") or ""), bool(region.get("ai_image")))
+
+    def _ai_job_metadata(self, kind, region):
+        stamp = self._ai_sfx_region_stamp if kind == "sfx" else self._translation_reroll_stamp
+        page = Path(self.session.get("source_image_path") or self.session_path).stem
+        return {"session_path": str(self.session_path.resolve()), "stamp": stamp(region),
+                "region_index": self.selected_index,
+                "target": f"{'AI 식자' if kind == 'sfx' else '재번역'} · {page} · {self.selected_index + 1}번 영역"}
+
+    def _selected_ai_draft(self, kind):
+        region = self.selected_region()
+        if not region:
+            return None
+        stamp = self._ai_sfx_region_stamp if kind == "sfx" else self._translation_reroll_stamp
+        for job in reversed(list(self._ai_jobs.jobs.values())):
+            if (job["kind"] == kind and job["state"] in {"ready", "stale"}
+                    and job["session_path"] == str(self.session_path.resolve())
+                    and job["stamp"] == stamp(region)):
+                return job.get("draft")
+        return None
+
+    def _ai_sfx_draft_is_current(self, draft=None):
+        from advanced_editor.ai_jobs import artwork_digest
+
+        draft = draft or self._ai_sfx_draft
+        region = self.selected_region()
+        if not (draft and region and str(self.session_path.resolve()) == draft["session_path"]
+                and self._ai_sfx_region_stamp(region) == draft["stamp"]):
+            return False
+        if "background_box" in draft:
+            return artwork_digest(render_session_background(self.session), draft["background_box"]) == draft["background_digest"]
+        return draft.get("preview_serial", self._preview_request_serial) == self._preview_request_serial
 
     def _translation_reroll_draft_is_current(self, draft=None):
         draft = draft or self._translation_reroll_draft
@@ -6746,6 +6404,193 @@ class AdvancedEditorWindow(QMainWindow):
         return bool(draft and region and not region.get("ai_image")
             and str(self.session_path.resolve()) == draft["session_path"]
             and self._translation_reroll_stamp(region) == draft["stamp"])
+
+    def _sync_ai_sfx_controls(self):
+        if not hasattr(self, "ai_sfx_button"):
+            return
+        region = self.selected_region()
+        image_region = bool(region and region.get("ai_image"))
+        idle = not self._inpainting_running and not self._export_running
+        self.ai_sfx_button.setEnabled(bool(region and idle and not self._ai_jobs.active_for(
+            "sfx", self._ai_job_metadata("sfx", region))))
+        self.translation_reroll_button.setEnabled(bool(region and not image_region and idle
+            and str(region.get("source_text") or "").strip() and not self._ai_jobs.active_for(
+                "translation", self._ai_job_metadata("translation", region))))
+        self.enabled_checkbox.setText("식자 표시" if image_region else "영역 렌더링")
+        self.enabled_checkbox.setToolTip("켜면 AI 식자 결과, 끄면 일본어 원본을 표시합니다." if image_region
+                                       else "선택한 텍스트 영역을 결과 이미지에 렌더링합니다.")
+        pending = any(job["state"] in {"queued", "running"} for job in self._ai_jobs.jobs.values())
+        if pending and not self._ai_sfx_timer.isActive():
+            self._ai_sfx_timer.start()
+        elif not pending:
+            self._ai_sfx_timer.stop()
+        if hasattr(self, "ai_job_feedback"):
+            ready = image_region or self._selected_ai_draft("sfx") or self._selected_ai_draft("translation")
+            self.ai_job_feedback.set_jobs(self._ai_jobs.jobs, self._ai_jobs.concurrency, ready=bool(ready))
+
+    def _show_lettering_history(self):
+        from advanced_editor.storage_dialog import StorageDialog
+
+        self.ai_job_feedback.popup.hide()
+        dialog = StorageDialog(self, editor=self, history=True)
+        dialog.exec()
+        if (dialog.draft or dialog.open_path) and (self._inpainting_running or self._export_running or self._background_job_count):
+            QMessageBox.information(self, "작업 진행 중", "진행 중인 편집이 끝나면 기록을 다시 열어 주세요.")
+            return
+        if dialog.draft:
+            self._preview_history_draft(dialog.draft)
+        elif dialog.open_path and dialog.open_path != self.session_path:
+            self._switch_editor_session(dialog.open_path)
+
+    def _preview_history_draft(self, draft):
+        from advanced_editor.ai_sfx_preview import SfxPreviewDialog
+
+        current = self._focus_ai_job_target(draft, "sfx") and self._ai_sfx_draft_is_current(draft)
+        patch = dict(draft["patch"])
+        if not current:
+            patch["warning"] = "영역·문구·배경이 달라져 비교만 할 수 있습니다."
+        dialog = SfxPreviewDialog(patch, (lambda: self._apply_ai_sfx_draft(draft)) if current else None, self)
+        dialog.exec()
+
+    def _set_ai_concurrency(self, value):
+        self.editor_settings["ai_sfx_concurrency"] = int(value)
+        _save_editor_settings(self.editor_settings)
+        self._ai_jobs.set_concurrency(value)
+
+    def _submit_ai_job(self, kind, metadata, run):
+        if not self._ai_jobs.submit(kind, metadata, run):
+            return False
+        page = metadata["session_path"]
+        if page not in self._ai_session_paths:
+            _write_lifecycle_log(f"AI job uses session={page}")
+            self._ai_session_paths.add(page)
+        return True
+
+    def _ai_job_finished(self, job_id):
+        job = self._ai_jobs.jobs[job_id]
+        if job["state"] != "ready":
+            return
+        result = job["result"]
+        draft = {key: job[key] for key in ("job_id", "session_path", "stamp", "region_index",
+                 "target", "style", "request", "current", "background_box", "background_digest") if key in job}
+        if job["kind"] == "translation":
+            text, _ = self._clean_editor_translation(result.get("text") or "")
+            if not text.strip():
+                job["state"], job["stage"] = "error", "번역 응답에 적용할 문장이 없습니다."
+                return
+            draft.update(result, text=text)
+        else:
+            draft["patch"] = result["patch"]
+        job["draft"] = draft
+
+    def _focus_ai_job_target(self, draft, kind):
+        self.commit_region_form(mark_dirty=False)
+        target = Path(draft["session_path"])
+        if self.session_path.resolve() != target.resolve():
+            self._switch_editor_session(target)
+            if self.session_path.resolve() != target.resolve():
+                return False
+        stamp = self._ai_sfx_region_stamp if kind == "sfx" else self._translation_reroll_stamp
+        regions = self.session.get("regions", [])
+        matches = [index for index, region in enumerate(regions) if stamp(region) == draft["stamp"]]
+        index = draft.get("region_index")
+        if index not in matches:
+            index = matches[0] if len(matches) == 1 else None
+        if index is None and draft.get("job_id"):
+            applied = self._ai_jobs.jobs.get(draft["job_id"], {}).get("applied_stamp")
+            matches = [i for i, region in enumerate(regions) if applied and stamp(region) == applied]
+            index = matches[0] if len(matches) == 1 else None
+        if index is None and kind == "sfx":
+            image_id = ((draft.get("patch") or {}).get("ai_image") or {}).get("id")
+            matches = [i for i, region in enumerate(regions)
+                       if image_id and (region.get("ai_image") or {}).get("id") == image_id]
+            index = matches[0] if len(matches) == 1 else None
+        if index is None:
+            return False
+        self.set_selected_index(index)
+        return True
+
+    def _open_ai_job_result(self, job_id=None):
+        if job_id is None:
+            for kind in ("sfx", "translation"):
+                draft = self._selected_ai_draft(kind)
+                if draft:
+                    return self._open_ai_job_result(draft["job_id"])
+            if (self.selected_region() or {}).get("ai_image"):
+                self.show_ai_sfx_preview()
+            else:
+                self.ai_job_feedback._show_popup()
+            return
+        job = self._ai_jobs.jobs.get(job_id)
+        if not job:
+            return
+        self.ai_job_feedback.popup.hide()
+        preview = self._ai_previews.get(job_id)
+        if preview is not None:
+            try:
+                if preview.isVisible():
+                    preview.raise_()
+                    preview.activateWindow()
+                    return
+            except RuntimeError:
+                self._ai_previews.pop(job_id, None)
+        result = job.get("result") or {}
+        if result.get("error") and not result.get("failure_preview"):
+            dialog = QDialog(self)
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            dialog.setWindowTitle("AI 작업 · 오류 확인")
+            dialog.resize(520, 240)
+            layout = QVBoxLayout(dialog)
+            label = QLabel(job["target"])
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            layout.addWidget(label)
+            details = QTextEdit()
+            details.setReadOnly(True)
+            details.setPlainText(result["error"])
+            layout.addWidget(details, 1)
+            close = QPushButton("닫기")
+            close.clicked.connect(dialog.close)
+            layout.addWidget(close)
+        elif result.get("failure_preview"):
+            from advanced_editor.ai_sfx_preview import SfxPreviewDialog
+            dialog = SfxPreviewDialog(result["failure_preview"], None, self)
+        else:
+            draft = job.get("draft")
+            if not draft:
+                return
+            focused = self._focus_ai_job_target(draft, job["kind"])
+            current = focused and (self._ai_sfx_draft_is_current(draft) if job["kind"] == "sfx"
+                                   else self._translation_reroll_draft_is_current(draft))
+            if job["state"] != "applied" or current:
+                job["state"] = "ready" if current else "stale"
+                job["stage"] = "결과 준비됨 · 비교 후 적용" if current else "요청 후 영역·배경이 바뀌었습니다. 결과 확인만 가능합니다."
+            if job["kind"] == "sfx":
+                from advanced_editor.ai_sfx_preview import SfxPreviewDialog
+                patch = dict(draft["patch"])
+                if not current:
+                    patch["warning"] = job["stage"]
+                dialog = SfxPreviewDialog(patch, (lambda: self._apply_ai_sfx_draft(draft)) if current else None, self)
+                self._ai_sfx_draft = draft
+            else:
+                from advanced_editor.translation_reroll_preview import (
+                    TranslationRerollPreview,
+                )
+                view = {**draft, "readonly_reason": "" if current else job["stage"]}
+                dialog = TranslationRerollPreview(view,
+                    (lambda value: self._apply_translation_reroll(draft, value)) if current else None,
+                    (lambda: self._retry_ai_job(draft, "translation")) if focused else None, self)
+                self._translation_reroll_draft = draft
+        dialog.setWindowTitle(job["target"] + " · 결과 확인")
+        self._ai_previews[job_id] = dialog
+        dialog.show()
+        self._sync_ai_sfx_controls()
+
+    def _retry_ai_job(self, draft, kind):
+        if not self._focus_ai_job_target(draft, kind):
+            return False
+        if kind == "sfx":
+            return self.start_ai_sfx_generation()
+        return self.start_translation_reroll(draft["style"], request=draft.get("request", ""))
 
     def open_translation_reroll(self):
         self.start_translation_reroll("natural")
@@ -6756,13 +6601,8 @@ class AdvancedEditorWindow(QMainWindow):
         if accepted and request.strip():
             self.start_translation_reroll("request", request=request.strip())
 
-    def cancel_translation_reroll(self):
-        if self._translation_reroll_job:
-            self._translation_reroll_job["cancel"].set()
-            self._sync_ai_sfx_controls()
-
     def start_translation_reroll(self, style="natural", *, request=""):
-        if self._translation_reroll_job or self._ai_sfx_job or self._inpainting_running or self._export_running:
+        if self._inpainting_running or self._export_running:
             return False
         self.commit_region_form(mark_dirty=False)
         region = self.selected_region()
@@ -6771,88 +6611,27 @@ class AdvancedEditorWindow(QMainWindow):
             return False
         from advanced_editor.translation_reroll import reroll_translation
 
-        current = str(region.get("translation") or "")
-        job = {"session_path": str(self.session_path.resolve()),
-               "stamp": self._translation_reroll_stamp(region), "region_index": self.selected_index, "style": style,
-               "request": request, "current": current, "cancel": threading.Event(),
-               "started": time.monotonic()}
-        job["target"] = f"재번역 · {Path(self.session.get('source_image_path') or self.session_path).stem} · {self.selected_index + 1}번 영역"
-        self._translation_reroll_job = job
-        self._ai_feedback_notice = None
-        settings = {"input_source": "source"}
+        current = visible_editor_text(str(region.get("translation") or ""))
+        metadata = {**self._ai_job_metadata("translation", region), "style": style, "request": request, "current": current}
         context = [{"source": str(item.get("source_text") or "")[:600],
-                    "translation": str(item.get("translation") or "")[:600]}
+                    "translation": visible_editor_text(str(item.get("translation") or ""))[:600]}
                    for item in self.session.get("regions", [])[max(0, self.selected_index - 2):self.selected_index + 3]
                    if item is not region and not item.get("ai_image") and item.get("source_text")]
         source, tag = str(region["source_text"]), str(region.get("render_tag") or "")
-        signals = TaskSignals(self)
-        self._task_signals.append(signals)
+        translation_config = _build_translation_config({})
 
-        def finished(result):
-            self._ai_sfx_timer.stop()
-            self._translation_reroll_job = None
-            self._task_signals.remove(signals)
-            signals.deleteLater()
-            if self._ai_sfx_closed:
-                return
-            if job["cancel"].is_set():
-                message = "재번역 결과 받기를 중단했습니다. 기존 문장은 유지됩니다."
-            elif result.get("error"):
-                message = "재번역하지 못했습니다. " + result["error"]
-            else:
-                text, _ = self._clean_editor_translation(result["text"])
-                if text.strip():
-                    self._translation_reroll_draft = {**job, **result, "text": text}
-                    message = "번역안 준비됨 · 비교 후 적용"
-                else:
-                    result["error"] = "번역 응답에 적용할 문장이 없습니다."
-                    message = result["error"]
-            state = "cancelled" if job["cancel"].is_set() else "error" if result.get("error") else "ready"
-            self._ai_feedback_notice = {**job, "kind": "translation", "state": state,
-                "detail": message}
-            self._sync_ai_sfx_controls()
+        def run(cancel, progress):
+            progress("번역 응답 대기")
+            return reroll_translation(
+                source, current, translation_config,
+                style=style, request=request, context=context, tag=tag,
+            )
 
-        def run():
-            try:
-                result = {} if job["cancel"].is_set() else reroll_translation(
-                    source, current, settings, style=style, request=request, context=context, tag=tag)
-            except Exception as exc:
-                result = {"error": str(exc)}
-            try:
-                signals.finished.emit(result)
-            except RuntimeError:
-                pass  # The editor closed while the request was finishing.
-
-        signals.finished.connect(finished)
-        self._ai_sfx_timer.start()
-        self._sync_ai_sfx_controls()
-        threading.Thread(target=run, daemon=True).start()
-        return True
-
-    def show_translation_reroll_preview(self):
-        if not self._translation_reroll_draft_is_current():
-            return
-        from advanced_editor.translation_reroll_preview import TranslationRerollPreview
-
-        draft = self._translation_reroll_draft
-        previous = getattr(self, "_translation_reroll_preview", None)
-        if previous is not None:
-            try:
-                if previous.isVisible() and previous._reroll_draft is draft:
-                    previous.raise_()
-                    previous.activateWindow()
-                    return
-                previous.close()
-            except RuntimeError:
-                pass  # A closed preview is deleted by Qt.
-        dialog = TranslationRerollPreview(
-            draft, lambda value: self._apply_translation_reroll(draft, value),
-            lambda: self.start_translation_reroll(draft["style"], request=draft.get("request", "")), self)
-        self._translation_reroll_preview = dialog
-        dialog._reroll_draft = draft
-        dialog.show()
+        return self._submit_ai_job("translation", metadata, run)
 
     def _apply_translation_reroll(self, draft, value):
+        if draft.get("job_id"):
+            self._focus_ai_job_target(draft, "translation")
         if not value.strip() or not self._translation_reroll_draft_is_current(draft):
             self.status_label.setText("원문이나 현재 번역이 바뀌었습니다. 현재 영역에서 다시 제안받아 주세요.")
             return False
@@ -6860,7 +6639,9 @@ class AdvancedEditorWindow(QMainWindow):
             settings=dict(self.session.get("editor_translation_settings") or {}))
         if self._translation_reroll_draft is draft:
             self._translation_reroll_draft = None
-        self._ai_feedback_notice = None
+        if draft.get("job_id"):
+            self._ai_jobs.jobs[draft["job_id"]]["applied_stamp"] = self._translation_reroll_stamp(self.selected_region())
+            self._ai_jobs.mark_applied(draft["job_id"])
         self._sync_ai_sfx_controls()
         self.status_label.setText("새 번역을 적용하고 저장했습니다. 실행 취소로 이전 문장으로 돌아갈 수 있습니다.")
         return True
@@ -6882,124 +6663,82 @@ class AdvancedEditorWindow(QMainWindow):
         save_session(self.session_path, self.session)
         self._sync_ai_sfx_controls()
 
-    def cancel_ai_sfx_generation(self):
-        if self._ai_sfx_job:
-            self._ai_sfx_job["cancel"].set()
-            self._sync_ai_sfx_controls()
-
     def start_ai_sfx_generation(self):
-        if self._ai_sfx_job or getattr(self, "_translation_reroll_job", None) or self._inpainting_running or self._export_running:
-            return
+        if self._inpainting_running or self._export_running:
+            return False
         self.commit_region_form(mark_dirty=False)
         region = self.selected_region()
         if region is None:
-            return
+            return False
         if not region.get("ai_image"):
             wording = self.translation_edit.toPlainText()
             region["ai_sfx_wording"] = "" if wording == "새 텍스트" else wording
             save_session(self.session_path, self.session)
-        from uuid import uuid4
-
-        from advanced_editor.ai_sfx import generate_sfx_patch
+        from advanced_editor.lettering_history import attempt_directory, save_record
         from utils.endpoints.codex_image import GenerationCancelled
+        from advanced_editor.ai_jobs import artwork_digest
+        from advanced_editor.ai_sfx import generate_sfx_patch
+
+        metadata = self._ai_job_metadata("sfx", region)
+        if self._ai_jobs.active_for("sfx", metadata):
+            return False
         assets = Path(self.session.get("assets_dir") or self.session_path.with_name(self.session_path.stem + "_assets"))
-        directory = assets / ("ai_sfx_" + uuid4().hex)
-        job = {"session_path": str(self.session_path.resolve()),
-               "stamp": self._ai_sfx_region_stamp(region), "region_index": getattr(self, "selected_index", None),
-               "preview_serial": self._preview_request_serial, "cancel": threading.Event(),
-               "started": time.monotonic()}
-        job["target"] = f"AI 식자 · {Path(self.session.get('source_image_path') or self.session_path).stem} · {(getattr(self, 'selected_index', 0) or 0) + 1}번 영역"
-        self._ai_sfx_job = job
-        self._ai_feedback_notice = None
-        self._ai_sfx_message = "AI 효과음 식자를 준비하고 있습니다…"
-        signals = TaskSignals(self)
-        self._task_signals.append(signals)
+        directory = attempt_directory(self.session_path, assets)
         session_copy, region_copy = copy.deepcopy(self.session), copy.deepcopy(region)
-        # Editable text is a separate top layer, never part of the AI's artwork reference.
         current_page = render_session_background(session_copy)
-        job["background_digest"] = hashlib.sha256(current_page.tobytes()).hexdigest()
+        metadata["background_box"] = [round(v) for v in region["bbox"]]
+        metadata["background_digest"] = artwork_digest(current_page, metadata["background_box"])
 
-        def progress(message):
-            signals.progress.emit(0, 0, message)
-
-        def receive_progress(_current, _total, message):
-            if not self._ai_sfx_closed:
-                self._ai_sfx_message = message
-                self._sync_ai_sfx_controls()
-
-        def finished(result):
-            self._ai_sfx_timer.stop()
-            self._ai_sfx_job = None
-            self._task_signals.remove(signals)
-            signals.deleteLater()
-            if self._ai_sfx_closed:
-                return
-            if job["cancel"].is_set() or result.get("cancelled"):
-                self._ai_sfx_message = "생성을 취소했습니다. 현재 식자는 그대로 유지됩니다."
-            elif result.get("error"):
-                self._ai_sfx_message = "생성하지 못했습니다. " + result["error"]
-            else:
-                self._ai_sfx_draft = {**job, "patch": result["patch"]}
-                self._ai_sfx_message = "AI 식자 결과가 준비됐습니다. 캔버스 상단에서 비교 후 적용해 주세요."
-            state = "cancelled" if job["cancel"].is_set() or result.get("cancelled") else "error" if result.get("error") else "ready"
-            self._ai_feedback_notice = {**job, "kind": "sfx", "state": state,
-                "detail": "결과 준비됨 · 비교 후 적용" if state == "ready" else self._ai_sfx_message,
-                "failure_preview": result.get("failure_preview")}
-            self._sync_ai_sfx_controls()
-
-        def run():
+        def run(cancel, progress):
+            save_record(directory, metadata, "running")
             try:
-                patch = generate_sfx_patch(
-                    session_copy, region_copy, directory, job["cancel"], progress,
-                    current_page=current_page,
-                )
-                result = {"patch": patch}
-            except GenerationCancelled:
-                result = {"cancelled": True}
+                patch = generate_sfx_patch(session_copy, region_copy, directory, cancel,
+                                           progress, current_page=current_page)
             except Exception as exc:
-                result = {"error": str(exc), "failure_preview": getattr(exc, "preview", None)}
-            try:
-                signals.finished.emit(result)
-            except RuntimeError:
-                pass  # The editor closed while the request was finishing.
+                save_record(directory, metadata, "cancelled" if isinstance(exc, GenerationCancelled) else "failed", error=str(exc))
+                raise
+            save_record(directory, metadata, "ready", patch=patch)
+            return {"patch": patch}
 
-        signals.progress.connect(receive_progress)
-        signals.finished.connect(finished)
-        self._ai_sfx_timer.start()
-        self._sync_ai_sfx_controls()
-        threading.Thread(target=run, daemon=True).start()
+        return self._submit_ai_job("sfx", metadata, run)
 
     def show_ai_sfx_preview(self):
-        from advanced_editor.ai_sfx_preview import SfxPreviewDialog
-        if self._ai_sfx_draft_is_current():
-            draft = self._ai_sfx_draft
-            dialog = SfxPreviewDialog(draft["patch"], lambda: self._apply_ai_sfx_draft(draft), self)
-        else:
-            region = self.selected_region()
-            if not region or not region.get("ai_image"):
-                return
-            dialog = SfxPreviewDialog(region, None, self)
-        dialog.show()
+        region = self.selected_region()
+        if region and region.get("ai_image"):
+            from advanced_editor.ai_sfx_preview import SfxPreviewDialog
+            SfxPreviewDialog(region, None, self).show()
 
     def _apply_ai_sfx_draft(self, draft):
+        if draft.get("job_id"):
+            self._focus_ai_job_target(draft, "sfx")
         if not self._ai_sfx_draft_is_current(draft):
-            self.status_label.setText("생성 후 페이지·영역·문구가 바뀌었습니다. 생성한 영역을 다시 선택하거나 현재 페이지로 새로 생성해 주세요.")
+            self.status_label.setText("생성 후 영역·문구·영역 배경이 바뀌었습니다. 현재 영역으로 다시 생성해 주세요.")
             return False
-        self._push_history("AI 효과음 식자 적용")
         region = self.selected_region()
         patch = {k: copy.deepcopy(v) for k, v in draft["patch"].items() if k != "warning"}
+        if self.session.get("assets_dir"):
+            from advanced_editor.lettering_history import preserve_applied_files
+            try:
+                patch = preserve_applied_files(patch, Path(self.session["assets_dir"]))
+            except (KeyError, OSError, ValueError) as exc:
+                self.status_label.setText(f"식자 파일을 저장할 수 없습니다. {exc}")
+                return False
+        self._push_history("AI 효과음 식자 적용")
+        for key in ("ai_background_path", "ai_lettering_path", "ai_erase_mask_path"):
+            if key not in patch:
+                region.pop(key, None)
         region.update(patch)
         region["enabled"] = True
         self._mark_region_dirty(region)
         save_session(self.session_path, self.session)
         if self._ai_sfx_draft is draft:
             self._ai_sfx_draft = None
-        self._ai_sfx_message = ""
-        self._ai_feedback_notice = None
+        if draft.get("job_id"):
+            self._ai_jobs.mark_applied(draft["job_id"])
         self.refresh_region_list()
         self.load_selected_region_to_form()
-        self.reload_display_image()
-        self.schedule_exact_preview()
+        self.reload_page_preview()
+        self._sync_ai_sfx_controls()
         self.status_label.setText("AI 식자를 적용하고 저장했습니다. ‘식자 표시’를 끄면 원본이 표시됩니다.")
         return True
 
@@ -7153,8 +6892,7 @@ class AdvancedEditorWindow(QMainWindow):
                 region["enabled"] = enabled
                 self._mark_region_dirty(region)
                 save_session(self.session_path, self.session)
-                self.reload_display_image()
-                self.schedule_exact_preview()
+                self.reload_page_preview()
                 self._sync_ai_sfx_controls()
             return
         x = float(self.x_spin.value())
@@ -8105,8 +7843,7 @@ class AdvancedEditorWindow(QMainWindow):
                 self.session["paint_overlay_path"] = ""
                 self.session["inpaint_settings"] = settings
                 save_session(self.session_path, self.session)
-                self.reload_display_image()
-                self.schedule_exact_preview()
+                self.reload_page_preview()
                 self.status_label.setText(
                     f"인페인팅을 완료했습니다: {output_path.name}"
                 )
@@ -8157,8 +7894,7 @@ class AdvancedEditorWindow(QMainWindow):
             QMessageBox.warning(self, f"{label} 마스크 지우기 실패", str(exc))
             return
         self.canvas.clear_mask_overlay_cache()
-        self.reload_display_image()
-        self.schedule_exact_preview()
+        self.reload_page_preview()
         self.status_label.setText(f"현재 이미지의 {label} 마스크를 모두 지웠습니다.")
 
     def clear_paint_overlay(self) -> None:
@@ -8173,8 +7909,7 @@ class AdvancedEditorWindow(QMainWindow):
         self._push_history("그리기 전체 지우기")
         _array_to_overlay_image(np.zeros_like(overlay)).save(overlay_path)
         save_session(self.session_path, self.session)
-        self.reload_display_image()
-        self.schedule_exact_preview()
+        self.reload_page_preview()
         self.status_label.setText("현재 이미지의 그리기 내용을 모두 지웠습니다.")
 
     def reset_inpainting_result(self) -> None:
@@ -8182,8 +7917,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.session["inpainted_image_path"] = ""
         self.session["inpainted_background_text_free"] = False
         save_session(self.session_path, self.session)
-        self.reload_display_image()
-        self.schedule_exact_preview()
+        self.reload_page_preview()
         self.status_label.setText("인페인팅 결과를 초기화했습니다.")
 
     def _region_changed_for_fast_preview(self, region: dict[str, Any]) -> bool:
@@ -8315,9 +8049,7 @@ class AdvancedEditorWindow(QMainWindow):
             region["render_baseline"] = _region_render_signature(region)
 
     def _preview_background_image(self) -> Image.Image:
-        if any(region.get("ai_image") for region in self.session.get("regions", [])) or Path(
-            self.session.get("restore_mask_path") or ""
-        ).is_file() or Path(self.session.get("text_cover_mask_path") or "").is_file():
+        if _preview_needs_layers(self.session):
             return render_session_image(self.session)[0]
         background_path, source_kind = self._editor_background_source()
         if background_path is not None:
@@ -8728,8 +8460,26 @@ class AdvancedEditorWindow(QMainWindow):
     def compose_preview_image(self) -> Image.Image:
         return self._preview_background_image().convert("RGBA")
 
+    def reload_page_preview(self) -> None:
+        if not _preview_needs_layers(self.session):
+            self.reload_display_image()
+            self.schedule_exact_preview()
+            return
+        self._preview_request_serial += 1
+        self._preview_pending = False
+        self._preview_timer.stop()
+        image, errors = render_session_image(self.session)
+        self._show_background_image(image)
+        self.displaying_rendered_result = True
+        self._completed_preview_serial = self._preview_request_serial
+        self._set_render_status("ready")
+        if errors:
+            self.status_label.setText("일부 영역 미리보기 렌더링 경고:\n" + "\n".join(errors[:3]))
+
     def reload_display_image(self) -> None:
-        image = self._preview_background_image()
+        self._show_background_image(self._preview_background_image())
+
+    def _show_background_image(self, image) -> None:
         self.base_image = image.copy()
         self.displaying_rendered_result = False
         self.display_image = image
@@ -9391,10 +9141,9 @@ class AdvancedEditorWindow(QMainWindow):
                 _array_to_overlay_image(overlay).save(target)
         self.selected_index = state.get("selected_index")
         save_session(self.session_path, self.session)
-        self.reload_display_image()
         self.refresh_region_list()
         self.load_selected_region_to_form()
-        self.schedule_exact_preview()
+        self.reload_page_preview()
 
     def _push_history(
         self, label: str = "편집", *, include_related_sessions: bool = False
@@ -9495,9 +9244,8 @@ class AdvancedEditorWindow(QMainWindow):
         self.status_label.setText(f"다시 실행: {label}")
 
     def closeEvent(self, event) -> None:
-        self._ai_sfx_closed = True
-        self.cancel_ai_sfx_generation()
-        self.cancel_translation_reroll()
+        self._ai_jobs.close()
+        self._ai_sfx_timer.stop()
         try:
             self.commit_region_form(mark_dirty=False)
             self._persist_editor_control_settings()
@@ -9526,7 +9274,7 @@ def _write_lifecycle_log(message: str) -> None:
         pass
 
 
-def launch(session_path: str | None = None) -> int:
+def launch(session_path: str | None = None, *, draft=None) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setWindowIcon(QIcon(str(EDITOR_ICON)))
     app.setQuitOnLastWindowClosed(True)
@@ -9535,6 +9283,7 @@ def launch(session_path: str | None = None) -> int:
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return 0
         session_path = str(dialog.session_path)
+        draft = getattr(dialog, "draft", None)
     resolved_session_path = str(resolve_editor_session_input(session_path))
     _write_lifecycle_log(f"launch started session={resolved_session_path}")
     loading = startup_dialog("편집 작업을 여는 중…")
@@ -9563,6 +9312,8 @@ def launch(session_path: str | None = None) -> int:
 
     _write_lifecycle_log("window shown")
     app.aboutToQuit.connect(lambda: _write_lifecycle_log("application quitting"))
+    if draft:
+        QTimer.singleShot(0, lambda: window._preview_history_draft(draft))
     exit_code = app.exec()
     _write_lifecycle_log(f"event loop exited code={exit_code}")
     return exit_code

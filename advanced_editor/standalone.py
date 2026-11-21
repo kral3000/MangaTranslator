@@ -44,13 +44,28 @@ def main():
     QTimer.singleShot(75, first_paint.quit)
     first_paint.exec()
     try:
-        from advanced_editor.launcher import main as launch_editor
+        draft = None
+        session = sys.argv[1] if len(sys.argv) > 1 else None
+        if session is None:
+            from advanced_editor.job_picker import OpenEditorJobDialog
+
+            picker = OpenEditorJobDialog()
+            startup.hide()
+            if picker.exec() != QDialog.DialogCode.Accepted:
+                return 0
+            session = str(picker.session_path)
+            draft = getattr(picker, "draft", None)
+            startup.show()
+            app.processEvents()
+        from advanced_editor.launcher import launch
+
+        startup.hide()
+        return launch(session, draft=draft)
     except Exception as exc:
         QMessageBox.critical(startup, "고급 편집기 실행 실패", str(exc))
         return 1
     finally:
         startup.hide()
-    return launch_editor()
 
 
 if __name__ == "__main__":

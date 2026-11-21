@@ -10,11 +10,7 @@ from core.tag_styles import normalize_tag_style_table
 from core.validation import clamp_settings
 from utils.logging import log_message
 
-CONFIG_FILE = (
-    Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")))
-    / "MangaTranslator"
-    / "config.json"
-)
+from ui.settings_path import CONFIG_FILE
 
 
 def _codex_models(refresh: bool = False) -> List[str]:

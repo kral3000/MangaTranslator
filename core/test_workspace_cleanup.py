@@ -161,3 +161,40 @@ class WorkspaceCleanupTest(TestCase):
             with self.assertRaises(RuntimeError):
                 running()
             self.assertEqual(cleanup._ACTIVE_JOBS, 0)
+
+    def test_cache_and_log_review_excludes_current_files_and_protects_busy_profile(self):
+        import os
+
+        with TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            output = repo / "output"
+            logs = output / "advanced_editor_logs"
+            logs.mkdir(parents=True)
+            old, newest, lifecycle = [
+                logs / name for name in (
+                    "advanced_editor_stdout_20200101_000000.log",
+                    "advanced_editor_stdout_20200102_000000.log",
+                    "advanced_editor_lifecycle.log",
+                )
+            ]
+            for path in (old, newest, lifecycle):
+                path.write_text("test")
+                os.utime(path, (1, 1))
+            cache = output / "webview2-desktop" / "EBWebView" / "Default" / "Cache"
+            cache.mkdir(parents=True)
+            (cache / "entry").write_bytes(b"temp")
+            (cache.parent / "Preferences").write_bytes(b"keep")
+            log, browser = cleanup.maintenance_records(repo)
+            self.assertEqual(log["paths"], [str(old)])
+            with patch.object(cleanup, "_browser_cache_in_use", return_value=True):
+                with self.assertRaisesRegex(ValueError, "사용 중"):
+                    cleanup.prepare_cleanup("maintenance", [browser], [browser["id"]], repo, output)
+            with self.assertRaises(ValueError):
+                cleanup.prepare_cleanup("maintenance", [dict(log, paths=[str(lifecycle)])], [log["id"]], repo, output)
+            plan = cleanup.prepare_cleanup("maintenance", [log], [log["id"]], repo, output)
+            self.assertEqual(list(plan["fingerprints"]), [str(old)])
+            old.write_bytes(b"new bytes")
+            with patch.object(cleanup, "_trash") as trash:
+                with self.assertRaises(ValueError):
+                    cleanup.execute_cleanup(plan)
+                trash.assert_not_called()

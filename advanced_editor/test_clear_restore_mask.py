@@ -27,7 +27,7 @@ class ClearRestoreMaskTest(TestCase):
                     side_effect=lambda label: history.append(path.read_bytes())
                 ),
                 status_label=Mock(),
-                reload_display_image=Mock(),
+                reload_display_image=Mock(), reload_page_preview=Mock(),
                 schedule_exact_preview=Mock(),
             )
 
@@ -39,8 +39,7 @@ class ClearRestoreMaskTest(TestCase):
                 self.assertIsNone(image.getchannel("A").getbbox())
             self.assertEqual(window.session["restore_mask_path"], "keep.png")
             save.assert_called_once_with(window.session_path, window.session)
-            window.reload_display_image.assert_called_once()
-            window.schedule_exact_preview.assert_called_once()
+            window.reload_page_preview.assert_called_once()
 
     def test_clear_preserves_undo_data_and_refreshes_preview(self):
         with TemporaryDirectory() as directory:
@@ -52,7 +51,7 @@ class ClearRestoreMaskTest(TestCase):
                 session={"restore_mask_path": str(path), "inpaint_mask_path": "keep.png"},
                 session_path=Path(directory) / "session.json", image_size=(8, 6),
                 _push_history=Mock(side_effect=lambda label: history.append(path.read_bytes())),
-                status_label=Mock(), canvas=Mock(), reload_display_image=Mock(),
+                status_label=Mock(), canvas=Mock(), reload_display_image=Mock(), reload_page_preview=Mock(),
                 schedule_exact_preview=Mock(),
             )
             with patch("advanced_editor.launcher.save_session") as save:
@@ -63,8 +62,7 @@ class ClearRestoreMaskTest(TestCase):
                 self.assertIsNone(image.getbbox())
             self.assertEqual(window.session["inpaint_mask_path"], "keep.png")
             window.canvas.clear_mask_overlay_cache.assert_called_once()
-            window.reload_display_image.assert_called_once()
-            window.schedule_exact_preview.assert_called_once()
+            window.reload_page_preview.assert_called_once()
             window.session["restore_mask_path"] = ""
             AdvancedEditorWindow.clear_restore_mask(window)
             window._push_history.assert_called_once()

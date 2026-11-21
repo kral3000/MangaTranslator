@@ -109,7 +109,7 @@ class UndoPreviewSyncTest(TestCase):
                 session_path=root / "session.json",
                 image_size=(8, 6),
                 selected_index=0,
-                reload_display_image=Mock(),
+                reload_page_preview=Mock(),
                 refresh_region_list=Mock(),
                 load_selected_region_to_form=Mock(),
                 schedule_exact_preview=Mock(),
@@ -132,7 +132,7 @@ class UndoPreviewSyncTest(TestCase):
             session={},
             session_path=Path("session.json"),
             selected_index=None,
-            reload_display_image=Mock(),
+            reload_page_preview=Mock(),
             refresh_region_list=Mock(),
             load_selected_region_to_form=Mock(),
             schedule_exact_preview=Mock(),
@@ -148,7 +148,7 @@ class UndoPreviewSyncTest(TestCase):
         with patch("advanced_editor.launcher.save_session"):
             AdvancedEditorWindow._restore_state(window, state)
 
-        window.schedule_exact_preview.assert_called_once_with()
+        window.reload_page_preview.assert_called_once_with()
 
     def test_preview_background_removes_stale_text_from_dirty_regions(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -272,7 +272,7 @@ class UndoPreviewSyncTest(TestCase):
                 session_path=current,
                 related_session_paths=[current, sibling],
                 selected_index=None,
-                reload_display_image=Mock(),
+                reload_page_preview=Mock(),
                 refresh_region_list=Mock(),
                 load_selected_region_to_form=Mock(),
                 schedule_exact_preview=Mock(),

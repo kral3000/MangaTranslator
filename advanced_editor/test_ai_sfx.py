@@ -587,7 +587,7 @@ class AiSfxTest(unittest.TestCase):
         report = json.loads((directory / "failure.json").read_text(encoding="utf-8"))
         self.assertEqual(report["generated.png"], [600, 200])
         self.assertEqual(report["request"]["canvas_size"], [290, 290])
-        with patch("utils.endpoints.codex_image.generate_image", side_effect=generate), patch("advanced_editor.ai_sfx_layers.finish_layers", return_value={"ok": True}):
+        with patch("utils.endpoints.codex_image.generate_image", side_effect=generate), patch("advanced_editor.ai_sfx.finish_request", return_value={"ok": True}):
             generate_sfx_patch({"source_image_path": str(page)}, {"bbox": [5, 5, 95, 295]}, self.root / "success", threading.Event(), lambda _: None)
         self.assertTrue((self.root / "success" / "generated.png").exists())
 
@@ -599,9 +599,9 @@ class AiSfxTest(unittest.TestCase):
         directory = self.root / "raw_success"
 
         def generate(_prompt, references, destination, *_args, **kwargs):
-            self.assertTrue(kwargs["transparent_background"])
+            self.assertFalse(kwargs.get("transparent_background", False))
             with Image.open(references[0]) as reference:
-                image = Image.new("RGBA", reference.size, (0, 0, 0, 0))
+                image = reference.convert("RGB")
             ImageDraw.Draw(image).rectangle((350, 350, 650, 650), fill="black")
             image.save(destination)
             return {"path": str(destination)}
@@ -624,7 +624,6 @@ class AiSfxTest(unittest.TestCase):
 
     def test_result_open_finds_full_stamp_when_ids_collide(self):
         import copy
-        import hashlib
         for kind in ("sfx", "translation"):
             with self.subTest(kind=kind):
                 first = copy.deepcopy(self.region)
@@ -634,36 +633,16 @@ class AiSfxTest(unittest.TestCase):
                 target.update(bbox=[1, 2, 5, 8], source_text="target", translation="target")
                 stamp = (AdvancedEditorWindow._ai_sfx_region_stamp if kind == "sfx"
                          else AdvancedEditorWindow._translation_reroll_stamp)
-                background = Image.new("RGBA", (10, 12), "white")
                 draft = {"session_path": str((self.root / "session.json").resolve()),
-                         "stamp": stamp(target), "preview_serial": 3,
-                         "background_digest": hashlib.sha256(background.tobytes()).hexdigest()}
+                         "stamp": stamp(target), "region_index": 0}
                 window = SimpleNamespace(
-                    _ai_sfx_job=None, _translation_reroll_job=None,
-                    _ai_feedback_notice={"kind": kind, "state": "ready", "target": "target"},
-                    _ai_sfx_draft=draft, _translation_reroll_draft=draft,
                     session_path=self.root / "session.json", session={"regions": [first, target]},
-                    selected_index=1, _preview_request_serial=4,
+                    selected_index=0, commit_region_form=Mock(),
                     _ai_sfx_region_stamp=AdvancedEditorWindow._ai_sfx_region_stamp,
-                    _translation_reroll_stamp=AdvancedEditorWindow._translation_reroll_stamp,
-                    commit_region_form=Mock(), refresh_region_list=Mock(),
-                    load_selected_region_to_form=Mock(), canvas=Mock(), status_label=Mock(),
-                    _sync_ai_sfx_controls=Mock(), show_ai_sfx_preview=Mock(),
-                    show_translation_reroll_preview=Mock(),
-                )
-                window.selected_region = lambda: window.session["regions"][window.selected_index]
-                window._ai_sfx_draft_is_current = lambda draft: AdvancedEditorWindow._ai_sfx_draft_is_current(window, draft)
-                window._translation_reroll_draft_is_current = lambda draft: AdvancedEditorWindow._translation_reroll_draft_is_current(window, draft)
-                with patch("advanced_editor.launcher.render_session_background", return_value=background):
-                    AdvancedEditorWindow._open_ai_job_result(window)
+                    _translation_reroll_stamp=AdvancedEditorWindow._translation_reroll_stamp)
+                window.set_selected_index = lambda index: setattr(window, "selected_index", index)
+                self.assertTrue(AdvancedEditorWindow._focus_ai_job_target(window, draft, kind))
                 self.assertEqual(window.selected_index, 1)
-                (window.show_ai_sfx_preview if kind == "sfx" else window.show_translation_reroll_preview).assert_called_once()
-                if kind == "sfx":
-                    window.show_ai_sfx_preview.reset_mock()
-                    with patch("advanced_editor.launcher.render_session_background", return_value=Image.new("RGBA", (10, 12), "red")):
-                        AdvancedEditorWindow._open_ai_job_result(window)
-                    window.show_ai_sfx_preview.assert_not_called()
-                    self.assertEqual(window._ai_feedback_notice["state"], "error")
 
     def test_page_edit_invalidates_generation_even_if_selected_region_is_unchanged(self):
         window = SimpleNamespace(
@@ -680,29 +659,31 @@ class AiSfxTest(unittest.TestCase):
     def test_start_captures_artwork_without_visible_text_before_worker_runs(self):
         display = Image.new("RGBA", (30, 30), "red")
         background = Image.new("RGBA", (30, 30), (20, 40, 180, 255))
+        queue = SimpleNamespace(active_for=Mock(return_value=False), submit=Mock(return_value="job"))
         window = SimpleNamespace(
-            _ai_sfx_job=None, _inpainting_running=False, _export_running=False,
+            _inpainting_running=False, _export_running=False,
             commit_region_form=Mock(), selected_region=lambda: self.region,
-            session=self.session, session_path=self.root / "session.json",
-            _ai_sfx_region_stamp=AdvancedEditorWindow._ai_sfx_region_stamp,
-            _preview_request_serial=3, _task_signals=[], _ai_sfx_timer=Mock(),
-            _sync_ai_sfx_controls=Mock(), display_image=display,
+            session=self.session, session_path=self.root / "session.json", selected_index=0,
+            _ai_jobs=queue, _ai_sfx_region_stamp=AdvancedEditorWindow._ai_sfx_region_stamp,
+            _translation_reroll_stamp=AdvancedEditorWindow._translation_reroll_stamp,
+            display_image=display,
         )
-        signals = SimpleNamespace(progress=Mock(), finished=Mock())
+        window._ai_job_metadata = lambda kind, region: AdvancedEditorWindow._ai_job_metadata(window, kind, region)
+        window._ai_session_paths = {str(window.session_path.resolve())}
+        window._submit_ai_job = lambda *args: AdvancedEditorWindow._submit_ai_job(window, *args)
         with (
-            patch("advanced_editor.launcher.TaskSignals", return_value=signals),
             patch("advanced_editor.launcher.render_session_background", return_value=background) as compose,
-            patch("advanced_editor.launcher.threading.Thread") as thread,
             patch("advanced_editor.ai_sfx.generate_sfx_patch", return_value={}) as generate,
         ):
-            AdvancedEditorWindow.start_ai_sfx_generation(window)
+            self.assertTrue(AdvancedEditorWindow.start_ai_sfx_generation(window))
             display.paste("green", (0, 0, 30, 30))
             compose.assert_called_once_with(self.session)
-            thread.call_args.kwargs["target"]()
+            metadata, worker = queue.submit.call_args.args[1:]
+            self.assertEqual(worker(threading.Event(), Mock()), {"patch": {}})
         captured = generate.call_args.kwargs["current_page"]
         self.assertEqual(captured.getpixel((15, 15)), (20, 40, 180, 255))
-        self.assertEqual(window._ai_sfx_job["preview_serial"], 3)
-        signals.finished.emit.assert_called_once_with({"patch": {}})
+        self.assertEqual(metadata["background_box"], [5, 6, 15, 18])
+        self.assertIn("background_digest", metadata)
 
     def test_unchanged_crop_needs_no_additional_original_reference(self):
         page_path = self.root / "unchanged.png"

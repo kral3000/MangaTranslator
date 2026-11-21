@@ -1,153 +1,255 @@
-"""Fixed canvas-toolbar feedback, with a compact disclosure for narrow windows."""
+"""Compact canvas-toolbar job summary and a scrollable per-job disclosure."""
 
-from PyQt6.QtCore import QPoint, QSize, Qt, QTimer, pyqtSignal
+import time
+
+from PyQt6.QtCore import QPoint, QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
-    QToolButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 
+class JobRow(QWidget):
+    def __init__(self, job_id, stop, show, parent=None):
+        super().__init__(parent)
+        self.setObjectName("AiJobRow")
+        self.setFixedHeight(58)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(8)
+        labels = QVBoxLayout()
+        labels.setSpacing(2)
+        self.title = QLabel()
+        self.detail = QLabel()
+        self.title.setObjectName("AiJobTitle")
+        self.detail.setObjectName("AiJobDetail")
+        for label in (self.title, self.detail):
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            label.setSizePolicy(
+                QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+            )
+            labels.addWidget(label)
+        layout.addLayout(labels, 1)
+        self.action = QPushButton()
+        self.action.setProperty("noAutoIcon", True)
+        self.action.setFixedSize(84, 28)
+        self._job_id, self._stop, self._show = job_id, stop, show
+        self._pending = False
+        self.action.clicked.connect(self._activate)
+        layout.addWidget(self.action)
+
+    def _activate(self):
+        (self._stop if self._pending else self._show)(self._job_id)
+
+    def update_job(self, job):
+        self._job = job
+        self._pending = job["state"] in {"queued", "running"}
+        self.title.setText(job["target"])
+        elapsed = int(
+            (job.get("finished") or time.monotonic())
+            - (job["started"] or job["submitted"])
+        )
+        stage = job.get("stage", "")
+        detail = f"{stage} · {elapsed}초" if self._pending else stage
+        self.detail.setText(
+            self.detail.fontMetrics().elidedText(
+                detail, Qt.TextElideMode.ElideRight, max(0, self.detail.width())
+            )
+        )
+        self.setToolTip(job["target"] + "\n" + detail + "\n" + job["session_path"])
+        colors = {
+            "queued": "#c4cfdd",
+            "running": "#93c5fd",
+            "ready": "#86efac",
+            "error": "#fcd34d",
+        }
+        self.detail.setStyleSheet("color: " + colors.get(job["state"], "#c4cfdd") + ";")
+        if self._pending:
+            self.action.setText("대기 취소" if job["state"] == "queued" else "중단")
+            self.action.setEnabled(not job["cancel"].is_set())
+        else:
+            self.action.setText("비교·적용" if job["state"] == "ready" else "결과 보기")
+            self.action.setEnabled(
+                bool(
+                    job.get("draft")
+                    or (job.get("result") or {}).get("failure_preview")
+                    or job["state"] == "error"
+                )
+            )
+        self.action.setAccessibleName(job["target"] + " " + self.action.text())
+
+
 class AiJobFeedback(QWidget):
-    stopRequested = pyqtSignal()
+    jobStopRequested = pyqtSignal(str)
+    jobResultRequested = pyqtSignal(str)
+    concurrencyChanged = pyqtSignal(int)
+    historyRequested = pyqtSignal()
+    clearRequested = pyqtSignal()
     resultRequested = pyqtSignal()
-    dismissed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("AiJobFeedback")
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.setMinimumWidth(80)
-        self.setMaximumWidth(370)
+        self.setMaximumWidth(280)
         self.setFixedHeight(30)
-        self._title = self._detail = ""
-        self._compact = False
-        self._busy = False
-        self._layout = QHBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self.compact_button = QPushButton("결과 보기")
-        self.compact_button.setProperty("noAutoIcon", True)
-        self.compact_button.setFixedSize(80, 30)
-        self.compact_button.setAccessibleName("AI 작업 현황과 결과 펼치기")
-        self.compact_button.clicked.connect(self._show_popup)
-        self._layout.addWidget(self.compact_button)
-        self.compact_button.hide()
-        self.content = QWidget(self)
-        self.content.setObjectName("AiJobContent")
-        row = QHBoxLayout(self.content)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(6)
-        self.dot = QWidget()
-        self.dot.setFixedSize(6, 6)
-        row.addWidget(self.dot)
-        column = QWidget()
-        column.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        labels = QVBoxLayout(column)
-        labels.setContentsMargins(0, 0, 0, 0)
-        labels.setSpacing(0)
-        self.title_label = QLabel()
-        self.title_label.setObjectName("AiJobTitle")
-        self.detail_label = QLabel()
-        self.detail_label.setObjectName("AiJobDetail")
-        for label in (self.title_label, self.detail_label):
-            label.setTextFormat(Qt.TextFormat.PlainText)
-            labels.addWidget(label)
-        row.addWidget(column, 1)
-        self.stop_button = QPushButton("중단")
-        self.stop_button.setProperty("noAutoIcon", True)
-        self.stop_button.setFixedSize(48, 30)
-        self.stop_button.setAccessibleName("진행 중인 AI 작업 중단")
-        self.stop_button.clicked.connect(self.stopRequested)
-        row.addWidget(self.stop_button)
+        self._summary = "AI 작업"
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self.summary_button = QPushButton(self._summary)
+        self.summary_button.setProperty("noAutoIcon", True)
+        self.summary_button.setMinimumWidth(80)
+        self.summary_button.setFixedHeight(30)
+        self.summary_button.setAccessibleName("AI 작업 현황과 동시 실행 설정 펼치기")
+        self.summary_button.clicked.connect(self._show_popup)
+        layout.addWidget(self.summary_button, 1)
         self.result_button = QPushButton("결과 보기")
-        self.result_button.setObjectName("AiJobResult")
         self.result_button.setProperty("noAutoIcon", True)
         self.result_button.setFixedSize(84, 30)
-        self.result_button.clicked.connect(self._open_result)
-        row.addWidget(self.result_button)
-        self.dismiss_button = QToolButton()
-        self.dismiss_button.setObjectName("AiJobDismiss")
-        self.dismiss_button.setFixedSize(24, 30)
-        self.dismiss_button.setToolTip("작업 현황 닫기 — 준비된 결과는 유지됩니다.")
-        self.dismiss_button.setAccessibleName("작업 현황 닫기")
-        self.dismiss_button.clicked.connect(self.dismissed)
-        row.addWidget(self.dismiss_button)
-        self._layout.addWidget(self.content)
+        self.result_button.clicked.connect(self.resultRequested)
+        layout.addWidget(self.result_button)
         self.popup = QFrame(self, Qt.WindowType.Popup)
         self.popup.setObjectName("AiJobPopup")
-        self.popup.setFixedWidth(360)
-        popup_layout = QVBoxLayout(self.popup)
-        popup_layout.setContentsMargins(10, 8, 10, 8)
+        self.popup.setFixedWidth(420)
+        content = QVBoxLayout(self.popup)
+        content.setContentsMargins(10, 10, 10, 8)
+        content.setSpacing(8)
+        header = QHBoxLayout()
+        title = QLabel("AI 작업")
+        title.setObjectName("AiJobTitle")
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(QLabel("동시 식자"))
+        self.concurrency_spin = QSpinBox()
+        self.concurrency_spin.setRange(1, 16)
+        self.concurrency_spin.setValue(2)
+        self.concurrency_spin.setFixedSize(56, 28)
+        self.concurrency_spin.setAccessibleName("AI 식자 동시 실행 수")
+        self.concurrency_spin.setToolTip(
+            "식자 요청을 동시에 보낼 개수입니다. 재번역은 별도로 실행됩니다.\n개수를 낮춰도 진행 중인 요청은 중단하지 않습니다."
+        )
+        self.concurrency_spin.valueChanged.connect(self.concurrencyChanged)
+        header.addWidget(self.concurrency_spin)
+        content.addLayout(header)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setFixedHeight(260)
+        self.list = QWidget()
+        self.rows_layout = QVBoxLayout(self.list)
+        self.rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.rows_layout.setSpacing(0)
+        self.rows_layout.addStretch(1)
+        self.scroll.setWidget(self.list)
+        content.addWidget(self.scroll)
+        self.empty = QLabel("AI 식자·재번역을 요청하면 여기에 표시됩니다.")
+        self.empty.setWordWrap(True)
+        self.rows_layout.insertWidget(0, self.empty)
+        footer = QHBoxLayout()
+        self.counts_label = QLabel("진행 중인 작업 없음")
+        self.counts_label.setObjectName("AiJobDetail")
+        footer.addWidget(self.counts_label, 1)
+        self.selection_result_button = QPushButton("선택 영역 결과")
+        self.selection_result_button.setProperty("noAutoIcon", True)
+        self.selection_result_button.clicked.connect(self._open_selection_result)
+        footer.addWidget(self.selection_result_button)
+        self.clear_button = QPushButton("완료·오류 정리")
+        self.clear_button.setProperty("noAutoIcon", True)
+        self.clear_button.setToolTip(
+            "적용한 결과·오류·중단 항목을 목록에서 지웁니다. 미적용 결과는 유지됩니다."
+        )
+        self.clear_button.clicked.connect(self.clearRequested)
+        footer.addWidget(self.clear_button)
+        content.addLayout(footer)
+        history = QPushButton("식자 기록 보기")
+        history.clicked.connect(self.historyRequested)
+        content.addWidget(history)
+        self.rows = {}
         self.setStyleSheet("""
-            QWidget#AiJobContent { background: transparent; }
-            QLabel#AiJobTitle { color: #e5e7eb; font-size: 11px; font-weight: 600; }
-            QLabel#AiJobDetail { color: #c4cfdd; font-size: 10px; font-weight: 400; }
-            QPushButton, QToolButton { color: #f8fafc; background: #364152;
-                border: 1px solid #4b5a6f; border-radius: 5px; min-height: 0; padding: 0; }
-            QPushButton:hover, QToolButton:hover { background: #475569; border-color: #93c5fd; }
-            QPushButton:focus, QToolButton:focus { border-color: #93c5fd; }
-            QPushButton:disabled { color: #a8b4c4; background: #303a49; border-color: #4b5a6f; }
-            QPushButton#AiJobResult[ready="true"] { background: #2563eb; border-color: #60a5fa; }
-            QPushButton#AiJobResult[ready="true"]:hover { background: #1d4ed8; }
-            QFrame#AiJobPopup { background: #252d3a; border: 1px solid #4b5a6f; border-radius: 6px; }
+            QPushButton, QSpinBox { color: #f8fafc; background: #364152;
+                border: 1px solid #4b5a6f; border-radius: 5px; min-height: 0; padding: 3px 5px; }
+            QPushButton:hover { background: #475569; border-color: #93c5fd; }
+            QPushButton:focus, QSpinBox:focus { border-color: #93c5fd; }
+            QPushButton:disabled { color: #a8b4c4; background: #303a49; }
+            QFrame#AiJobPopup { background: #252d3a; border: 1px solid #4b5a6f; }
+            QScrollArea, QScrollArea > QWidget > QWidget { background: #252d3a; }
+            QLabel { color: #e5e7eb; font-size: 11px; }
+            QLabel#AiJobTitle { font-weight: 600; }
+            QLabel#AiJobDetail { color: #c4cfdd; }
+            QWidget#AiJobRow { border-bottom: 1px solid #3a4657; }
         """)
 
-    def set_state(
-        self,
-        *,
-        title="",
-        detail="",
-        busy=False,
-        cancelled=False,
-        ready=False,
-        result_text="결과 보기",
-        tooltip="",
-        state="idle",
-        compact_text="",
-    ):
-        self._title, self._detail, self._busy = title, detail, busy
-        self.setToolTip(tooltip or "\n".join(filter(None, (title, detail))))
-        self.content.setToolTip(self.toolTip())
-        self.dot.setVisible(bool(title))
-        color = {"busy": "#60a5fa", "ready": "#4ade80", "error": "#fbbf24"}.get(
-            state, "#a8b4c4"
+    def set_jobs(self, jobs, concurrency, *, ready=False):
+        self.concurrency_spin.blockSignals(True)
+        self.concurrency_spin.setValue(concurrency)
+        self.concurrency_spin.blockSignals(False)
+        for job_id in list(self.rows):
+            if job_id not in jobs:
+                row = self.rows.pop(job_id)
+                self.rows_layout.removeWidget(row)
+                row.deleteLater()
+        for job_id, job in jobs.items():
+            if job_id not in self.rows:
+                row = JobRow(
+                    job_id, self.jobStopRequested.emit, self.jobResultRequested.emit
+                )
+                self.rows[job_id] = row
+                self.rows_layout.insertWidget(0, row)
+            self.rows[job_id].update_job(job)
+        self.empty.setVisible(not jobs)
+        running = sum(job["state"] == "running" for job in jobs.values())
+        queued = sum(job["state"] == "queued" for job in jobs.values())
+        completed = sum(job["state"] in {"ready", "stale"} for job in jobs.values())
+        self._summary = f"AI 작업 · 진행 {running} · 대기 {queued} · 결과 {completed}"
+        self.counts_label.setText(
+            f"진행 {running} · 대기 {queued} · 미적용 {completed}"
         )
-        self.dot.setStyleSheet(f"background: {color}; border-radius: 3px;")
-        self.stop_button.setVisible(busy)
-        self.stop_button.setEnabled(busy and not cancelled)
-        self.stop_button.setToolTip(
-            "중단한 요청은 결과를 적용하지 않습니다. 이미 보낸 요청은 서버에서 계속 처리될 수 있습니다."
+        self.clear_button.setEnabled(
+            any(
+                job["state"] in {"applied", "error", "cancelled"}
+                for job in jobs.values()
+            )
         )
-        self.result_button.setText(result_text)
-        self.result_button.setEnabled(ready and not busy)
-        self.result_button.setProperty("ready", ready and result_text == "비교·적용")
-        self.result_button.style().unpolish(self.result_button)
-        self.result_button.style().polish(self.result_button)
-        self.dismiss_button.setVisible(bool(title) and not busy)
-        self.compact_button.setText(compact_text or result_text)
-        self.compact_button.setEnabled(bool(title) or ready)
-        self.updateGeometry()
-        QTimer.singleShot(0, self._elide)
+        self.result_button.setEnabled(ready)
+        self.summary_button.setToolTip(self._summary)
+        self.selection_result_button.setEnabled(ready)
+        self._elide()
+
+    def _open_selection_result(self):
+        self.popup.hide()
+        self.resultRequested.emit()
 
     def sizeHint(self):
-        return QSize(370 if self._title else 84, 30)
+        return QSize(280, 30)
 
     def minimumSizeHint(self):
         return QSize(80, 30)
 
-    def _open_result(self):
-        self.popup.hide()
-        self.resultRequested.emit()
+    def _elide(self):
+        self.summary_button.setText(
+            self.summary_button.fontMetrics().elidedText(
+                self._summary,
+                Qt.TextElideMode.ElideRight,
+                max(20, self.summary_button.width() - 18),
+            )
+        )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.result_button.setVisible(self.width() >= 190)
+        self._elide()
 
     def _show_popup(self):
-        if not self._title and self.result_button.isEnabled():
-            self._open_result()
-            return
         self.popup.adjustSize()
         screen = self.screen().availableGeometry()
         position = self.mapToGlobal(
@@ -166,33 +268,7 @@ class AiJobFeedback(QWidget):
             )
         )
         self.popup.move(position)
-        self._elide()
         self.popup.show()
-        QTimer.singleShot(0, self._elide)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        compact = self.width() < 240
-        if compact != self._compact:
-            self._compact = compact
-            self.popup.hide()
-            if compact:
-                self._layout.removeWidget(self.content)
-                self.popup.layout().addWidget(self.content)
-            else:
-                self.popup.layout().removeWidget(self.content)
-                self._layout.addWidget(self.content)
-            self.content.show()
-            self.compact_button.setVisible(compact)
-        QTimer.singleShot(0, self._elide)
-
-    def _elide(self):
-        for label, value in (
-            (self.title_label, self._title),
-            (self.detail_label, self._detail),
-        ):
-            label.setText(
-                label.fontMetrics().elidedText(
-                    value, Qt.TextElideMode.ElideRight, max(0, label.width())
-                )
-            )
+        self.popup.layout().activate()
+        for row in self.rows.values():
+            row.update_job(row._job)

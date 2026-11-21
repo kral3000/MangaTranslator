@@ -1,4 +1,5 @@
 """Compact, non-modal before/after review of one translation suggestion."""
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog,
@@ -34,7 +35,7 @@ class TranslationRerollPreview(QDialog):
         row = QHBoxLayout()
         row.setSpacing(12)
         for title, value, read_only in (
-            ("현재 번역", draft["current"], True),
+            ("요청 당시 번역", draft["current"], True),
             ("새 번역안", draft["text"], False),
         ):
             column = QWidget()
@@ -50,21 +51,28 @@ class TranslationRerollPreview(QDialog):
             content.addWidget(edit, 1)
             if not read_only:
                 self.candidate_edit = edit
+                edit.setReadOnly(apply_callback is None)
             row.addWidget(column, 1)
         layout.addLayout(row, 1)
-        self.feedback = QLabel("새 번역안은 여기서 직접 다듬어도 됩니다.")
+        self.feedback = QLabel(
+            draft.get("readonly_reason") or "새 번역안은 여기서 직접 다듬어도 됩니다."
+        )
         self.feedback.setWordWrap(True)
         layout.addWidget(self.feedback)
         actions = QHBoxLayout()
         again = QPushButton("다시 제안")
-        again.clicked.connect(lambda: self.close() if reroll_callback() else None)
+        again.setEnabled(reroll_callback is not None)
+        again.clicked.connect(
+            lambda: self.close() if reroll_callback and reroll_callback() else None
+        )
         actions.addWidget(again)
         actions.addStretch()
         close = QPushButton("닫기")
         close.clicked.connect(self.close)
         actions.addWidget(close)
         apply = QPushButton("이 문장 적용")
-        apply.setDefault(True)
+        apply.setDefault(apply_callback is not None)
+        apply.setEnabled(apply_callback is not None)
 
         def apply_candidate():
             value = self.candidate_edit.toPlainText().strip()
@@ -73,7 +81,10 @@ class TranslationRerollPreview(QDialog):
             elif apply_callback(value):
                 self.accept()
             else:
-                self.feedback.setText("원문이나 현재 번역이 바뀌었습니다. 현재 영역에서 다시 제안받아 주세요.")
+                self.feedback.setText(
+                    "원문이나 현재 번역이 바뀌었습니다. 현재 영역에서 다시 제안받아 주세요."
+                )
+
         apply.clicked.connect(apply_candidate)
         actions.addWidget(apply)
         layout.addLayout(actions)

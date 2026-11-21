@@ -80,7 +80,7 @@ class ExistingEditorSessionDiscoveryTest(TestCase):
                         encoding="utf-8",
                     )
                 (folder / "broken_edit_session.json").write_text("broken", encoding="utf-8")
-            with patch("core.editor_session.related_edit_session_paths",
+            with patch("core.editor_session_catalog.related_edit_session_paths",
                        wraps=related_edit_session_paths) as discover:
                 choices, invalid_count = _discover_existing_editor_sessions(root)
             self.assertEqual(discover.call_count, 2)
@@ -198,7 +198,7 @@ class ExistingEditorSessionDiscoveryTest(TestCase):
 
             self.assertEqual(related_edit_session_paths(first), [first, second])
             with patch(
-                "core.editor_session.related_edit_session_paths",
+                "core.editor_session_catalog.related_edit_session_paths",
                 wraps=related_edit_session_paths,
             ) as related_paths:
                 choices, invalid_count = _discover_existing_editor_sessions(root)

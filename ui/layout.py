@@ -822,7 +822,7 @@ def create_layout(
                                 "고급 편집기 열기", visible=False
                             )
 
-            with gr.TabItem("고급 이미지 편집기", elem_id="advanced-editor-tab"):
+            with gr.TabItem("고급 이미지 편집기", elem_id="advanced-editor-tab") as editor_tab:
                 gr.Markdown(
                     "## 편집 작업 열기\n"
                     "이전에 번역한 작업을 이어서 열거나, 일반 이미지 폴더로 새 작업을 시작할 수 있습니다.",
@@ -4910,13 +4910,21 @@ def create_layout(
             outputs=[config_model_name],
             queue=False,
         )
-        app.load(
-            fn=callbacks.handle_refresh_existing_editor_sessions,
-            inputs=[],
+        editor_catalog_loaded = gr.State(False)
+
+        def load_editor_tab(loaded, event: gr.SelectData):
+            if loaded or not event.selected:
+                return gr.skip(), gr.skip(), gr.skip(), loaded
+            return (*callbacks.handle_refresh_existing_editor_sessions(), True)
+
+        editor_tab.select(
+            fn=load_editor_tab,
+            inputs=[editor_catalog_loaded],
             outputs=[
                 existing_editor_session_select,
                 existing_editor_open_button,
                 image_editor_status,
+                editor_catalog_loaded,
             ],
             queue=False,
         )

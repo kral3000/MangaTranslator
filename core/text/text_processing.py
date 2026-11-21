@@ -8,6 +8,7 @@ import numpy as np
 STYLE_PATTERN = re.compile(r"(\*{1,3})(.*?)(\1)")
 NO_SPACE_BEFORE_MARKER = "\uf000"
 EXPLICIT_SPACE_MARKER = "\uf001"
+AI_LETTERING_PREFIX = re.compile(r"^\s*\[AI:\s*([^\]]*)\]\s*", re.IGNORECASE)
 KOREAN_POSTPOSITION_PARTICLES = {
     "은",
     "는",
@@ -37,6 +38,18 @@ KOREAN_POSTPOSITION_PATTERN = "|".join(
 KOREAN_POSTPOSITION_RE = re.compile(
     rf"^({KOREAN_POSTPOSITION_PATTERN})(\W*)$"
 )
+
+
+def split_ai_lettering_text(text: str) -> tuple[str | None, str]:
+    """Return the leading AI lettering instruction and the visible wording."""
+    match = AI_LETTERING_PREFIX.match(text)
+    if match is None:
+        return None, text
+    return match[1].strip(), text[match.end():]
+
+
+def visible_editor_text(text: str) -> str:
+    return split_ai_lettering_text(text)[1]
 
 
 def is_rtl_script(text: str) -> bool:
