@@ -344,7 +344,7 @@ class TranslationRerollButton(QToolButton):
         opened = bool(self.menu() and self.menu().isVisible())
         enabled = self.isEnabled()
         hovered = self.underMouse() and enabled
-        border = "#2563eb" if enabled and (opened or self.hasFocus()) else "#93c5fd" if hovered else "#c4cfdd"
+        border = "#2563eb" if enabled and (opened or self.hasFocus()) else "#93c5fd" if hovered else "#cdd2d1"
         background = "#dbeafe" if self.isDown() and enabled else "#eff6ff" if hovered else "#ffffff" if enabled else "#edf1f6"
         ink = "#334155" if enabled else "#94a3b8"
         painter = QPainter(self)
@@ -359,7 +359,7 @@ class TranslationRerollButton(QToolButton):
         painter.restore()
         painter.setPen(QPen(QColor(border), 1))
         painter.drawPath(path)
-        painter.setPen(QPen(QColor("#d5dde8"), 1))
+        painter.setPen(QPen(QColor("#d9ddda"), 1))
         painter.drawLine(QPointF(menu_rect.left(), 1), QPointF(menu_rect.left(), self.height() - 2))
         painter.setPen(QColor(ink))
         painter.drawText(QRectF(1, 0, menu_rect.left() - 2, self.height()), Qt.AlignmentFlag.AlignCenter, self.text())
@@ -483,7 +483,7 @@ class ModernComboBox(QComboBox):
             field_color = QColor("#f1f5f9")
             button_color = QColor("#e2e8f0")
             text_color = QColor("#94a3b8")
-            border_color = QColor("#d5dde8")
+            border_color = QColor("#d9ddda")
         else:
             field_color = QColor("#ffffff")
             button_color = QColor(
@@ -497,7 +497,7 @@ class ModernComboBox(QComboBox):
                 or self._popup_open
                 else "#94a3b8"
                 if self.underMouse()
-                else "#c4cfdd"
+                else "#cdd2d1"
             )
 
         painter.fillPath(path, field_color)
@@ -510,7 +510,7 @@ class ModernComboBox(QComboBox):
         painter.restore()
         painter.setPen(QPen(border_color, 1))
         painter.drawPath(path)
-        painter.setPen(QPen(QColor("#cbd5e1"), 1))
+        painter.setPen(QPen(QColor("#d9ddda"), 1))
         painter.drawLine(
             QPointF(button_left, outer.top() + 1),
             QPointF(button_left, outer.bottom() - 1),
@@ -2348,7 +2348,7 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QWidget {
                 color: #172033;
-                font-family: "Segoe UI", "Malgun Gothic";
+                font-family: "Noto Sans KR", "Malgun Gothic", "Segoe UI";
                 font-size: 12px;
             }
             QWidget#CentralSurface {
@@ -2357,7 +2357,7 @@ class AdvancedEditorWindow(QMainWindow):
             QToolBar#TopBar {
                 background: #0f172a;
                 border: 0;
-                border-bottom: 1px solid #263244;
+                border-bottom: 1px solid #363f43;
                 spacing: 5px;
                 padding: 6px 12px;
             }
@@ -2376,7 +2376,7 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QToolBar#TopBar QToolButton:hover {
                 background: #273449;
-                border-color: #3b4a60;
+                border-color: #54615e;
             }
             QToolBar#TopBar QToolButton:disabled {
                 color: #64748b;
@@ -2397,12 +2397,12 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QToolBar#TopBar QToolButton[toolbarRole="secondary"] {
                 background: #1e293b;
-                border-color: #334155;
+                border-color: #454d50;
                 padding: 6px 7px;
             }
             QToolBar#TopBar QToolButton[toolbarRole="secondary"]:hover {
                 background: #273449;
-                border-color: #4b5a6f;
+                border-color: #535e61;
             }
             QToolBar#TopBar QLabel#TopBarLabel {
                 color: #e5e7eb;
@@ -2422,7 +2422,7 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QToolBar#TopBar QWidget#RenderStatus {
                 background: #182338;
-                border: 1px solid #334155;
+                border: 1px solid #454d50;
                 border-radius: 6px;
             }
             QToolBar#TopBar QLabel#RenderStatusLabel {
@@ -2448,12 +2448,12 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QToolBar#TopBar QWidget#TopBarMetricField {
                 background: #ffffff;
-                border: 1px solid #64748b;
+                border: 1px solid #788681;
                 border-radius: 6px;
             }
             QToolBar#TopBar QWidget#TopBarBrushShape {
                 background: #182338;
-                border: 1px solid #334155;
+                border: 1px solid #454d50;
                 border-radius: 6px;
             }
             QToolBar#TopBar QToolButton#TopBarBrushShapeButton {
@@ -2483,7 +2483,7 @@ class AdvancedEditorWindow(QMainWindow):
             QToolBar#TopBar QWidget#TopBarMetricStepper {
                 background: #e8eef5;
                 border: 0;
-                border-left: 1px solid #cbd5e1;
+                border-left: 1px solid #d9ddda;
                 border-top-right-radius: 5px;
                 border-bottom-right-radius: 5px;
             }
@@ -2501,7 +2501,7 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #dbeafe;
             }
             QToolBar#TopBar QToolButton#TopBarMetricStepButton[stepRole="up"] {
-                border-bottom: 1px solid #cbd5e1;
+                border-bottom: 1px solid #d9ddda;
             }
             QToolBar#TopBar QSlider::groove:horizontal {
                 height: 4px;
@@ -2522,7 +2522,7 @@ class AdvancedEditorWindow(QMainWindow):
             QToolBar#ToolRail {
                 background: #111827;
                 border: 0;
-                border-right: 1px solid #263244;
+                border-right: 1px solid #363f43;
                 spacing: 3px;
                 padding: 9px 6px;
             }
@@ -2553,7 +2553,7 @@ class AdvancedEditorWindow(QMainWindow):
             QToolBar#ToolRail QToolButton:hover {
                 color: #ffffff;
                 background: #1f2937;
-                border-color: #334155;
+                border-color: #454d50;
             }
             QToolBar#ToolRail QToolButton:checked {
                 background: #2563eb;
@@ -2570,7 +2570,7 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #f4f7fb;
             }
             QWidget#InspectorShell {
-                border-right: 1px solid #d5dde8;
+                border-right: 1px solid #d9ddda;
             }
             QScrollArea#InspectorScroll {
                 border: 0;
@@ -2581,12 +2581,12 @@ class AdvancedEditorWindow(QMainWindow):
                 font-weight: 700;
                 padding-top: 2px;
                 padding-bottom: 1px;
-                border-bottom: 1px solid #d5dde8;
+                border-bottom: 1px solid #d9ddda;
             }
             QLabel#FontPreviewLabel {
                 background: #ffffff;
                 color: #172033;
-                border: 1px solid #d5dde8;
+                border: 1px solid #d9ddda;
                 border-radius: 6px;
                 padding: 1px 6px;
             }
@@ -2596,7 +2596,7 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QWidget#MetricGroup {
                 background: #f8fafc;
-                border: 1px solid #d5dde8;
+                border: 1px solid #d9ddda;
                 border-radius: 8px;
             }
             QLabel#MetricGroupLabel {
@@ -2614,11 +2614,11 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QToolButton#MetricGroupAction:hover {
                 background: #e8eef5;
-                border-color: #cbd5e1;
+                border-color: #d9ddda;
             }
             QWidget#MetricField {
                 background: #ffffff;
-                border: 1px solid #cbd5e1;
+                border: 1px solid #d9ddda;
                 border-radius: 6px;
             }
             QLabel#MetricIcon {
@@ -2662,7 +2662,7 @@ class AdvancedEditorWindow(QMainWindow):
             QWidget#MetricField QDoubleSpinBox {
                 background: #ffffff;
                 border: 0;
-                border-left: 1px solid #cbd5e1;
+                border-left: 1px solid #d9ddda;
                 border-radius: 0;
                 min-height: 20px;
                 padding: 2px 3px;
@@ -2670,7 +2670,7 @@ class AdvancedEditorWindow(QMainWindow):
             QWidget#MetricStepper {
                 background: #e8eef5;
                 border: 0;
-                border-left: 1px solid #cbd5e1;
+                border-left: 1px solid #d9ddda;
             }
             QToolButton#MetricStepButton {
                 background: transparent;
@@ -2682,14 +2682,14 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #dbeafe;
             }
             QToolButton#MetricStepButton[stepRole="up"] {
-                border-bottom: 1px solid #d5dde8;
+                border-bottom: 1px solid #d9ddda;
             }
             QPushButton#OptionToggle {
                 min-height: 24px;
                 padding: 2px 8px;
                 color: #475569;
                 background: #f8fafc;
-                border: 1px solid #cbd5e1;
+                border: 1px solid #d9ddda;
                 border-radius: 6px;
                 font-size: 11px;
                 font-weight: 600;
@@ -2707,7 +2707,7 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QWidget#AlignmentControl {
                 background: #edf1f6;
-                border: 1px solid #c4cfdd;
+                border: 1px solid #cdd2d1;
                 border-radius: 6px;
             }
             QToolButton#AlignmentButton {
@@ -2733,14 +2733,14 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #1c222b;
             }
             QSplitter::handle {
-                background: #d5dde8;
+                background: #d9ddda;
             }
             QSplitter::handle:hover {
                 background: #60a5fa;
             }
             QWidget#ZoomBar {
                 background: #252d3a;
-                border-bottom: 1px solid #3a4657;
+                border-bottom: 1px solid #454d50;
             }
             QWidget#ZoomBar QLabel {
                 color: #f8fafc;
@@ -2752,7 +2752,7 @@ class AdvancedEditorWindow(QMainWindow):
                 padding: 4px 9px;
                 color: #f8fafc;
                 background: #364152;
-                border: 1px solid #4b5a6f;
+                border: 1px solid #535e61;
                 border-radius: 5px;
             }
             QWidget#ZoomBar QPushButton:hover {
@@ -2766,38 +2766,30 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QScrollBar#CanvasScrollBar:vertical {
                 width: 18px;
-                background: #d7dde6;
-                border-left: 1px solid #aeb8c6;
+                background: #252d35;
             }
             QScrollBar#CanvasScrollBar:horizontal {
                 height: 18px;
-                background: #d7dde6;
-                border-top: 1px solid #aeb8c6;
+                background: #252d35;
             }
             QScrollBar#CanvasScrollBar::handle:vertical {
                 min-height: 36px;
-                margin: 2px;
-                background: #64748b;
-                border-radius: 6px;
+                margin: 2px 6px;
+                background: #93a09c;
+                border-radius: 3px;
             }
             QScrollBar#CanvasScrollBar::handle:horizontal {
                 min-width: 36px;
-                margin: 2px;
-                background: #64748b;
-                border-radius: 6px;
+                margin: 6px 2px;
+                background: #93a09c;
+                border-radius: 3px;
             }
-            QScrollBar#CanvasScrollBar::handle:hover {
-                background: #2563eb;
-            }
-            QScrollBar#CanvasScrollBar::add-line,
-            QScrollBar#CanvasScrollBar::sub-line {
-                width: 0;
-                height: 0;
+            QScrollBar#CanvasScrollBar::handle:hover,
+            QScrollBar#CanvasScrollBar::handle:pressed {
+                background: #bfcbc7;
             }
             QWidget#ScrollCorner {
-                background: #d7dde6;
-                border-top: 1px solid #aeb8c6;
-                border-left: 1px solid #aeb8c6;
+                background: #252d35;
             }
             QScrollArea {
                 border: 0;
@@ -2814,7 +2806,7 @@ class AdvancedEditorWindow(QMainWindow):
                 font-weight: 700;
                 padding-top: 3px;
                 padding-bottom: 6px;
-                border-bottom: 1px solid #d5dde8;
+                border-bottom: 1px solid #d9ddda;
             }
             QDialog#BulkFormatDialog {
                 background: #f4f7fb;
@@ -2833,7 +2825,7 @@ class AdvancedEditorWindow(QMainWindow):
             QTextEdit, QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
                 background: #ffffff;
                 color: #172033;
-                border: 1px solid #c4cfdd;
+                border: 1px solid #cdd2d1;
                 border-radius: 6px;
                 min-height: 20px;
                 padding: 6px 8px;
@@ -2845,7 +2837,7 @@ class AdvancedEditorWindow(QMainWindow):
             QPushButton {
                 background: #ffffff;
                 color: #172033;
-                border: 1px solid #c4cfdd;
+                border: 1px solid #cdd2d1;
                 border-radius: 6px;
                 min-height: 20px;
                 padding: 7px 10px;
@@ -2863,7 +2855,7 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QPushButton:disabled {
                 background: #edf1f6;
-                border-color: #d5dde8;
+                border-color: #d9ddda;
                 color: #94a3b8;
             }
             QWidget#AiSfxActions QPushButton {
@@ -2882,7 +2874,7 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QWidget#InpaintPromptPresets {
                 background: #edf1f6;
-                border: 1px solid #c4cfdd;
+                border: 1px solid #cdd2d1;
                 border-radius: 7px;
             }
             QWidget#InpaintPromptPresets QPushButton#InpaintPromptPreset {
@@ -2905,7 +2897,7 @@ class AdvancedEditorWindow(QMainWindow):
                 font-weight: 700;
             }
             QTabWidget::pane {
-                border: 1px solid #d5dde8;
+                border: 1px solid #d9ddda;
                 border-radius: 8px;
                 background: #ffffff;
                 margin-top: -1px;
@@ -2928,7 +2920,7 @@ class AdvancedEditorWindow(QMainWindow):
             QTabBar::tab:selected {
                 background: #ffffff;
                 color: #1d4ed8;
-                border-color: #d5dde8;
+                border-color: #d9ddda;
                 border-bottom-color: #2563eb;
                 font-weight: 700;
             }
@@ -2959,7 +2951,7 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QFrame#InpaintProgressPanel {
                 background: #f8fafc;
-                border: 1px solid #d5dde8;
+                border: 1px solid #d9ddda;
                 border-radius: 7px;
             }
             QFrame#InpaintProgressPanel QLabel {
@@ -2990,7 +2982,7 @@ class AdvancedEditorWindow(QMainWindow):
             QLabel#HelpLabel {
                 background: #ffffff;
                 color: #475569;
-                border: 1px solid #d5dde8;
+                border: 1px solid #d9ddda;
                 border-radius: 6px;
                 padding: 9px 10px;
                 font-size: 11px;
@@ -2998,7 +2990,7 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QWidget#SessionPanel {
                 background: #f8fafc;
-                border-left: 1px solid #d5dde8;
+                border-left: 1px solid #d9ddda;
             }
             QLabel#SessionSelectionLabel {
                 color: #475569;
@@ -3013,7 +3005,7 @@ class AdvancedEditorWindow(QMainWindow):
             QListWidget {
                 background: #ffffff;
                 color: #334155;
-                border: 1px solid #d5dde8;
+                border: 1px solid #d9ddda;
                 border-radius: 7px;
                 outline: 0;
                 padding: 4px;
@@ -3039,7 +3031,7 @@ class AdvancedEditorWindow(QMainWindow):
             QMenu {
                 background: #ffffff;
                 color: #172033;
-                border: 1px solid #c4cfdd;
+                border: 1px solid #cdd2d1;
                 padding: 5px;
             }
             QMenu::item {
@@ -3053,12 +3045,12 @@ class AdvancedEditorWindow(QMainWindow):
             QToolTip {
                 background: #172033;
                 color: #ffffff;
-                border: 1px solid #334155;
+                border: 1px solid #454d50;
                 padding: 6px 8px;
             }
             QFrame#SaveToast {
                 background: #172033;
-                border: 1px solid #334155;
+                border: 1px solid #454d50;
                 border-radius: 8px;
             }
             QFrame#SaveToast QLabel {
@@ -3073,7 +3065,7 @@ class AdvancedEditorWindow(QMainWindow):
             QProgressDialog#ExportProgressDialog {
                 background: #f8fafc;
                 color: #172033;
-                border: 1px solid #c4cfdd;
+                border: 1px solid #cdd2d1;
             }
             QProgressDialog#ExportProgressDialog QLabel {
                 color: #334155;
@@ -3096,41 +3088,32 @@ class AdvancedEditorWindow(QMainWindow):
             QScrollBar:vertical {
                 width: 10px;
                 background: transparent;
-                margin: 2px;
-            }
-            QScrollBar::handle:vertical {
-                min-height: 32px;
-                background: #a8b4c4;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #64748b;
-            }
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical,
-            QScrollBar::add-page:vertical,
-            QScrollBar::sub-page:vertical {
-                height: 0;
-                background: transparent;
             }
             QScrollBar:horizontal {
                 height: 10px;
                 background: transparent;
+            }
+            QScrollBar::handle:vertical {
+                min-height: 32px;
+                background: #9ea9a5;
                 margin: 2px;
+                border-radius: 3px;
             }
             QScrollBar::handle:horizontal {
                 min-width: 32px;
-                background: #a8b4c4;
-                border-radius: 4px;
+                background: #9ea9a5;
+                margin: 2px;
+                border-radius: 3px;
             }
-            QScrollBar::handle:horizontal:hover {
-                background: #64748b;
+            QScrollBar::handle:hover, QScrollBar::handle:pressed {
+                background: #6b7b75;
             }
-            QScrollBar::add-line:horizontal,
-            QScrollBar::sub-line:horizontal,
-            QScrollBar::add-page:horizontal,
-            QScrollBar::sub-page:horizontal {
+            QScrollBar::add-line, QScrollBar::sub-line {
+                height: 0;
                 width: 0;
+                border: 0;
+            }
+            QScrollBar::add-page, QScrollBar::sub-page {
                 background: transparent;
             }
             """
@@ -3141,7 +3124,7 @@ class AdvancedEditorWindow(QMainWindow):
             QComboBox QAbstractItemView {
                 background: #ffffff;
                 color: #172033;
-                border: 1px solid #94a3b8;
+                border: 1px solid #a3ada9;
                 border-radius: 6px;
                 outline: 0;
                 padding: 4px;
@@ -4107,7 +4090,7 @@ class AdvancedEditorWindow(QMainWindow):
         reroll_menu = QMenu(self.translation_reroll_button)
         reroll_menu.setObjectName("TranslationRerollMenu")
         reroll_menu.setStyleSheet("""
-            QMenu { background: #ffffff; color: #172033; border: 1px solid #c4cfdd;
+            QMenu { background: #ffffff; color: #172033; border: 1px solid #cdd2d1;
                     padding: 4px; min-width: 174px; }
             QMenu::item { min-height: 24px; padding: 4px 10px; margin: 1px 0; border-radius: 5px; }
             QMenu::item:selected { background: #eff6ff; color: #1d4ed8; }
