@@ -1,5 +1,8 @@
 QDialog#WorkLibrary { background: #f7f7f5; }
-#WorkLibrary QWidget { font-family: "Noto Sans KR", "Malgun Gothic", "Segoe UI"; font-size: 13px; color: #222829; }
+#WorkLibrary QWidget {
+    font-family: "KoPubWorldDotum_Pro", "Noto Sans KR", "Malgun Gothic", "Segoe UI";
+    font-size: 13px; font-weight: 500; color: #222829;
+}
 
 /* The title bar carries the strongest contrast; tools sit one step below it. */
 #LibraryBar { background: #252b2e; }

@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from advanced_editor.standalone import register_editor_ui_font
 from advanced_editor.storage_inventory import inventory
 from advanced_editor.storage_preview import StoragePreview
 from core.workspace_cleanup import execute_cleanup, filtered_choices, prepare_cleanup
@@ -230,6 +231,7 @@ class StorageDialog(QDialog):
         self.resize(1110, 635)
         self.setMinimumSize(760, 440)
         self.setObjectName("WorkLibrary")
+        register_editor_ui_font()
         stylesheet = Path(__file__).with_name("work_library.qss")
         self.setStyleSheet(stylesheet.read_text(encoding="utf-8").replace(
             "@chevron", stylesheet.with_name("library_chevron.svg").as_posix()

@@ -1,23 +1,41 @@
 """Show startup feedback before importing the editor and its render dependencies."""
 
+import os
 import sys
 from pathlib import Path
 
 from PyQt6.QtCore import QEventLoop, Qt, QTimer
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QFontDatabase, QIcon
 from PyQt6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox, QProgressBar, QVBoxLayout
 
 
 EDITOR_ICON = Path(__file__).resolve().parents[1] / "assets" / "nene-himekawa-editor.ico"
 
 
+def register_editor_ui_font():
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        return
+    # Qt may not enumerate fonts installed for the current Windows user.
+    font_dir = Path(local_app_data) / "Microsoft" / "Windows" / "Fonts"
+    styles = QFontDatabase.styles("KoPubWorldDotum_Pro")
+    for style in ("Medium", "Bold"):
+        font_path = font_dir / f"KoPubWorld Dotum_Pro {style}.otf"
+        if style not in styles and font_path.is_file():
+            QFontDatabase.addApplicationFont(str(font_path))
+
+
 def startup_dialog(message="고급 편집기 시작 중…", parent=None):
+    register_editor_ui_font()
     dialog = QDialog(parent, Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
     dialog.setFixedWidth(330)
     dialog.setModal(True)
     dialog.setStyleSheet("""
         QDialog { background: #f4f7fb; border: 1px solid #c4cfdd; }
-        QLabel { font: 600 14px "Malgun Gothic"; color: #172033; }
+        QLabel {
+            font-family: "KoPubWorldDotum_Pro", "Malgun Gothic";
+            font-size: 14px; font-weight: 500; color: #172033;
+        }
         QProgressBar { border: none; background: #dbeafe; }
         QProgressBar::chunk { background: #2563eb; }
     """)

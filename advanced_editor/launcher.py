@@ -108,7 +108,7 @@ from advanced_editor.backend import (
 )
 from advanced_editor.job_picker import OpenEditorJobDialog
 from advanced_editor.font_picker import FontPicker
-from advanced_editor.standalone import EDITOR_ICON, startup_dialog
+from advanced_editor.standalone import EDITOR_ICON, register_editor_ui_font, startup_dialog
 from core.ai_image_region import apply_ai_image_regions
 from core.config import DEFAULT_FLUX_KLEIN_PROMPT, DEFAULT_FLUX_KONTEXT_PROMPT
 from core.editor_package import embed_editor_package, resolve_editor_session_input
@@ -2356,6 +2356,7 @@ class AdvancedEditorWindow(QMainWindow):
         self._sync_tool_context("select")
 
     def _apply_theme(self) -> None:
+        register_editor_ui_font()
         self.setStyleSheet(
             """
             QMainWindow {
@@ -2363,8 +2364,9 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QWidget {
                 color: #172033;
-                font-family: "Noto Sans KR", "Malgun Gothic", "Segoe UI";
+                font-family: "KoPubWorldDotum_Pro", "Noto Sans KR", "Malgun Gothic", "Segoe UI";
                 font-size: 12px;
+                font-weight: 500;
             }
             QWidget#CentralSurface {
                 background: #edf2f7;
