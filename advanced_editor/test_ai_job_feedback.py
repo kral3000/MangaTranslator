@@ -73,6 +73,30 @@ class AiJobFeedbackTest(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertFalse(self.widget.popup.isVisible())
 
+    def test_summary_keeps_statuses_readable_at_reduced_width(self):
+        self.widget.set_jobs(
+            {
+                state: self.job(index, state)
+                for index, state in enumerate(("running", "queued", "ready"))
+            },
+            2,
+            ready=True,
+        )
+        # Exercise the intermediate state with the platform's actual glyph metrics.
+        width = self.widget.summary_stats.sizeHint().width() + 40
+        self.widget.resize(width, 30)
+        self.pump()
+        self.assertFalse(self.widget.result_button.isVisible())
+        self.assertEqual(
+            [badge.text() for _, badge in self.widget.summary_badges if badge.isVisible()],
+            ["진행 1", "대기 1", "결과 1"],
+        )
+        self.assertIn("결과 1", self.widget.summary_button.accessibleName())
+        self.widget.resize(80, 30)
+        self.pump()
+        self.assertTrue(self.widget.summary_title.isVisible())
+        self.assertFalse(self.widget.summary_stats.isVisible())
+
     def test_setting_and_clear_signals_do_not_change_toolbar_geometry(self):
         before = self.widget.sizeHint()
         limit, cleared = (

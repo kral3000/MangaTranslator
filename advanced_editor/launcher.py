@@ -2301,7 +2301,9 @@ class AdvancedEditorWindow(QMainWindow):
         zoom_layout.addStretch(1)
         from advanced_editor.ai_job_feedback import AiJobFeedback
 
-        self.ai_job_feedback = AiJobFeedback(zoom_bar)
+        self.ai_job_feedback = AiJobFeedback(
+            zoom_bar, chevron_icon=_editor_icon("chevron_down", "#cbd5e1")
+        )
         self.ai_job_feedback.jobStopRequested.connect(self._ai_jobs.cancel)
         self.ai_job_feedback.jobResultRequested.connect(self._open_ai_job_result)
         self.ai_job_feedback.resultRequested.connect(self._open_ai_job_result)
@@ -2365,7 +2367,7 @@ class AdvancedEditorWindow(QMainWindow):
             QWidget {
                 color: #172033;
                 font-family: "KoPubWorldDotum_Pro", "Noto Sans KR", "Malgun Gothic", "Segoe UI";
-                font-size: 12px;
+                font-size: 13px;
                 font-weight: 500;
             }
             QWidget#CentralSurface {
@@ -2430,7 +2432,7 @@ class AdvancedEditorWindow(QMainWindow):
                 color: #94a3b8;
                 background: transparent;
                 padding-left: 10px;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 600;
             }
             QToolBar#TopBar QWidget#TopBarSpacer {
@@ -2446,7 +2448,7 @@ class AdvancedEditorWindow(QMainWindow):
                 color: #cbd5e1;
                 background: transparent;
                 border: 0;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 600;
             }
             QToolBar#TopBar QFrame#RenderStatusDot {
@@ -2546,7 +2548,7 @@ class AdvancedEditorWindow(QMainWindow):
             QToolBar#ToolRail QLabel#ToolRailSection {
                 color: #718096;
                 background: transparent;
-                font-size: 10px;
+                font-size: 11px;
                 font-weight: 700;
                 padding: 4px 6px 2px 6px;
             }
@@ -2563,7 +2565,7 @@ class AdvancedEditorWindow(QMainWindow):
                 min-height: 36px;
                 max-height: 36px;
                 padding: 0 6px;
-                font-size: 12px;
+                font-size: 13px;
                 font-weight: 600;
                 text-align: left;
             }
@@ -2594,7 +2596,7 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QLabel#CompactSectionLabel {
                 color: #172033;
-                font-size: 12px;
+                font-size: 13px;
                 font-weight: 700;
                 padding-top: 2px;
                 padding-bottom: 1px;
@@ -2618,7 +2620,7 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QLabel#MetricGroupLabel {
                 color: #172033;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 700;
                 background: transparent;
                 border: 0;
@@ -2650,8 +2652,11 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QLabel#MetricFieldLabel {
                 color: #334155;
-                font-size: 10px;
+                font-size: 11px;
                 font-weight: 700;
+            }
+            QWidget#TextLayoutPage QTextEdit {
+                font-size: 14px;
             }
             QWidget#TextLayoutPage QPushButton {
                 min-height: 18px;
@@ -2682,7 +2687,7 @@ class AdvancedEditorWindow(QMainWindow):
                 border-left: 1px solid #d9ddda;
                 border-radius: 0;
                 min-height: 20px;
-                padding: 2px 3px;
+                padding: 2px 2px;
             }
             QWidget#MetricStepper {
                 background: #e8eef5;
@@ -2708,7 +2713,7 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #f8fafc;
                 border: 1px solid #d9ddda;
                 border-radius: 6px;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 600;
             }
             QPushButton#OptionToggle:hover {
@@ -2819,7 +2824,7 @@ class AdvancedEditorWindow(QMainWindow):
             QLabel#SectionTitle,
             QLabel#PanelTitle {
                 color: #172033;
-                font-size: 13px;
+                font-size: 14px;
                 font-weight: 700;
                 padding-top: 3px;
                 padding-bottom: 6px;
@@ -2977,12 +2982,12 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QLabel#InpaintProgressState {
                 color: #1d4ed8;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 700;
             }
             QLabel#InpaintProgressDetail {
                 color: #64748b;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 400;
             }
             QProgressBar#InpaintProgressBar {
@@ -3002,7 +3007,7 @@ class AdvancedEditorWindow(QMainWindow):
                 border: 1px solid #d9ddda;
                 border-radius: 6px;
                 padding: 9px 10px;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 400;
             }
             QWidget#SessionPanel {
@@ -3011,13 +3016,13 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QLabel#SessionSelectionLabel {
                 color: #475569;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 500;
             }
             QWidget#SessionPanel QPushButton {
                 min-height: 18px;
                 padding: 5px 7px;
-                font-size: 11px;
+                font-size: 12px;
             }
             QListWidget {
                 background: #ffffff;
@@ -3076,7 +3081,7 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QLabel#SaveToastText {
                 color: #ffffff;
-                font-size: 12px;
+                font-size: 13px;
                 font-weight: 600;
             }
             QProgressDialog#ExportProgressDialog {
@@ -3086,7 +3091,7 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QProgressDialog#ExportProgressDialog QLabel {
                 color: #334155;
-                font-size: 12px;
+                font-size: 13px;
                 font-weight: 600;
                 padding: 4px 2px;
             }
@@ -3843,6 +3848,7 @@ class AdvancedEditorWindow(QMainWindow):
             spin.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.rotation_spin.setSuffix("°")
         self.rotation_spin.setSingleStep(1.0)
+        self.rotation_spin.setMinimumWidth(49)
         for spin in (self.transform_scale_x_spin, self.transform_scale_y_spin):
             spin.setSuffix(" %")
             spin.setSingleStep(5.0)
@@ -3939,7 +3945,7 @@ class AdvancedEditorWindow(QMainWindow):
                 field_layout.setSpacing(0)
                 lead = QWidget(field)
                 lead.setObjectName("MetricFieldLead")
-                lead.setFixedWidth(54)
+                lead.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
                 lead_layout = QHBoxLayout(lead)
                 lead_layout.setContentsMargins(3, 0, 1, 0)
                 lead_layout.setSpacing(2)
@@ -3950,7 +3956,6 @@ class AdvancedEditorWindow(QMainWindow):
                 label = QLabel(field_label, lead)
                 label.setObjectName("MetricFieldLabel")
                 lead_layout.addWidget(label)
-                lead_layout.addStretch(1)
                 field_layout.addWidget(lead)
                 spin.setPrefix("")
                 spin.setAccessibleName(field_label)

@@ -7,20 +7,24 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
 
 
 class JobRow(QWidget):
+    HEIGHT = 58
+
     def __init__(self, job_id, stop, show, parent=None):
         super().__init__(parent)
         self.setObjectName("AiJobRow")
-        self.setFixedHeight(58)
+        self.setFixedHeight(self.HEIGHT)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(8)
@@ -94,24 +98,52 @@ class AiJobFeedback(QWidget):
     clearRequested = pyqtSignal()
     resultRequested = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, chevron_icon=None):
         super().__init__(parent)
         self.setObjectName("AiJobFeedback")
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.setMinimumWidth(80)
-        self.setMaximumWidth(280)
+        self.setMaximumWidth(346)
         self.setFixedHeight(30)
-        self._summary = "AI 작업"
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        self.summary_button = QPushButton(self._summary)
+        layout.setSpacing(8)
+        self.summary_button = QPushButton()
+        self.summary_button.setObjectName("AiJobSummary")
         self.summary_button.setProperty("noAutoIcon", True)
         self.summary_button.setMinimumWidth(80)
         self.summary_button.setFixedHeight(30)
-        self.summary_button.setAccessibleName("AI 작업 현황과 동시 실행 설정 펼치기")
         self.summary_button.clicked.connect(self._show_popup)
         layout.addWidget(self.summary_button, 1)
+        summary_layout = QHBoxLayout(self.summary_button)
+        summary_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        summary_layout.setContentsMargins(9, 0, 8, 0)
+        summary_layout.setSpacing(8)
+        self.summary_title = QLabel("AI 작업")
+        self.summary_title.setObjectName("AiJobSummaryTitle")
+        summary_layout.addWidget(self.summary_title)
+        summary_layout.addStretch()
+        self.summary_stats = QWidget()
+        stats_layout = QHBoxLayout(self.summary_stats)
+        stats_layout.setContentsMargins(0, 0, 0, 0)
+        stats_layout.setSpacing(5)
+        self.summary_badges = []
+        for status, name in (("running", "진행"), ("queued", "대기"), ("ready", "결과")):
+            badge = QLabel(f"{name} 0")
+            badge.setObjectName("AiJobSummaryBadge")
+            badge.setProperty("status", status)
+            self.summary_badges.append((name, badge))
+            stats_layout.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        summary_layout.addWidget(self.summary_stats)
+        summary_layout.addStretch(0)
+        chevron = QLabel()
+        chevron.setFixedWidth(12)
+        if chevron_icon is None:
+            chevron_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowDown)
+        chevron.setPixmap(chevron_icon.pixmap(12, 12))
+        summary_layout.addWidget(chevron)
+        for child in (self.summary_title, self.summary_stats, chevron):
+            child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.result_button = QPushButton("결과 보기")
         self.result_button.setProperty("noAutoIcon", True)
         self.result_button.setFixedSize(84, 30)
@@ -144,7 +176,6 @@ class AiJobFeedback(QWidget):
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setFixedHeight(260)
         self.list = QWidget()
         self.rows_layout = QVBoxLayout(self.list)
         self.rows_layout.setContentsMargins(0, 0, 0, 0)
@@ -183,9 +214,23 @@ class AiJobFeedback(QWidget):
             QPushButton:disabled { color: #a8b4c4; background: #303a49; }
             QFrame#AiJobPopup { background: #252d3a; border: 1px solid #4b5a6f; }
             QScrollArea, QScrollArea > QWidget > QWidget { background: #252d3a; }
-            QLabel { color: #e5e7eb; font-size: 11px; }
+            QLabel { color: #e5e7eb; font-size: 12px; }
             QLabel#AiJobTitle { font-weight: 600; }
             QLabel#AiJobDetail { color: #c4cfdd; }
+            QLabel#AiJobSummaryTitle { color: #f8fafc; font-size: 14px; font-weight: 600; }
+            QLabel#AiJobSummaryBadge {
+                background: #2b3544; color: #cbd5e1; border-radius: 4px;
+                padding: 1px 5px; font-size: 13px; font-weight: 500;
+            }
+            QLabel#AiJobSummaryBadge[active="true"][status="running"] {
+                background: #203e62; color: #bfdbfe;
+            }
+            QLabel#AiJobSummaryBadge[active="true"][status="queued"] {
+                background: #4c3d23; color: #fde68a;
+            }
+            QLabel#AiJobSummaryBadge[active="true"][status="ready"] {
+                background: #23463d; color: #bbf7d0;
+            }
             QWidget#AiJobRow { border-bottom: 1px solid #3a4657; }
         """)
 
@@ -210,7 +255,15 @@ class AiJobFeedback(QWidget):
         running = sum(job["state"] == "running" for job in jobs.values())
         queued = sum(job["state"] == "queued" for job in jobs.values())
         completed = sum(job["state"] in {"ready", "stale"} for job in jobs.values())
-        self._summary = f"AI 작업 · 진행 {running} · 대기 {queued} · 결과 {completed}"
+        for (name, badge), count in zip(self.summary_badges, (running, queued, completed)):
+            text = f"{name} {count}"
+            if badge.text() != text:
+                badge.setText(text)
+            active = count > 0
+            if badge.property("active") != active:
+                badge.setProperty("active", active)
+                badge.style().unpolish(badge)
+                badge.style().polish(badge)
         self.counts_label.setText(
             f"진행 {running} · 대기 {queued} · 미적용 {completed}"
         )
@@ -221,35 +274,45 @@ class AiJobFeedback(QWidget):
             )
         )
         self.result_button.setEnabled(ready)
-        self.summary_button.setToolTip(self._summary)
+        summary = f"AI 작업 · 진행 {running} · 대기 {queued} · 결과 {completed}"
+        self.summary_button.setToolTip(summary)
+        self.summary_button.setAccessibleName(f"{summary} · 상세 열기")
         self.selection_result_button.setEnabled(ready)
-        self._elide()
+        self._fit_summary()
 
     def _open_selection_result(self):
         self.popup.hide()
         self.resultRequested.emit()
 
     def sizeHint(self):
-        return QSize(280, 30)
+        return QSize(self.maximumWidth(), 30)
 
     def minimumSizeHint(self):
         return QSize(80, 30)
 
-    def _elide(self):
-        self.summary_button.setText(
-            self.summary_button.fontMetrics().elidedText(
-                self._summary,
-                Qt.TextElideMode.ElideRight,
-                max(20, self.summary_button.width() - 18),
-            )
-        )
+    def _fit_summary(self):
+        badges_width = self.summary_stats.sizeHint().width()
+        summary_layout = self.summary_button.layout()
+        margins = summary_layout.contentsMargins()
+        summary_insets = margins.left() + margins.right() + 12 + summary_layout.spacing()
+        toolbar_gap = self.layout().spacing()
+        result_width = self.result_button.width() + toolbar_gap
+        show_result = self.width() >= badges_width + summary_insets + result_width
+        self.result_button.setVisible(show_result)
+        available = self.width() - (result_width if show_result else 0)
+        show_stats = available >= badges_width + summary_insets
+        title_width = self.summary_title.sizeHint().width() + summary_layout.spacing()
+        show_title = available >= badges_width + summary_insets + title_width
+        self.summary_stats.setVisible(show_stats)
+        self.summary_title.setVisible(show_title or not show_stats)
+        summary_layout.setStretch(3, int(show_stats and not show_title))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.result_button.setVisible(self.width() >= 190)
-        self._elide()
+        self._fit_summary()
 
     def _show_popup(self):
+        self.scroll.setFixedHeight(min(260, max(1, len(self.rows)) * JobRow.HEIGHT + 2))
         self.popup.adjustSize()
         screen = self.screen().availableGeometry()
         position = self.mapToGlobal(
