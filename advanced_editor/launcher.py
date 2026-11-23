@@ -108,7 +108,12 @@ from advanced_editor.backend import (
 )
 from advanced_editor.job_picker import OpenEditorJobDialog
 from advanced_editor.font_picker import FontPicker
-from advanced_editor.standalone import EDITOR_ICON, register_editor_ui_font, startup_dialog
+from advanced_editor.standalone import (
+    EDITOR_ICON,
+    editor_application,
+    register_editor_ui_font,
+    startup_dialog,
+)
 from core.ai_image_region import apply_ai_image_regions
 from core.config import DEFAULT_FLUX_KLEIN_PROMPT, DEFAULT_FLUX_KONTEXT_PROMPT
 from core.editor_package import embed_editor_package, resolve_editor_session_input
@@ -2374,16 +2379,16 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #edf2f7;
             }
             QToolBar#TopBar {
-                background: #0f172a;
+                background: #10181f;
                 border: 0;
-                border-bottom: 1px solid #363f43;
+                border-bottom: 1px solid #293640;
                 spacing: 5px;
                 padding: 6px 12px;
             }
             QToolBar#TopBar::separator {
                 width: 1px;
                 margin: 8px 7px;
-                background: #1d293b;
+                background: #293640;
             }
             QToolBar#TopBar QToolButton {
                 color: #e5e7eb;
@@ -2394,8 +2399,8 @@ class AdvancedEditorWindow(QMainWindow):
                 padding: 6px 9px;
             }
             QToolBar#TopBar QToolButton:hover {
-                background: #273449;
-                border-color: #54615e;
+                background: #25323d;
+                border-color: #425363;
             }
             QToolBar#TopBar QToolButton:disabled {
                 color: #64748b;
@@ -2415,13 +2420,13 @@ class AdvancedEditorWindow(QMainWindow):
                 border-color: #93c5fd;
             }
             QToolBar#TopBar QToolButton[toolbarRole="secondary"] {
-                background: #1e293b;
-                border-color: #454d50;
+                background: #1c2832;
+                border-color: #374755;
                 padding: 6px 7px;
             }
             QToolBar#TopBar QToolButton[toolbarRole="secondary"]:hover {
-                background: #273449;
-                border-color: #535e61;
+                background: #25323d;
+                border-color: #4d6376;
             }
             QToolBar#TopBar QLabel#TopBarLabel {
                 color: #e5e7eb;
@@ -2440,8 +2445,8 @@ class AdvancedEditorWindow(QMainWindow):
                 border: 0;
             }
             QToolBar#TopBar QWidget#RenderStatus {
-                background: #182338;
-                border: 1px solid #454d50;
+                background: #17222b;
+                border: 1px solid #374755;
                 border-radius: 6px;
             }
             QToolBar#TopBar QLabel#RenderStatusLabel {
@@ -2539,18 +2544,18 @@ class AdvancedEditorWindow(QMainWindow):
                 border-radius: 7px;
             }
             QToolBar#ToolRail {
-                background: #111827;
+                background: #111b23;
                 border: 0;
-                border-right: 1px solid #363f43;
+                border-right: 1px solid #293640;
                 spacing: 3px;
                 padding: 9px 6px;
             }
             QToolBar#ToolRail QLabel#ToolRailSection {
-                color: #718096;
+                color: #96a7b5;
                 background: transparent;
-                font-size: 11px;
-                font-weight: 700;
-                padding: 4px 6px 2px 6px;
+                font-size: 12px;
+                font-weight: 500;
+                padding: 6px 8px 3px 8px;
             }
             QToolBar#ToolRail QFrame#ToolRailDivider {
                 background: #263244;
@@ -2558,26 +2563,26 @@ class AdvancedEditorWindow(QMainWindow):
                 margin: 5px 6px 3px 6px;
             }
             QToolBar#ToolRail QToolButton {
-                color: #cbd5e1;
+                color: #d5dee5;
                 background: transparent;
                 border: 1px solid transparent;
                 border-radius: 6px;
-                min-height: 36px;
-                max-height: 36px;
-                padding: 0 6px;
-                font-size: 13px;
-                font-weight: 600;
+                min-height: 34px;
+                max-height: 34px;
+                padding: 0 8px;
+                font-size: 14px;
+                font-weight: 500;
                 text-align: left;
             }
             QToolBar#ToolRail QToolButton:hover {
-                color: #ffffff;
-                background: #1f2937;
-                border-color: #454d50;
+                color: #f4f8fa;
+                background: #1c2934;
+                border-color: #344855;
             }
             QToolBar#ToolRail QToolButton:checked {
-                background: #2563eb;
-                border-color: #60a5fa;
-                color: #ffffff;
+                background: #293c4d;
+                border-color: #506d8b;
+                color: #eff8ff;
             }
             QToolBar#ToolRail QToolButton:focus,
             QToolBar#TopBar QToolButton:focus {
@@ -9335,7 +9340,7 @@ def _write_lifecycle_log(message: str) -> None:
 
 
 def launch(session_path: str | None = None, *, draft=None) -> int:
-    app = QApplication.instance() or QApplication(sys.argv[:1])
+    app = editor_application()
     app.setWindowIcon(QIcon(str(EDITOR_ICON)))
     app.setQuitOnLastWindowClosed(True)
     if session_path is None:
@@ -9393,7 +9398,7 @@ def main() -> int:
                 f.write(traceback.format_exc())
         except Exception:
             pass
-        app = QApplication.instance() or QApplication(sys.argv[:1])
+        app = editor_application()
         QMessageBox.critical(None, "고급 편집기 실행 실패", str(exc))
         print(f"고급 편집기 실행 실패: {exc}", file=sys.stderr)
         return 1

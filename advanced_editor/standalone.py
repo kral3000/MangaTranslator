@@ -12,6 +12,17 @@ from PyQt6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox, QProgres
 EDITOR_ICON = Path(__file__).resolve().parents[1] / "assets" / "nene-himekawa-editor.ico"
 
 
+def editor_application() -> QApplication:
+    app = QApplication.instance()
+    if app is not None:
+        return app
+    args = sys.argv[:1]
+    if sys.platform == "win32" and not os.environ.get("QT_QPA_PLATFORM"):
+        # FreeType gives small KoPubWorld UI text neutral, grayscale edges on Windows.
+        args += ["-platform", "windows:fontengine=freetype"]
+    return QApplication(args)
+
+
 def register_editor_ui_font():
     local_app_data = os.environ.get("LOCALAPPDATA")
     if not local_app_data:
@@ -52,7 +63,7 @@ def startup_dialog(message="고급 편집기 시작 중…", parent=None):
 
 
 def main():
-    app = QApplication(sys.argv[:1])
+    app = editor_application()
     app.setWindowIcon(QIcon(str(EDITOR_ICON)))
     app.setQuitOnLastWindowClosed(False)
     startup = startup_dialog()
