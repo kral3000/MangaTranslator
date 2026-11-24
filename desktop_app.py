@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import ctypes
 import html
 import os
@@ -57,18 +58,53 @@ def _find_available_port(preferred: int = PREFERRED_PORT) -> int:
     raise RuntimeError("사용 가능한 로컬 포트를 찾지 못했습니다.")
 
 
-def _loading_html() -> str:
+def _loading_html(icon_path: Path) -> str:
+    try:
+        icon = base64.b64encode(icon_path.read_bytes()).decode("ascii")
+    except OSError:
+        wordmark_icon = ""
+    else:
+        wordmark_icon = f'<img src="data:image/x-icon;base64,{icon}" width="52" height="52" alt="">'
     return """<!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><title>만화 번역기</title>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>만화 번역기</title>
 <style>
-html,body{height:100%;margin:0;background:#111113;color:#f4f4f5;font-family:"Segoe UI","Malgun Gothic",sans-serif}
-body{display:grid;place-items:center}.shell{width:min(460px,calc(100% - 64px))}
-h1{font-size:24px;margin:0 0 10px;font-weight:650}p{margin:0 0 24px;color:#a1a1aa;line-height:1.6}
-.track{height:4px;overflow:hidden;border-radius:4px;background:#27272a}.bar{width:38%;height:100%;background:#f97316;animation:load 1.25s ease-in-out infinite}
-@keyframes load{0%{transform:translateX(-110%)}100%{transform:translateX(365%)}}
-</style></head><body><main class="shell"><h1>만화 번역기</h1>
-<p>모델과 설정을 준비하고 있습니다. 잠시만 기다려 주세요.</p><div class="track"><div class="bar"></div></div>
-</main></body></html>"""
+html,body { height: 100%; margin: 0; }
+body {
+    display: grid; place-items: center;
+    background: linear-gradient(125deg, #20202a, #191922 46%, #15161c);
+    color: #f2eff9; font-family: "Malgun Gothic", "Segoe UI", sans-serif;
+}
+main { display: grid; justify-items: center; gap: 20px; padding: 12px; }
+.wordmark, .startup-status { display: flex; align-items: center; justify-content: center; }
+.wordmark { gap: 18px; }
+.wordmark img { width: clamp(34px, 5vw, 52px); height: auto; }
+h1 { font-size: clamp(24px, 4vw, 38px); margin: 0; letter-spacing: -.025em; }
+.startup-status { gap: 10px; margin: 0; color: #bfb9d0; font-size: 17px; }
+.glyph {
+    position: relative; flex: none; width: 22px; height: 22px; box-sizing: border-box;
+    border: 1px solid #8077aa; border-radius: 4px; overflow: hidden;
+    color: #cbbfff; font: 650 12px/1 "Malgun Gothic", "Yu Gothic UI", sans-serif;
+}
+.glyph b { display: grid; place-items: center; position: absolute; inset: 0; }
+.glyph b:first-child { animation: glyph-source 2.35s ease-in-out infinite; }
+.glyph b:last-child { opacity: 0; animation: glyph-target 2.35s ease-in-out infinite; }
+@keyframes glyph-source {
+    0%, 22%, 100% { opacity: 1; transform: translateY(0); }
+    42%, 83% { opacity: 0; transform: translateY(-4px); }
+    84% { opacity: 0; transform: translateY(4px); }
+}
+@keyframes glyph-target {
+    0%, 24% { opacity: 0; transform: translateY(4px); }
+    44%, 72% { opacity: 1; transform: translateY(0); }
+    92%, 100% { opacity: 0; transform: translateY(-4px); }
+}
+@media (prefers-reduced-motion: reduce) { .glyph b { animation: none !important; } }
+</style></head><body><main>
+<div class="wordmark">__APP_ICON__<h1>만화 번역기</h1></div>
+<p class="startup-status" role="status">
+<span class="glyph" aria-hidden="true"><b lang="ja">あ</b><b>가</b></span>번역기를 시작하는 중…
+</p></main></body></html>""".replace("__APP_ICON__", wordmark_icon)
 
 
 def _error_html(message: str, log_path: Path) -> str:
@@ -184,12 +220,12 @@ def main() -> int:
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
     window = webview.create_window(
         WINDOW_TITLE,
-        html=_loading_html(),
+        html=_loading_html(icon_path),
         width=1440,
         height=900,
         min_size=(1100, 680),
         resizable=True,
-        background_color="#111113",
+        background_color="#191922",
         text_select=True,
         zoomable=True,
     )

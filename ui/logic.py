@@ -559,6 +559,7 @@ def process_batch_logic(
     disable_auto_save: bool = False,
     gradio_progress: Any = None,
     cancellation_manager: Optional["CancellationManager"] = None,
+    page_progress=None,
 ) -> Dict[str, Any]:
     """
     Processes a batch of manga images. Handles core validation, calls the core batch pipeline,
@@ -799,6 +800,7 @@ def process_batch_logic(
             failed_files_txt_path=failed_files_txt_path,
             failed_source_paths=failed_source_paths,
             publish_editor_progress=True,
+            page_progress=page_progress,
         )
 
         processing_time = time.time() - start_time

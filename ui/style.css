@@ -798,3 +798,118 @@
 @media (pointer: coarse) {
     .cleanup-panel .cleanup-picker [data-testid="checkbox-group"] label { min-height: 44px; }
 }
+.translation-wait {
+    --wait-paper: #fdfaff;
+    --wait-ink: #423966;
+    --wait-edge: #dfd7ef;
+    --wait-tint: #f0ecfa;
+    --wait-accent: #6950b4;
+}
+.dark .translation-wait {
+    --wait-paper: #242033;
+    --wait-ink: #e2dafc;
+    --wait-edge: #4f4365;
+    --wait-tint: #352c4c;
+    --wait-accent: #b8a6fb;
+}
+.translation-motion {
+    position: relative; width: 96px; height: 60px;
+    margin: 13px auto 0; color: var(--wait-ink);
+}
+.translation-motion .comic-scene {
+    position: absolute; inset: 0; visibility: hidden; overflow: hidden;
+    border: 1px solid var(--wait-ink); border-radius: 4px; background: var(--wait-paper);
+}
+.translation-motion .comic-scene::before {
+    content: ""; position: absolute; inset: 3px; border: 1px solid var(--wait-edge);
+    background: repeating-linear-gradient(146deg, transparent 0 3px, var(--wait-edge) 3px 4px)
+        bottom right / 28px 15px no-repeat;
+}
+.translation-motion .comic-scene.is-current {
+    visibility: visible; animation: comic-wait-cycle 2.8s both;
+}
+.translation-motion .wait-balloon {
+    position: absolute; display: grid; place-items: center;
+    border: 1px solid var(--wait-ink); border-radius: 9px; background: var(--wait-paper);
+    font-weight: 650; line-height: 1; white-space: nowrap;
+}
+.translation-motion .wait-balloon::after {
+    content: ""; position: absolute; bottom: -3px; left: 10px; width: 5px; height: 5px;
+    border: solid var(--wait-ink); border-width: 0 1px 1px 0;
+    background: inherit; transform: rotate(45deg);
+}
+.translation-motion .large-balloon { width: 55px; height: 30px; top: 11px; left: 19px; font-size: 12px; }
+.translation-motion .source-balloon, .translation-motion .translated-balloon {
+    width: 33px; height: 24px; top: 14px; font-size: 9px;
+}
+.translation-motion .source-balloon { left: 6px; }
+.translation-motion .translated-balloon { right: 6px; background: var(--wait-tint); }
+.translation-motion .wait-ocr {
+    position: absolute; left: 26px; top: 17px; width: 40px; height: 18px;
+    border: 1px dashed var(--wait-accent); border-radius: 2px;
+}
+.translation-motion .wait-ocr i {
+    position: absolute; inset: 1px auto 1px 2px; width: 1px; background: var(--wait-accent);
+}
+.translation-motion .wait-arrow {
+    position: absolute; top: 25px; left: 43px; width: 8px; height: 1px;
+    background: var(--wait-accent);
+}
+.translation-motion .wait-arrow::after {
+    content: ""; position: absolute; top: -2px; right: 0; width: 4px; height: 4px;
+    border: solid var(--wait-accent); border-width: 0 1px 1px 0; transform: rotate(-45deg);
+}
+.translation-motion .wait-mask, .translation-motion .wait-bounds {
+    position: absolute; inset: 4px 5px; border: 1px dashed var(--wait-accent);
+    border-radius: 3px; opacity: 0;
+}
+.translation-motion .wait-mask {
+    background: repeating-linear-gradient(-45deg, transparent 0 3px, var(--wait-edge) 3px 4px);
+}
+.translation-motion .wait-background {
+    position: absolute; inset: 8px 9px; overflow: hidden;
+    border: 1px solid var(--wait-edge); border-radius: 2px;
+    background: repeating-linear-gradient(151deg, transparent 0 7px, var(--wait-ink) 7px 8px,
+        transparent 8px 12px) var(--wait-tint);
+}
+.translation-motion .wait-covered, .translation-motion .wait-background .wait-mask {
+    position: absolute; inset: 8px 19px;
+}
+.translation-motion .wait-covered {
+    display: grid; place-items: center; background: var(--wait-paper);
+    font-size: 12px; font-weight: 650;
+}
+.translation-motion .is-current .wait-ocr i { animation: comic-wait-scan 2.8s both; }
+.translation-motion .is-current .translated-balloon { animation: comic-wait-letter 2.8s both; }
+.translation-motion .is-current .wait-mask { animation: comic-wait-mask 2.8s both; }
+.translation-motion .is-current .wait-erase { animation: comic-wait-clean 2.8s both; }
+.translation-motion .is-current .wait-bounds { animation: comic-wait-mask 2.8s both; }
+.translation-motion .is-current .wait-letter { animation: comic-wait-letter 2.8s both; }
+@keyframes comic-wait-cycle { 0%, 100% { opacity: 0; } 6%, 94% { opacity: 1; } }
+@keyframes comic-wait-scan {
+    0%, 13% { opacity: 0; transform: translateX(0); }
+    20% { opacity: 1; }
+    64% { opacity: 1; transform: translateX(35px); }
+    73%, 100% { opacity: 0; transform: translateX(35px); }
+}
+@keyframes comic-wait-mask { 0%, 12%, 85%, 100% { opacity: 0; } 26%, 55% { opacity: .75; } }
+@keyframes comic-wait-clean { 0%, 29% { clip-path: inset(0); } 66%, 100% { clip-path: inset(0 0 0 100%); } }
+@keyframes comic-wait-letter { 0%, 18% { opacity: 0; transform: translateY(3px); } 50%, 100% { opacity: 1; transform: none; } }
+.translation-readout {
+    display: grid; gap: 8px; width: min(100%, 280px); box-sizing: border-box;
+    margin: 0 auto; padding: 8px 12px 12px; font-size: 13px; color: var(--wait-ink);
+}
+.translation-readout > div {
+    display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px;
+}
+.translation-readout span { font-variant-numeric: tabular-nums; }
+.translation-readout progress {
+    width: 100%; height: 6px; appearance: none; overflow: hidden; border: 0; border-radius: 3px;
+    background: var(--wait-edge); accent-color: var(--wait-accent);
+}
+.translation-readout progress::-webkit-progress-bar { background: var(--wait-edge); }
+.translation-readout progress::-webkit-progress-value { background: var(--wait-accent); }
+@media (prefers-reduced-motion: reduce) {
+    .translation-motion .is-current, .translation-motion .is-current * { animation: none !important; }
+    .translation-motion .wait-ocr i { display: none; }
+}

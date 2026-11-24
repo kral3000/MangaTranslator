@@ -117,8 +117,8 @@ class AiJobFeedback(QWidget):
         layout.addWidget(self.summary_button, 1)
         summary_layout = QHBoxLayout(self.summary_button)
         summary_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
-        summary_layout.setContentsMargins(9, 0, 8, 0)
-        summary_layout.setSpacing(8)
+        summary_layout.setContentsMargins(8, 0, 7, 0)
+        summary_layout.setSpacing(5)
         self.summary_title = QLabel("AI 작업")
         self.summary_title.setObjectName("AiJobSummaryTitle")
         summary_layout.addWidget(self.summary_title)
@@ -126,7 +126,7 @@ class AiJobFeedback(QWidget):
         self.summary_stats = QWidget()
         stats_layout = QHBoxLayout(self.summary_stats)
         stats_layout.setContentsMargins(0, 0, 0, 0)
-        stats_layout.setSpacing(5)
+        stats_layout.setSpacing(2)
         self.summary_badges = []
         for status, name in (("running", "진행"), ("queued", "대기"), ("ready", "결과")):
             badge = QLabel(f"{name} 0")
@@ -212,6 +212,9 @@ class AiJobFeedback(QWidget):
             QPushButton:hover { background: #475569; border-color: #93c5fd; }
             QPushButton:focus, QSpinBox:focus { border-color: #93c5fd; }
             QPushButton:disabled { color: #a8b4c4; background: #303a49; }
+            QPushButton#AiJobSummary { background: #273745; border: 1px solid #415363; border-radius: 4px; }
+            QPushButton#AiJobSummary:hover { background: #344a5d; }
+            QPushButton#AiJobSummary:focus { border-color: #a3cbf6; }
             QFrame#AiJobPopup { background: #252d3a; border: 1px solid #4b5a6f; }
             QScrollArea, QScrollArea > QWidget > QWidget { background: #252d3a; }
             QLabel { color: #e5e7eb; font-size: 12px; }
@@ -220,8 +223,9 @@ class AiJobFeedback(QWidget):
             QLabel#AiJobSummaryTitle { color: #f8fafc; font-size: 14px; font-weight: 600; }
             QLabel#AiJobSummaryBadge {
                 background: #2b3544; color: #cbd5e1; border-radius: 4px;
-                padding: 1px 5px; font-size: 13px; font-weight: 500;
+                padding: 1px 3px; font-size: 13px; font-weight: 500;
             }
+            QLabel#AiJobSummaryBadge[active="false"] { background: transparent; }
             QLabel#AiJobSummaryBadge[active="true"][status="running"] {
                 background: #203e62; color: #bfdbfe;
             }
@@ -294,15 +298,16 @@ class AiJobFeedback(QWidget):
         badges_width = self.summary_stats.sizeHint().width()
         summary_layout = self.summary_button.layout()
         margins = summary_layout.contentsMargins()
-        summary_insets = margins.left() + margins.right() + 12 + summary_layout.spacing()
+        summary_insets = margins.left() + margins.right() + 12 + 2 * summary_layout.spacing()
         toolbar_gap = self.layout().spacing()
         result_width = self.result_button.width() + toolbar_gap
-        show_result = self.width() >= badges_width + summary_insets + result_width
+        title_width = self.summary_title.sizeHint().width() + summary_layout.spacing()
+        summary_width = badges_width + summary_insets + title_width
+        show_result = self.width() >= summary_width + result_width
         self.result_button.setVisible(show_result)
         available = self.width() - (result_width if show_result else 0)
         show_stats = available >= badges_width + summary_insets
-        title_width = self.summary_title.sizeHint().width() + summary_layout.spacing()
-        show_title = available >= badges_width + summary_insets + title_width
+        show_title = available >= summary_width
         self.summary_stats.setVisible(show_stats)
         self.summary_title.setVisible(show_title or not show_stats)
         summary_layout.setStretch(3, int(show_stats and not show_title))

@@ -8,6 +8,7 @@ from core.tag_styles import TAG_DEFINITIONS, TAG_STYLE_COLUMNS, tag_styles_to_ta
 
 from . import callbacks, character_profiles, korean, settings_manager, utils
 from .cleanup import build_cleanup_panel
+from .translation_wait import MOTION_HEAD, MOTION_HTML, TranslationWait
 from .ui_models import outside_text_modes_from_settings
 
 korean.install_gradio_korean(gr)
@@ -653,11 +654,13 @@ def create_layout(
             button_secondary_border_color_dark="#65706d",
         ),
         js=js_credits,
-        head=startup_preference_head,
+        head=startup_preference_head + MOTION_HEAD,
         css_paths=str(css_path),
     ) as app:
 
         translation_busy = gr.Checkbox(value=False, visible=False)
+        translation_wait = gr.State(None)
+        translation_wait_timer = gr.Timer(0.4, active=False)
         runtime_log_open_state = gr.State(False)
         with gr.Row(elem_id="app-header-row"):
             gr.Markdown("# MangaTranslator", elem_classes=["app-title"])
@@ -816,6 +819,9 @@ def create_layout(
                                 allow_custom_value=True,
                             )
                     with gr.Column(scale=1):
+                        with gr.Group(visible=False, elem_classes=["translation-wait"]) as single_wait_group:
+                            single_wait_motion = gr.HTML(MOTION_HTML, padding=False)
+                            single_wait_count = gr.HTML(padding=False)
                         output_image = gr.Image(
                             type="pil",
                             label="Translated Image",
@@ -1103,6 +1109,9 @@ def create_layout(
                             ),
                         )
                     with gr.Column(scale=1):
+                        with gr.Group(visible=False, elem_classes=["translation-wait"]) as batch_wait_group:
+                            batch_wait_motion = gr.HTML(MOTION_HTML, padding=False)
+                            batch_wait_count = gr.HTML(padding=False)
                         batch_output_gallery = gr.Gallery(
                             label="Translated Images",
                             show_label=True,
@@ -4578,6 +4587,7 @@ def create_layout(
                 gr.update(value=None, visible=False),
                 "",
                 gr.update(visible=False),
+                gr.update(visible=False),
             ),
             outputs=[
                 input_image,
@@ -4587,6 +4597,7 @@ def create_layout(
                 translator_plain_file,
                 editor_session_state,
                 open_advanced_editor_button,
+                single_wait_group,
             ],
             queue=False,
         ).then(fn=None, js=js_reset_status_height, queue=False)
@@ -4735,6 +4746,7 @@ def create_layout(
                 gr.update(value=None, visible=False),
                 gr.update(choices=[], value=None, visible=False),
                 gr.update(visible=False),
+                gr.update(visible=False),
             ),
             outputs=[
                 input_files,
@@ -4747,6 +4759,7 @@ def create_layout(
                 batch_failed_zip_file,
                 batch_editor_session_select,
                 batch_advanced_editor_button,
+                batch_wait_group,
             ],
             queue=False,
         ).then(fn=None, js=js_reset_status_height, queue=False)
@@ -4767,13 +4780,67 @@ def create_layout(
             }""",
             queue=False,
         )
+        def process_buttons(processing, batch):
+            return callbacks.update_process_buttons(
+                processing=processing,
+                button_text_processing="Processing..." if batch else "Translating...",
+                button_text_idle="Start Batch Translating" if batch else "Translate",
+            )
+
+        def begin_translation(*, batch=False):
+            wait = TranslationWait(batch=batch)
+            return (
+                *process_buttons(True, batch), wait, gr.update(active=batch),
+                gr.update(visible=True), gr.update(visible=True), wait.render(),
+            )
+
+        def end_translation(wait, *, batch=False):
+            wait.finish("failed")
+            return (
+                *process_buttons(False, batch), gr.update(active=False),
+                gr.update(visible=False), wait.render(),
+            )
+
+        def cancel_translation(wait):
+            if wait is None:
+                callbacks.cancel_process()
+                return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
+            wait.cancellation.cancel()
+            wait.finish("cancelled")
+            return (
+                gr.update(active=False),
+                gr.update(visible=False), gr.update(visible=False),
+                gr.skip() if wait.batch else wait.render(),
+                wait.render() if wait.batch else gr.skip(),
+            )
+
+        def update_batch_readout(wait):
+            value = wait.render(only_changed=True) if wait and wait.batch else None
+            return gr.skip() if value is None else value
+
+        translation_wait_timer.tick(
+            fn=update_batch_readout, inputs=[translation_wait], outputs=[batch_wait_count],
+            queue=False, show_progress="hidden",
+        )
+
+        def run_single_translation(wait, *args):
+            return callbacks.handle_translate_click(
+                *args, models_dir=models_dir, fonts_base_dir=fonts_base_dir,
+                target_device=target_device, translation_wait=wait,
+            )
+
+        def run_batch_translation(wait, *args, progress=gr.Progress(track_tqdm=True)):
+            return callbacks.handle_batch_click(
+                *args, models_dir=models_dir, fonts_base_dir=fonts_base_dir,
+                target_device=target_device, translation_wait=wait, progress=progress,
+            )
+
+        cancel_wait_outputs = [
+            translation_wait_timer, single_wait_motion, batch_wait_motion,
+            single_wait_count, batch_wait_count,
+        ]
         translate_event = translate_button.click(
-            fn=functools.partial(
-                callbacks.update_process_buttons,
-                processing=True,
-                button_text_processing="Translating...",
-                button_text_idle="Translate",
-            ),
+            fn=begin_translation,
             outputs=[
                 translate_button,
                 clear_button,
@@ -4782,16 +4849,17 @@ def create_layout(
                 batch_clear_button,
                 batch_cancel_button,
                 translation_busy,
+                translation_wait,
+                translation_wait_timer,
+                single_wait_group,
+                single_wait_motion,
+                single_wait_count,
             ],
             queue=False,
+            show_progress="hidden",
         ).then(
-            fn=functools.partial(
-                callbacks.handle_translate_click,
-                models_dir=models_dir,
-                fonts_base_dir=fonts_base_dir,
-                target_device=target_device,
-            ),
-            inputs=translate_inputs,
+            fn=run_single_translation,
+            inputs=[translation_wait, *translate_inputs],
             outputs=[
                 output_image,
                 status_message,
@@ -4800,14 +4868,11 @@ def create_layout(
                 editor_session_state,
                 open_advanced_editor_button,
             ],
+            show_progress="hidden",
         )
         translate_event.then(
-            fn=functools.partial(
-                callbacks.update_process_buttons,
-                processing=False,
-                button_text_processing="Translating...",
-                button_text_idle="Translate",
-            ),
+            fn=end_translation,
+            inputs=[translation_wait],
             outputs=[
                 translate_button,
                 clear_button,
@@ -4816,24 +4881,26 @@ def create_layout(
                 batch_clear_button,
                 batch_cancel_button,
                 translation_busy,
+                translation_wait_timer,
+                single_wait_motion,
+                single_wait_count,
             ],
             queue=False,
+            show_progress="hidden",
         ).then(fn=None, js=js_reset_status_height, queue=False)
 
         cancel_button.click(
-            fn=callbacks.cancel_process,
+            fn=cancel_translation,
+            inputs=[translation_wait],
+            outputs=cancel_wait_outputs,
             cancels=translate_event,
             queue=False,
+            show_progress="hidden",
         )
 
         # Batch Tab Button
         batch_event = batch_process_button.click(
-            fn=functools.partial(
-                callbacks.update_process_buttons,
-                processing=True,
-                button_text_processing="Processing...",
-                button_text_idle="Start Batch Translating",
-            ),
+            fn=functools.partial(begin_translation, batch=True),
             outputs=[
                 batch_process_button,
                 batch_clear_button,
@@ -4842,16 +4909,17 @@ def create_layout(
                 clear_button,
                 cancel_button,
                 translation_busy,
+                translation_wait,
+                translation_wait_timer,
+                batch_wait_group,
+                batch_wait_motion,
+                batch_wait_count,
             ],
             queue=False,
+            show_progress="hidden",
         ).then(
-            fn=functools.partial(
-                callbacks.handle_batch_click,
-                models_dir=models_dir,
-                fonts_base_dir=fonts_base_dir,
-                target_device=target_device,
-            ),
-            inputs=batch_inputs,
+            fn=run_batch_translation,
+            inputs=[translation_wait, *batch_inputs],
             outputs=[
                 batch_output_gallery,
                 batch_status_message,
@@ -4860,6 +4928,7 @@ def create_layout(
                 batch_editor_session_select,
                 batch_advanced_editor_button,
             ],
+            show_progress="hidden",
         )
         batch_editor_session_select.change(
             fn=lambda session_path: gr.update(
@@ -4876,12 +4945,8 @@ def create_layout(
             queue=False,
         )
         batch_event.then(
-            fn=functools.partial(
-                callbacks.update_process_buttons,
-                processing=False,
-                button_text_processing="Processing...",
-                button_text_idle="Start Batch Translating",
-            ),
+            fn=functools.partial(end_translation, batch=True),
+            inputs=[translation_wait],
             outputs=[
                 batch_process_button,
                 batch_clear_button,
@@ -4890,13 +4955,20 @@ def create_layout(
                 clear_button,
                 cancel_button,
                 translation_busy,
+                translation_wait_timer,
+                batch_wait_motion,
+                batch_wait_count,
             ],
             queue=False,
+            show_progress="hidden",
         ).then(fn=None, js=js_reset_status_height, queue=False)
 
         batch_cancel_button.click(
-            fn=callbacks.cancel_process,
+            fn=cancel_translation,
+            inputs=[translation_wait],
+            outputs=cancel_wait_outputs,
             queue=False,
+            show_progress="hidden",
         )
 
         app.load(

@@ -1505,12 +1505,13 @@ def handle_translate_click(
     models_dir: Path,
     fonts_base_dir: Path,
     target_device: Optional[torch.device],
+    translation_wait=None,
 ) -> Tuple[Optional[Image.Image], gr.update, gr.update, gr.update, str, gr.update]:
     """Callback for the 'Translate' button click. Uses dataclasses for config."""
     input_image_path = args[0]
     start_time = time.time()
     global CANCELLATION_MANAGER
-    CANCELLATION_MANAGER = CancellationManager()
+    CANCELLATION_MANAGER = translation_wait.cancellation if translation_wait else CancellationManager()
     try:
         img_valid, img_msg = utils.validate_image(input_image_path)
         if not img_valid:
@@ -1560,6 +1561,9 @@ def handle_translate_click(
         if edit_session_path:
             status_msg = f"{status_msg}\n편집 세션: {edit_session_path}"
         plain_copy_path = _plain_download_path(save_path, backend_config)
+        if translation_wait:
+            translation_wait.report(1, 1)
+            translation_wait.finish("complete")
 
         return (
             result_image.copy(),
@@ -2151,6 +2155,7 @@ def handle_batch_click(
     fonts_base_dir: Path,
     target_device: Optional[torch.device],
     progress=gr.Progress(track_tqdm=True),
+    translation_wait=None,
 ) -> Tuple[List[str], str, Optional[str], Optional[str], gr.update, gr.update]:
     """Callback for the 'Start Batch Translating' button click. Uses dataclasses."""
     input_files = args[0]
@@ -2159,7 +2164,7 @@ def handle_batch_click(
     native_zip_path = args[3] if len(args) > 3 else None
     progress(0, desc=ko("Starting batch process..."))
     global CANCELLATION_MANAGER
-    CANCELLATION_MANAGER = CancellationManager()
+    CANCELLATION_MANAGER = translation_wait.cancellation if translation_wait else CancellationManager()
     try:
         input_files, input_zip = _resolve_native_batch_inputs(
             input_files,
@@ -2218,6 +2223,7 @@ def handle_batch_click(
             disable_auto_save=ui_state.output.disable_auto_save,
             gradio_progress=progress,
             cancellation_manager=CANCELLATION_MANAGER,
+            page_progress=translation_wait.report if translation_wait else None,
         )
 
         output_path = results["output_path"]
@@ -2254,6 +2260,14 @@ def handle_batch_click(
         )
         success_zip_path = results.get("success_zip_path")
         failed_zip_path = results.get("failed_zip_path")
+        if translation_wait:
+            completed, total = results["success_count"], results["total_count"]
+            translation_wait.report(completed, total)
+            translation_wait.finish(
+                "cancelled" if results.get("cancelled") else
+                "complete" if completed == total and total else
+                "partial" if completed else "failed"
+            )
         progress(
             1.0,
             desc=(

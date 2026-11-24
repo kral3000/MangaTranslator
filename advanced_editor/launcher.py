@@ -210,6 +210,7 @@ EDITOR_ICON_PATHS = {
     "folder": '<path d="M3 6h7l2 2h9v12H3z"/>',
     "play": '<path d="M8 5l11 7-11 7z"/>',
     "palette": '<path d="M12 3a9 9 0 0 0 0 18h2a2 2 0 0 0 0-4h-1a2 2 0 0 1 0-4h4a4 4 0 0 0 4-4c0-4-4-6-9-6z"/><path d="M7 10h.01M9 6h.01M14 6h.01M18 9h.01"/>',
+    "swap_colors": '<path d="M4 8h15m-4-4 4 4-4 4M20 16H5m4-4-4 4 4 4"/>',
     "brush_circle": '<circle cx="12" cy="12" r="7"/>',
     "brush_square": '<rect x="5" y="5" width="14" height="14" rx="1"/>',
     "bold": '<path d="M7 4h6a4 4 0 0 1 0 8H7zM7 12h7a4 4 0 0 1 0 8H7z"/>',
@@ -235,15 +236,6 @@ EDITOR_ICON_PATHS = {
     "restore_eraser": '<path d="M13 7l7 7-6 6H8l-5-5 8-8zM9 20h11"/><path d="M6 2v4M4 4h4"/><circle cx="10" cy="3" r=".8" fill="currentColor" stroke="none"/>',
     "text_cover_brush": '<path d="M3 4h10M8 4v8M3 12h6"/><path d="M12 14l6-9 4 3-6 9-6 2zM12 14l4 3M3 21h13"/>',
     "text_cover_eraser": '<path d="M3 4h10M8 4v8M3 12h6"/><path d="M13 10l8 7-5 5h-6l-5-4zM10 22h11"/>',
-    "metric_x": '<path d="M4 12h16M4 12l3-3M4 12l3 3M20 12l-3-3M20 12l-3 3"/>',
-    "metric_y": '<path d="M12 4v16M12 4l-3 3M12 4l3 3M12 20l-3-3M12 20l3-3"/>',
-    "metric_width": '<path d="M4 7v10M20 7v10M4 12h16M7 9l-3 3 3 3M17 9l3 3-3 3"/>',
-    "metric_height": '<path d="M7 4h10M7 20h10M12 4v16M9 7l3-3 3 3M9 17l3 3 3-3"/>',
-    "metric_type": '<path d="M5 19L10 5h2l5 14M7 14h8M18 9h4M20 7v4"/>',
-    "metric_spacing": '<path d="M6 7h12M6 12h12M6 17h12M3 7v10M2 8l1-1 1 1M2 16l1 1 1-1"/>',
-    "metric_padding": '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/>',
-    "metric_rotation": '<path d="M19 8V4h-4M19 4l-4 4M18 13a7 7 0 1 1-2-6"/>',
-    "metric_outline": '<path d="M7 5h10M12 5v14M8 19h8"/><rect x="4" y="3" width="16" height="18" rx="2"/>',
     "chevron_up": '<path d="M7 15l5-5 5 5"/>',
     "chevron_down": '<path d="M7 9l5 5 5-5"/>',
     "action": '<path d="M5 12h14M14 6l6 6-6 6"/>',
@@ -485,7 +477,8 @@ class ModernComboBox(QComboBox):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         outer = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        radius = 6.0
+        inspector_field = bool(self.property("inspectorField"))
+        radius = 4.0 if inspector_field else 6.0
         path = QPainterPath()
         path.addRoundedRect(outer, radius, radius)
 
@@ -512,19 +505,21 @@ class ModernComboBox(QComboBox):
 
         painter.fillPath(path, field_color)
         button_left = outer.right() - 28.0
-        painter.save()
-        painter.setClipPath(path)
-        painter.fillRect(
-            QRectF(button_left, outer.top(), 28.5, outer.height()), button_color
-        )
-        painter.restore()
+        if not inspector_field:
+            painter.save()
+            painter.setClipPath(path)
+            painter.fillRect(
+                QRectF(button_left, outer.top(), 28.5, outer.height()), button_color
+            )
+            painter.restore()
         painter.setPen(QPen(border_color, 1))
         painter.drawPath(path)
-        painter.setPen(QPen(QColor("#d9ddda"), 1))
-        painter.drawLine(
-            QPointF(button_left, outer.top() + 1),
-            QPointF(button_left, outer.bottom() - 1),
-        )
+        if not inspector_field:
+            painter.setPen(QPen(QColor("#d9ddda"), 1))
+            painter.drawLine(
+                QPointF(button_left, outer.top() + 1),
+                QPointF(button_left, outer.bottom() - 1),
+            )
 
         if not self.isEditable():
             text_rect = QRectF(
@@ -2104,7 +2099,7 @@ class AdvancedEditorWindow(QMainWindow):
             button.setObjectName("TopBarMetricStepButton")
             button.setProperty("stepRole", role)
             button.setFixedSize(16, 14)
-            button.setIcon(_editor_icon(icon_name, "#334155"))
+            button.setIcon(_editor_icon(icon_name, "#b9cbdc"))
             button.setIconSize(QSize(10, 10))
             button.setToolTip(tooltip)
             button.clicked.connect(callback)
@@ -2115,7 +2110,7 @@ class AdvancedEditorWindow(QMainWindow):
 
         brush_shape_label = QLabel("브러시 모양", self)
         brush_shape_label.setObjectName("TopBarSecondaryLabel")
-        action_toolbar.addWidget(brush_shape_label)
+        self.brush_shape_label_action = action_toolbar.addWidget(brush_shape_label)
         brush_shape_control = QWidget(self)
         brush_shape_control.setObjectName("TopBarBrushShape")
         brush_shape_control.setFixedSize(64, 30)
@@ -2261,8 +2256,8 @@ class AdvancedEditorWindow(QMainWindow):
         zoom_bar = QWidget(canvas_panel)
         zoom_bar.setObjectName("ZoomBar")
         zoom_layout = QHBoxLayout(zoom_bar)
-        zoom_layout.setContentsMargins(8, 5, 8, 5)
-        zoom_layout.setSpacing(6)
+        zoom_layout.setContentsMargins(9, 5, 10, 5)
+        zoom_layout.setSpacing(5)
 
         self.pan_tool_button = QPushButton("화면 이동")
         self.pan_tool_button.setCheckable(True)
@@ -2272,7 +2267,10 @@ class AdvancedEditorWindow(QMainWindow):
         self.pan_tool_button.clicked.connect(lambda: self.set_tool("pan"))
         zoom_layout.addWidget(self.pan_tool_button)
 
-        zoom_out_button = QPushButton("-")
+        zoom_out_button = QPushButton(_editor_icon("minus", "#e4ebf1"), "")
+        zoom_out_button.setProperty("preserveIcon", True)
+        zoom_out_button.setAccessibleName("축소")
+        zoom_out_button.setIconSize(QSize(16, 16))
         zoom_out_button.setFixedSize(34, 30)
         zoom_out_button.setShortcut(QKeySequence("Ctrl+-"))
         zoom_out_button.setToolTip("축소 (마우스 휠 아래)")
@@ -2287,7 +2285,10 @@ class AdvancedEditorWindow(QMainWindow):
         )
         zoom_layout.addWidget(self.zoom_label)
 
-        zoom_in_button = QPushButton("+")
+        zoom_in_button = QPushButton(_editor_icon("add", "#e4ebf1"), "")
+        zoom_in_button.setProperty("preserveIcon", True)
+        zoom_in_button.setAccessibleName("확대")
+        zoom_in_button.setIconSize(QSize(16, 16))
         zoom_in_button.setFixedSize(34, 30)
         zoom_in_button.setShortcut(QKeySequence("Ctrl+="))
         zoom_in_button.setToolTip("확대 (마우스 휠 위)")
@@ -2379,28 +2380,28 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #edf2f7;
             }
             QToolBar#TopBar {
-                background: #10181f;
                 border: 0;
-                border-bottom: 1px solid #293640;
-                spacing: 5px;
-                padding: 6px 12px;
+                background: #17222c;
+                border-bottom: 1px solid #344351;
+                spacing: 4px;
+                padding: 6px 11px;
             }
             QToolBar#TopBar::separator {
                 width: 1px;
-                margin: 8px 7px;
-                background: #293640;
+                background: #394956;
+                margin: 8px 6px;
             }
             QToolBar#TopBar QToolButton {
-                color: #e5e7eb;
                 background: transparent;
                 border: 1px solid transparent;
-                border-radius: 6px;
                 min-height: 22px;
-                padding: 6px 9px;
+                color: #e4ebf1;
+                border-radius: 4px;
+                padding: 5px 8px;
             }
             QToolBar#TopBar QToolButton:hover {
-                background: #25323d;
-                border-color: #425363;
+                background: #2a3947;
+                border-color: transparent;
             }
             QToolBar#TopBar QToolButton:disabled {
                 color: #64748b;
@@ -2408,25 +2409,26 @@ class AdvancedEditorWindow(QMainWindow):
                 border-color: transparent;
             }
             QToolBar#TopBar QToolButton[toolbarRole="primary"] {
-                background: #2563eb;
-                border-color: #60a5fa;
                 color: #ffffff;
                 font-weight: 700;
+                background: #285dcc;
+                border-color: #4774cf;
+                border-radius: 4px;
                 padding-left: 12px;
                 padding-right: 12px;
             }
             QToolBar#TopBar QToolButton[toolbarRole="primary"]:hover {
-                background: #1d4ed8;
-                border-color: #93c5fd;
+                background: #326dda;
+                border-color: #84aef9;
             }
             QToolBar#TopBar QToolButton[toolbarRole="secondary"] {
-                background: #1c2832;
-                border-color: #374755;
-                padding: 6px 7px;
+                background: transparent;
+                border-color: transparent;
+                padding: 5px 8px;
             }
             QToolBar#TopBar QToolButton[toolbarRole="secondary"]:hover {
-                background: #25323d;
-                border-color: #4d6376;
+                background: #2a3947;
+                border-color: transparent;
             }
             QToolBar#TopBar QLabel#TopBarLabel {
                 color: #e5e7eb;
@@ -2445,9 +2447,9 @@ class AdvancedEditorWindow(QMainWindow):
                 border: 0;
             }
             QToolBar#TopBar QWidget#RenderStatus {
-                background: #17222b;
-                border: 1px solid #374755;
-                border-radius: 6px;
+                background: transparent;
+                border: 0;
+                border-radius: 0;
             }
             QToolBar#TopBar QLabel#RenderStatusLabel {
                 color: #cbd5e1;
@@ -2471,14 +2473,14 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #f87171;
             }
             QToolBar#TopBar QWidget#TopBarMetricField {
-                background: #ffffff;
-                border: 1px solid #788681;
-                border-radius: 6px;
+                background: #273642;
+                border: 1px solid #465865;
+                border-radius: 4px;
             }
             QToolBar#TopBar QWidget#TopBarBrushShape {
-                background: #182338;
-                border: 1px solid #454d50;
-                border-radius: 6px;
+                background: #263542;
+                border: 1px solid transparent;
+                border-radius: 4px;
             }
             QToolBar#TopBar QToolButton#TopBarBrushShapeButton {
                 min-width: 0;
@@ -2487,29 +2489,30 @@ class AdvancedEditorWindow(QMainWindow):
                 max-height: 28px;
                 padding: 0;
                 border: 0;
-                border-radius: 5px;
                 background: transparent;
+                border-radius: 3px;
             }
             QToolBar#TopBar QToolButton#TopBarBrushShapeButton:hover {
                 background: #273449;
             }
             QToolBar#TopBar QToolButton#TopBarBrushShapeButton:checked {
-                background: #2563eb;
+                background: #3b5670;
             }
             QToolBar#TopBar QSpinBox#TopBarMetricSpin {
                 min-height: 0;
                 padding: 2px 5px;
-                color: #172033;
-                background: #ffffff;
                 border: 0;
-                border-radius: 5px 0 0 5px;
+                color: #eff5f9;
+                background: #273642;
+                border-radius: 3px 0 0 3px;
             }
             QToolBar#TopBar QWidget#TopBarMetricStepper {
-                background: #e8eef5;
-                border: 0;
                 border-left: 1px solid #d9ddda;
                 border-top-right-radius: 5px;
                 border-bottom-right-radius: 5px;
+                background: #273642;
+                border: 0;
+                border-radius: 0;
             }
             QToolBar#TopBar QToolButton#TopBarMetricStepButton {
                 min-width: 0;
@@ -2522,10 +2525,10 @@ class AdvancedEditorWindow(QMainWindow):
                 border-radius: 0;
             }
             QToolBar#TopBar QToolButton#TopBarMetricStepButton:hover {
-                background: #dbeafe;
+                background: #3d5264;
             }
             QToolBar#TopBar QToolButton#TopBarMetricStepButton[stepRole="up"] {
-                border-bottom: 1px solid #d9ddda;
+                border-bottom: 0;
             }
             QToolBar#TopBar QSlider::groove:horizontal {
                 height: 4px;
@@ -2544,49 +2547,50 @@ class AdvancedEditorWindow(QMainWindow):
                 border-radius: 7px;
             }
             QToolBar#ToolRail {
-                background: #111b23;
                 border: 0;
-                border-right: 1px solid #293640;
-                spacing: 3px;
-                padding: 9px 6px;
+                background: #1b2732;
+                border-right: 1px solid #344351;
+                spacing: 2px;
+                padding: 8px 9px;
             }
             QToolBar#ToolRail QLabel#ToolRailSection {
-                color: #96a7b5;
                 background: transparent;
                 font-size: 12px;
+                color: #aabac8;
+                padding: 7px 6px 3px;
                 font-weight: 500;
-                padding: 6px 8px 3px 8px;
             }
             QToolBar#ToolRail QFrame#ToolRailDivider {
-                background: #263244;
                 border: 0;
-                margin: 5px 6px 3px 6px;
+                background: #344351;
+                margin: 5px 5px 3px;
             }
             QToolBar#ToolRail QToolButton {
                 color: #d5dee5;
                 background: transparent;
                 border: 1px solid transparent;
-                border-radius: 6px;
                 min-height: 34px;
                 max-height: 34px;
                 padding: 0 8px;
                 font-size: 14px;
                 font-weight: 500;
                 text-align: left;
+                border-radius: 4px;
+                padding-left: 7px;
             }
             QToolBar#ToolRail QToolButton:hover {
                 color: #f4f8fa;
-                background: #1c2934;
-                border-color: #344855;
+                background: #2a3947;
+                border-color: transparent;
             }
             QToolBar#ToolRail QToolButton:checked {
-                background: #293c4d;
-                border-color: #506d8b;
-                color: #eff8ff;
+                background: #334b60;
+                border-color: #567388;
+                color: #f6fbff;
             }
             QToolBar#ToolRail QToolButton:focus,
             QToolBar#TopBar QToolButton:focus {
-                border-color: #93c5fd;
+                border-color: #a3cbf6;
             }
             QWidget#InspectorShell,
             QScrollArea#InspectorScroll,
@@ -2594,90 +2598,114 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #f4f7fb;
             }
             QWidget#InspectorShell {
-                border-right: 1px solid #d9ddda;
+                border-right: 1px solid #dae2ea;
             }
             QScrollArea#InspectorScroll {
                 border: 0;
             }
-            QLabel#CompactSectionLabel {
+            QScrollArea#InspectorScroll QScrollBar::handle:vertical:disabled {
+                background: transparent;
+            }
+            QTabWidget#InspectorSections::pane {
+                border: 0;
+                border-top: 1px solid #d9e1e9;
+                border-radius: 0;
+                padding: 0;
+            }
+            QLabel#CompactSectionLabel, QLabel#ColorSectionLabel {
                 color: #172033;
                 font-size: 13px;
                 font-weight: 700;
-                padding-top: 2px;
-                padding-bottom: 1px;
-                border-bottom: 1px solid #d9ddda;
+            }
+            QLabel#CompactSectionLabel {
+                padding-top: 3px;
+                border-top: 1px solid #e1e6ed;
             }
             QLabel#FontPreviewLabel {
-                background: #ffffff;
+                background: #f3f5f8;
                 color: #172033;
-                border: 1px solid #d9ddda;
-                border-radius: 6px;
+                border: 0;
+                border-radius: 4px;
                 padding: 1px 6px;
             }
-            QWidget#MetricRow {
-                background: transparent;
-                border: 0;
+            QWidget#MetricRow, QWidget#TextStyleControl {
+                background: #f1f4f8;
+                border-radius: 4px;
             }
-            QWidget#MetricGroup {
-                background: #f8fafc;
-                border: 1px solid #d9ddda;
-                border-radius: 8px;
+            QWidget#MetricField[metricDivider="true"] {
+                border-right: 1px solid #d9e1e9;
             }
             QLabel#MetricGroupLabel {
-                color: #172033;
-                font-size: 12px;
-                font-weight: 700;
+                color: #27364a;
+                font-size: 13px;
+                font-weight: 600;
                 background: transparent;
-                border: 0;
             }
-            QToolButton#MetricGroupAction {
+            QToolButton#MetricGroupAction, QToolButton#SwapTextColors {
                 background: transparent;
                 border: 1px solid transparent;
                 border-radius: 4px;
                 padding: 2px;
             }
-            QToolButton#MetricGroupAction:hover {
+            QToolButton#MetricGroupAction:hover, QToolButton#SwapTextColors:hover {
                 background: #e8eef5;
                 border-color: #d9ddda;
             }
-            QWidget#MetricField {
-                background: #ffffff;
-                border: 1px solid #d9ddda;
-                border-radius: 6px;
-            }
-            QLabel#MetricIcon {
-                background: transparent;
-                border: 0;
-            }
-            QWidget#MetricFieldLead {
-                background: #edf2f7;
-                border: 0;
-                border-top-left-radius: 5px;
-                border-bottom-left-radius: 5px;
+            QToolButton#SwapTextColors:focus {
+                border-color: #2563eb;
             }
             QLabel#MetricFieldLabel {
-                color: #334155;
-                font-size: 11px;
-                font-weight: 700;
+                color: #425269;
+                font-size: 12px;
+                font-weight: 500;
             }
             QWidget#TextLayoutPage QTextEdit {
                 font-size: 14px;
+                border-radius: 4px;
+                padding: 3px 8px;
+            }
+            QWidget#TextLayoutPage QTextEdit#InspectorSourceText {
+                background: #f3f5f8;
+                border-color: transparent;
+            }
+            QWidget#TextLayoutPage QTextEdit#InspectorSourceText:focus {
+                border-color: #2563eb;
             }
             QWidget#TextLayoutPage QPushButton {
                 min-height: 18px;
-                padding: 5px 7px;
+                padding: 3px 7px;
+                border-radius: 4px;
+            }
+            QWidget#TextLayoutPage QPushButton#TextColorSwatch,
+            QWidget#TextLayoutPage QPushButton[inspectorAction="true"],
+            QWidget#TextLayoutPage QPushButton[formatRole="toggle"] {
+                background: transparent;
+                border-color: transparent;
+            }
+            QWidget#TextLayoutPage QPushButton#TextColorSwatch {
+                padding: 3px 4px;
+                text-align: left;
+            }
+            QWidget#TextLayoutPage QPushButton#TextColorSwatch:hover,
+            QWidget#TextLayoutPage QPushButton[inspectorAction="true"]:hover,
+            QWidget#TextLayoutPage QPushButton[formatRole="toggle"]:hover {
+                background: #e6edf6;
+            }
+            QWidget#TextLayoutPage QPushButton#TextColorSwatch:focus,
+            QWidget#TextLayoutPage QPushButton[inspectorAction="true"]:focus,
+            QWidget#TextLayoutPage QPushButton[formatRole="toggle"]:focus {
+                border-color: #2563eb;
             }
             QWidget#TextLayoutPage QPushButton[formatRole="toggle"]:checked {
-                background: #dbeafe;
+                background: #dfebf9;
                 color: #1d4ed8;
-                border-color: #60a5fa;
                 font-weight: 700;
             }
             QWidget#TextLayoutPage QComboBox,
             QWidget#TextLayoutPage QSpinBox,
             QWidget#TextLayoutPage QDoubleSpinBox {
                 min-height: 18px;
-                padding: 4px 6px;
+                padding: 3px 6px;
             }
             QWidget#TextLayoutPage QSpinBox,
             QWidget#TextLayoutPage QDoubleSpinBox {
@@ -2687,17 +2715,15 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QWidget#MetricField QSpinBox,
             QWidget#MetricField QDoubleSpinBox {
-                background: #ffffff;
+                background: transparent;
                 border: 0;
-                border-left: 1px solid #d9ddda;
-                border-radius: 0;
+                border-radius: 3px;
                 min-height: 20px;
-                padding: 2px 2px;
+                padding: 2px 4px;
             }
-            QWidget#MetricStepper {
-                background: #e8eef5;
-                border: 0;
-                border-left: 1px solid #d9ddda;
+            QWidget#MetricField QSpinBox:focus,
+            QWidget#MetricField QDoubleSpinBox:focus {
+                background: #dbeafe;
             }
             QToolButton#MetricStepButton {
                 background: transparent;
@@ -2705,37 +2731,34 @@ class AdvancedEditorWindow(QMainWindow):
                 border-radius: 0;
                 padding: 0;
             }
-            QToolButton#MetricStepButton:hover {
+            QToolButton#MetricStepButton:hover, QToolButton#MetricStepButton:focus {
                 background: #dbeafe;
-            }
-            QToolButton#MetricStepButton[stepRole="up"] {
-                border-bottom: 1px solid #d9ddda;
             }
             QPushButton#OptionToggle {
                 min-height: 24px;
                 padding: 2px 8px;
                 color: #475569;
-                background: #f8fafc;
-                border: 1px solid #d9ddda;
-                border-radius: 6px;
+                background: #f1f4f8;
+                border: 1px solid transparent;
+                border-radius: 4px;
                 font-size: 12px;
                 font-weight: 600;
             }
             QPushButton#OptionToggle:hover {
                 color: #1e3a8a;
-                background: #eff6ff;
-                border-color: #93c5fd;
+                background: #e6edf6;
             }
             QPushButton#OptionToggle:checked {
                 color: #1d4ed8;
-                background: #dbeafe;
-                border-color: #60a5fa;
+                background: #dfebf9;
                 font-weight: 700;
             }
+            QPushButton#OptionToggle:focus {
+                border-color: #2563eb;
+            }
             QWidget#AlignmentControl {
-                background: #edf1f6;
-                border: 1px solid #cdd2d1;
-                border-radius: 6px;
+                background: #f1f4f8;
+                border-radius: 4px;
             }
             QToolButton#AlignmentButton {
                 background: transparent;
@@ -2750,8 +2773,7 @@ class AdvancedEditorWindow(QMainWindow):
                 border-color: #93c5fd;
             }
             QToolButton#AlignmentButton:checked {
-                background: #dbeafe;
-                border-color: #60a5fa;
+                background: #dfebf9;
             }
             QToolButton#AlignmentButton:focus {
                 border-color: #2563eb;
@@ -2766,50 +2788,50 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #60a5fa;
             }
             QWidget#ZoomBar {
-                background: #252d3a;
-                border-bottom: 1px solid #454d50;
+                background: #202d39;
+                border-bottom: 1px solid #344351;
             }
             QWidget#ZoomBar QLabel {
-                color: #f8fafc;
                 background: transparent;
-                font-weight: 700;
+                color: #e6eef5;
+                font-weight: 600;
             }
             QWidget#ZoomBar QPushButton {
                 min-height: 20px;
-                padding: 4px 9px;
-                color: #f8fafc;
-                background: #364152;
-                border: 1px solid #535e61;
-                border-radius: 5px;
+                color: #e4ebf1;
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 4px;
+                padding: 4px 8px;
             }
             QWidget#ZoomBar QPushButton:hover {
-                background: #475569;
-                border-color: #93c5fd;
+                background: #324657;
+                border-color: transparent;
             }
             QWidget#ZoomBar QPushButton:checked {
-                background: #2563eb;
-                border-color: #93c5fd;
                 color: #ffffff;
+                background: #3b5670;
+                border-color: #587994;
             }
             QScrollBar#CanvasScrollBar:vertical {
-                width: 18px;
-                background: #252d35;
+                width: 12px;
+                background: #252f3a;
             }
             QScrollBar#CanvasScrollBar:horizontal {
-                height: 18px;
-                background: #252d35;
+                height: 12px;
+                background: #252f3a;
             }
             QScrollBar#CanvasScrollBar::handle:vertical {
                 min-height: 36px;
-                margin: 2px 6px;
-                background: #93a09c;
                 border-radius: 3px;
+                background: #647587;
+                margin: 2px 4px;
             }
             QScrollBar#CanvasScrollBar::handle:horizontal {
                 min-width: 36px;
-                margin: 6px 2px;
-                background: #93a09c;
                 border-radius: 3px;
+                background: #647587;
+                margin: 4px 2px;
             }
             QScrollBar#CanvasScrollBar::handle:hover,
             QScrollBar#CanvasScrollBar::handle:pressed {
@@ -2968,13 +2990,14 @@ class AdvancedEditorWindow(QMainWindow):
                 background: #2563eb;
             }
             QLabel#StatusLabel {
-                background: #eef6ff;
-                color: #1e3a8a;
-                border: 1px solid #bfdbfe;
-                border-radius: 7px;
-                margin: 8px 10px 10px 10px;
-                padding: 9px 10px;
                 font-weight: 500;
+                color: #44566b;
+                background: #eef2f7;
+                border: 0;
+                border-top: 1px solid #dce4ed;
+                border-radius: 0;
+                margin: 0;
+                padding: 7px 13px;
             }
             QFrame#InpaintProgressPanel {
                 background: #f8fafc;
@@ -3016,8 +3039,8 @@ class AdvancedEditorWindow(QMainWindow):
                 font-weight: 400;
             }
             QWidget#SessionPanel {
-                background: #f8fafc;
-                border-left: 1px solid #d9ddda;
+                background: #f5f7fa;
+                border-left: 1px solid #dae2ea;
             }
             QLabel#SessionSelectionLabel {
                 color: #475569;
@@ -3028,6 +3051,10 @@ class AdvancedEditorWindow(QMainWindow):
                 min-height: 18px;
                 padding: 5px 7px;
                 font-size: 12px;
+                color: #324860;
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 4px;
             }
             QListWidget {
                 background: #ffffff;
@@ -3143,6 +3170,50 @@ class AdvancedEditorWindow(QMainWindow):
             QScrollBar::add-page, QScrollBar::sub-page {
                 background: transparent;
             }
+            QToolBar#ToolRail QToolButton:focus {
+                border-color: #a3cbf6;
+            }
+            QWidget#ZoomBar QPushButton:focus {
+                border-color: #a3cbf6;
+            }
+            QWidget#InspectorShell, QScrollArea#InspectorScroll, QWidget#InspectorPanel {
+                background: #f4f7fa;
+            }
+            QWidget#SessionPanel QLabel#PanelTitle {
+                color: #24364a;
+                border: 0;
+                padding-bottom: 2px;
+            }
+            QWidget#SessionPanel QLabel#SessionSelectionLabel {
+                color: #526379;
+            }
+            QWidget#SessionPanel QPushButton:hover {
+                background: #e6edf5;
+                border-color: transparent;
+            }
+            QWidget#SessionPanel QPushButton:focus {
+                border-color: #608dcc;
+            }
+            QWidget#SessionPanel QListWidget {
+                background: transparent;
+                border: 0;
+                border-top: 1px solid #dae2ea;
+                border-radius: 0;
+                padding: 3px 0;
+            }
+            QWidget#SessionPanel QListWidget::item {
+                min-height: 22px;
+                padding: 5px 8px;
+                border-radius: 4px;
+            }
+            QWidget#SessionPanel QListWidget::item:hover {
+                background: #e9eff6;
+            }
+            QWidget#SessionPanel QListWidget::item:selected {
+                background: #dce8f6;
+                color: #244e82;
+                font-weight: 700;
+            }
             """
         )
         self.setStyleSheet(
@@ -3250,8 +3321,22 @@ class AdvancedEditorWindow(QMainWindow):
         color = QColor(value)
         foreground = "#ffffff" if color.lightness() < 140 else "#172033"
         label = str(button.property("colorLabel") or button.text())
-        button.setText(f"{label}  {color.name().upper()}")
+        compact = bool(button.property("noAutoIcon"))
+        gap = " " if compact else "  "
+        button.setText(f"{label}{gap}{color.name().upper()}")
         button.setAccessibleName(f"{label}, 현재 색상 {color.name().upper()}")
+        if compact:
+            swatch = QPixmap(14, 14)
+            swatch.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(swatch)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setBrush(color)
+            painter.setPen(QColor("#a7b1bf"))
+            painter.drawRoundedRect(QRectF(1.5, 1.5, 11, 11), 2, 2)
+            painter.end()
+            button.setIcon(QIcon(swatch))
+            button.setIconSize(QSize(14, 14))
+            return
         button.setStyleSheet(
             f"background: {color.name()}; color: {foreground}; "
             f"border-color: {foreground};"
@@ -3419,6 +3504,8 @@ class AdvancedEditorWindow(QMainWindow):
         layout.addLayout(selection_actions)
 
         self.session_list = QListWidget()
+        self.session_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.session_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.session_list.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
         )
@@ -3458,9 +3545,11 @@ class AdvancedEditorWindow(QMainWindow):
         try:
             self.session_list.clear()
             for index, path in enumerate(self.related_session_paths, start=1):
-                item = QListWidgetItem(f"{index}. {self._session_display_name(path, collection_root)}")
+                display_path = self._session_display_name(path, collection_root)
+                file_name = Path(display_path.replace("\\", "/")).name
+                item = QListWidgetItem(file_name or f"{index}페이지")
                 item.setData(Qt.ItemDataRole.UserRole, str(path))
-                item.setToolTip(str(path))
+                item.setToolTip(item.text())
                 self.session_list.addItem(item)
         finally:
             self.session_list.blockSignals(False)
@@ -3674,7 +3763,7 @@ class AdvancedEditorWindow(QMainWindow):
         panel.setMinimumWidth(340)
         panel.setMaximumWidth(450)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(12, 12, 12, 14)
+        layout.setContentsMargins(12, 6, 12, 6)
         layout.setSpacing(8)
 
         self.inspector_sections = QTabWidget(panel)
@@ -3683,18 +3772,21 @@ class AdvancedEditorWindow(QMainWindow):
         region_page = QWidget()
         region_page.setObjectName("TextLayoutPage")
         region_layout = QVBoxLayout(region_page)
-        region_layout.setContentsMargins(9, 9, 9, 10)
-        region_layout.setSpacing(6)
+        region_layout.setContentsMargins(9, 7, 9, 5)
+        region_layout.setSpacing(4)
         region_layout.addWidget(QLabel("텍스트 영역"))
         region_selector_row = QHBoxLayout()
         region_selector_row.setSpacing(6)
         self.region_combo = ModernComboBox()
+        self.region_combo.setProperty("inspectorField", True)
         self.region_combo.currentIndexChanged.connect(self._on_region_combo_changed)
         region_selector_row.addWidget(self.region_combo, 1)
         add_button = QPushButton("추가")
         add_button.clicked.connect(self.add_text_region)
         delete_button = QPushButton("삭제")
         delete_button.clicked.connect(self.delete_selected_region)
+        for button in (add_button, delete_button):
+            button.setProperty("inspectorAction", True)
         add_button.setFixedWidth(76)
         delete_button.setFixedWidth(76)
         region_selector_row.addWidget(add_button)
@@ -3702,13 +3794,14 @@ class AdvancedEditorWindow(QMainWindow):
         region_layout.addLayout(region_selector_row)
 
         self.source_edit = ResizableTextEdit(52)
+        self.source_edit.setObjectName("InspectorSourceText")
         self.source_edit.setReadOnly(True)
         region_layout.addWidget(QLabel("원문"))
         region_layout.addWidget(self.source_edit)
 
         self.translation_label = QLabel("편집할 텍스트")
         region_layout.addWidget(self.translation_label)
-        self.translation_edit = ResizableTextEdit(60)
+        self.translation_edit = ResizableTextEdit(54)
         self.translation_edit.textChanged.connect(self._on_translation_text_changed)
         for editor in (self.source_edit, self.translation_edit):
             editor.heightChanged.connect(
@@ -3718,9 +3811,11 @@ class AdvancedEditorWindow(QMainWindow):
             )
         region_layout.addWidget(self.translation_edit)
 
-        style_row = QHBoxLayout()
-        style_row.setContentsMargins(0, 2, 0, 0)
-        style_row.setSpacing(6)
+        style_control = QWidget(region_page)
+        style_control.setObjectName("TextStyleControl")
+        style_row = QHBoxLayout(style_control)
+        style_row.setContentsMargins(2, 1, 2, 1)
+        style_row.setSpacing(2)
         self.text_style_buttons: dict[str, QPushButton] = {}
         for marker, label, tooltip, icon_name in (
             ("**", "굵게", "선택한 텍스트를 굵게 표시합니다.", "bold"),
@@ -3746,7 +3841,7 @@ class AdvancedEditorWindow(QMainWindow):
             )
             self.text_style_buttons[marker] = button
             style_row.addWidget(button)
-        region_layout.addLayout(style_row)
+        region_layout.addWidget(style_control)
         self.translation_edit.textChanged.connect(self._sync_text_style_buttons)
         self.translation_edit.selectionChanged.connect(self._sync_text_style_buttons)
 
@@ -3812,7 +3907,7 @@ class AdvancedEditorWindow(QMainWindow):
         font_label.setObjectName("CompactSectionLabel")
         region_layout.addWidget(font_label)
         metrics_layout = QVBoxLayout()
-        metrics_layout.setSpacing(6)
+        metrics_layout.setSpacing(4)
         self.x_spin = self._spin(0, 99999)
         self.y_spin = self._spin(0, 99999)
         self.w_spin = self._spin(1, 99999)
@@ -3869,53 +3964,52 @@ class AdvancedEditorWindow(QMainWindow):
                 "글자 효과",
                 "크기 · 행간 · 외곽선",
                 (
-                    ("크기", "metric_type", self.font_size_spin),
-                    ("간격", "metric_spacing", self.line_spacing_spin),
-                    ("외곽선", "metric_outline", self.stroke_width_spin),
+                    ("크기", self.font_size_spin),
+                    ("간격", self.line_spacing_spin),
+                    ("외곽선", self.stroke_width_spin),
                 ),
             ),
             (
                 "위치 · 변형",
                 "좌표와 각도",
                 (
-                    ("X", "metric_x", self.x_spin),
-                    ("Y", "metric_y", self.y_spin),
-                    ("회전", "metric_rotation", self.rotation_spin),
+                    ("X", self.x_spin),
+                    ("Y", self.y_spin),
+                    ("회전", self.rotation_spin),
                 ),
             ),
             (
                 "텍스트 비율",
                 "선택 상자만",
                 (
-                    ("가로", "metric_width", self.transform_scale_x_spin),
-                    ("세로", "metric_height", self.transform_scale_y_spin),
+                    ("가로", self.transform_scale_x_spin),
+                    ("세로", self.transform_scale_y_spin),
                 ),
             ),
             (
                 "효과음 왜곡",
                 "편집 가능 유지",
                 (
-                    ("기울기", "metric_rotation", self.transform_skew_spin),
-                    ("원근", "metric_padding", self.transform_perspective_spin),
+                    ("기울기", self.transform_skew_spin),
+                    ("원근", self.transform_perspective_spin),
                 ),
             ),
             (
                 "영역",
                 "박스 크기와 안쪽 여백",
                 (
-                    ("너비", "metric_width", self.w_spin),
-                    ("높이", "metric_height", self.h_spin),
-                    ("여백", "metric_padding", self.padding_spin),
+                    ("너비", self.w_spin),
+                    ("높이", self.h_spin),
+                    ("여백", self.padding_spin),
                 ),
             ),
         )
         for group_label, group_hint, fields in metric_groups:
             group_widget = QWidget(region_page)
-            group_widget.setObjectName("MetricGroup")
             group_widget.setToolTip(group_hint)
             group_layout = QVBoxLayout(group_widget)
-            group_layout.setContentsMargins(5, 4, 5, 4)
-            group_layout.setSpacing(3)
+            group_layout.setContentsMargins(0, 2, 0, 2)
+            group_layout.setSpacing(2)
             group_header = QHBoxLayout()
             group_header.setContentsMargins(2, 0, 2, 0)
             label = QLabel(group_label, group_widget)
@@ -3941,49 +4035,36 @@ class AdvancedEditorWindow(QMainWindow):
             row_widget.setFixedHeight(28)
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(4)
-            for field_label, icon_name, spin in fields:
+            row_layout.setSpacing(0)
+            for index, (field_label, spin) in enumerate(fields):
                 field = QWidget(row_widget)
                 field.setObjectName("MetricField")
+                field.setProperty("metricDivider", index < len(fields) - 1)
                 field_layout = QHBoxLayout(field)
-                field_layout.setContentsMargins(1, 1, 1, 1)
-                field_layout.setSpacing(0)
-                lead = QWidget(field)
-                lead.setObjectName("MetricFieldLead")
-                lead.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
-                lead_layout = QHBoxLayout(lead)
-                lead_layout.setContentsMargins(3, 0, 1, 0)
-                lead_layout.setSpacing(2)
-                icon = QLabel(lead)
-                icon.setObjectName("MetricIcon")
-                icon.setPixmap(_editor_icon(icon_name, "#94a3b8").pixmap(12, 12))
-                lead_layout.addWidget(icon)
-                label = QLabel(field_label, lead)
+                field_layout.setContentsMargins(8, 1, 3, 1)
+                field_layout.setSpacing(2)
+                label = QLabel(field_label, field)
                 label.setObjectName("MetricFieldLabel")
-                lead_layout.addWidget(label)
-                field_layout.addWidget(lead)
+                field_layout.addWidget(label)
                 spin.setPrefix("")
                 spin.setAccessibleName(field_label)
                 spin.setToolTip(field_label)
                 field_layout.addWidget(spin, 1)
                 stepper = QWidget(field)
-                stepper.setObjectName("MetricStepper")
                 stepper.setFixedSize(15, 26)
                 stepper_layout = QVBoxLayout(stepper)
                 stepper_layout.setContentsMargins(0, 0, 0, 0)
                 stepper_layout.setSpacing(0)
-                for icon_name, role, tooltip, callback in (
-                    ("chevron_up", "up", f"{field_label} 증가", spin.stepUp),
+                for icon_name, tooltip, callback in (
+                    ("chevron_up", f"{field_label} 증가", spin.stepUp),
                     (
                         "chevron_down",
-                        "down",
                         f"{field_label} 감소",
                         spin.stepDown,
                     ),
                 ):
                     button = QToolButton(stepper)
                     button.setObjectName("MetricStepButton")
-                    button.setProperty("stepRole", role)
                     button.setFixedSize(15, 13)
                     button.setIcon(_editor_icon(icon_name, "#334155"))
                     button.setIconSize(QSize(10, 10))
@@ -3998,6 +4079,7 @@ class AdvancedEditorWindow(QMainWindow):
         font_row = QHBoxLayout()
         font_row.addWidget(QLabel("글꼴 가족"))
         self.font_family_combo = FontGridComboBox()
+        self.font_family_combo.setProperty("inspectorField", True)
         self.font_family_combo.setMinimumContentsLength(18)
         self.font_family_combo.setAccessibleName("글꼴 가족 검색")
         self.font_family_combo.setToolTip(
@@ -4013,6 +4095,7 @@ class AdvancedEditorWindow(QMainWindow):
         )
         font_row.addWidget(self.font_family_combo, 1)
         refresh_fonts_button = QPushButton("새로고침")
+        refresh_fonts_button.setProperty("inspectorAction", True)
         refresh_fonts_button.clicked.connect(self.populate_font_combo)
         font_row.addWidget(refresh_fonts_button)
         region_layout.addLayout(font_row)
@@ -4020,6 +4103,7 @@ class AdvancedEditorWindow(QMainWindow):
         font_style_row = QHBoxLayout()
         font_style_row.addWidget(QLabel("굵기/스타일"))
         self.font_style_combo = ModernComboBox()
+        self.font_style_combo.setProperty("inspectorField", True)
         self.font_style_combo.setMinimumContentsLength(18)
         self.font_style_combo.setToolTip(
             "선택한 글꼴 가족에서 Regular, Light, Bold, Italic 등의 파일을 고릅니다."
@@ -4030,7 +4114,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.font_preview_label = QLabel("가나다라마바사 ABC 123  ! ? . , …")
         self.font_preview_label.setObjectName("FontPreviewLabel")
         self.font_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.font_preview_label.setMinimumHeight(32)
+        self.font_preview_label.setMinimumHeight(30)
         self.font_preview_label.setToolTip("현재 선택한 글꼴 미리보기")
         region_layout.addWidget(self.font_preview_label)
         self.populate_font_combo()
@@ -4040,18 +4124,34 @@ class AdvancedEditorWindow(QMainWindow):
         region_layout.addWidget(metrics_label)
         region_layout.addLayout(metrics_layout)
 
-        color_label = QLabel("색상")
-        color_label.setObjectName("CompactSectionLabel")
-        region_layout.addWidget(color_label)
         color_row = QHBoxLayout()
-        self.font_color_button = QPushButton("글자 색")
-        self.font_color_button.setProperty("colorLabel", "글자 색")
+        color_row.setSpacing(5)
+        color_label = QLabel("색상")
+        color_label.setObjectName("ColorSectionLabel")
+        color_row.addWidget(color_label)
+        self.swap_text_colors_button = QToolButton(region_page)
+        self.swap_text_colors_button.setObjectName("SwapTextColors")
+        self.swap_text_colors_button.setIcon(_editor_icon("swap_colors", "#475569"))
+        self.swap_text_colors_button.setIconSize(QSize(15, 15))
+        self.swap_text_colors_button.setFixedSize(24, 24)
+        self.swap_text_colors_button.setToolTip("글자 색과 외곽선 색 바꾸기")
+        self.swap_text_colors_button.setAccessibleName("글자 색과 외곽선 색 바꾸기")
+        self.swap_text_colors_button.clicked.connect(self.swap_selected_text_colors)
+        color_row.addWidget(self.swap_text_colors_button)
+        self.font_color_button = QPushButton("글자")
+        self.font_color_button.setObjectName("TextColorSwatch")
+        self.font_color_button.setProperty("colorLabel", "글자")
+        self.font_color_button.setProperty("noAutoIcon", True)
+        self.font_color_button.setToolTip("글자 색 선택")
         self.font_color_button.clicked.connect(self.choose_font_color)
-        self.stroke_color_button = QPushButton("외곽선 색")
-        self.stroke_color_button.setProperty("colorLabel", "외곽선 색")
+        self.stroke_color_button = QPushButton("외곽선")
+        self.stroke_color_button.setObjectName("TextColorSwatch")
+        self.stroke_color_button.setProperty("colorLabel", "외곽선")
+        self.stroke_color_button.setProperty("noAutoIcon", True)
+        self.stroke_color_button.setToolTip("외곽선 색 선택")
         self.stroke_color_button.clicked.connect(self.choose_stroke_color)
-        color_row.addWidget(self.font_color_button)
-        color_row.addWidget(self.stroke_color_button)
+        color_row.addWidget(self.font_color_button, 1)
+        color_row.addWidget(self.stroke_color_button, 1)
         region_layout.addLayout(color_row)
         region_layout.addStretch(1)
         self.inspector_sections.addTab(region_page, "텍스트 · 배치")
@@ -4084,6 +4184,7 @@ class AdvancedEditorWindow(QMainWindow):
         scroll.setMaximumWidth(470)
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         scroll.setWidget(panel)
 
         shell = QWidget(self)
@@ -6844,6 +6945,7 @@ class AdvancedEditorWindow(QMainWindow):
                 self.line_spacing_spin,
                 self.padding_spin,
                 self.stroke_width_spin,
+                self.swap_text_colors_button,
                 self.font_color_button,
                 self.stroke_color_button,
                 self.font_family_combo,
@@ -6901,12 +7003,9 @@ class AdvancedEditorWindow(QMainWindow):
             self._set_color_button(
                 self.font_color_button, region.get("font_color") or "#000000"
             )
-            outline_rgb = render.get("outline_color_rgb")
-            if isinstance(outline_rgb, (list, tuple)) and len(outline_rgb) >= 3:
-                outline_hex = f"#{int(outline_rgb[0]):02x}{int(outline_rgb[1]):02x}{int(outline_rgb[2]):02x}"
-            else:
-                outline_hex = "#ffffff"
-            self._set_color_button(self.stroke_color_button, outline_hex)
+            self._set_color_button(
+                self.stroke_color_button, _hex_from_qcolor(self._region_outline_color(region))
+            )
             font_target = self._font_combo_target(render.get("font_dir") or "")
             self._select_font_target(font_target)
             self._set_alignment(render.get("text_alignment") or "center")
@@ -7430,24 +7529,22 @@ class AdvancedEditorWindow(QMainWindow):
         self._set_color_button(self.font_color_button, value)
         self.schedule_exact_preview()
 
+    @staticmethod
+    def _region_outline_color(region: dict[str, Any]) -> QColor:
+        outline_rgb = region.get("render", {}).get("outline_color_rgb")
+        if isinstance(outline_rgb, (list, tuple)) and len(outline_rgb) >= 3:
+            return QColor(*(int(channel) for channel in outline_rgb[:3]))
+        return QColor("#ffffff")
+
     def choose_stroke_color(self) -> None:
         region = self.selected_region()
         if region is None:
             return
-        render = region.setdefault("render", {})
-        outline_rgb = render.get("outline_color_rgb")
-        if isinstance(outline_rgb, (list, tuple)) and len(outline_rgb) >= 3:
-            current = QColor(
-                int(outline_rgb[0]),
-                int(outline_rgb[1]),
-                int(outline_rgb[2]),
-            )
-        else:
-            current = QColor("#ffffff")
-        color = QColorDialog.getColor(current, self, "외곽선 색 선택")
+        color = QColorDialog.getColor(self._region_outline_color(region), self, "외곽선 색 선택")
         if not color.isValid():
             return
         self._push_history("외곽선 색 변경")
+        render = region.setdefault("render", {})
         value = _hex_from_qcolor(color)
         render["outline_color_rgb"] = list(_rgb_from_hex(value, (255, 255, 255)))
         if float(render.get("outline_width") or 0.0) <= 0.0:
@@ -7455,6 +7552,24 @@ class AdvancedEditorWindow(QMainWindow):
             self.stroke_width_spin.setValue(1.0)
         self._mark_region_dirty(region)
         self._set_color_button(self.stroke_color_button, value)
+        self.schedule_exact_preview()
+
+    def swap_selected_text_colors(self) -> None:
+        region = self.selected_region()
+        if region is None or region.get("ai_image"):
+            return
+        fill = QColor(region.get("font_color") or "#000000")
+        outline = self._region_outline_color(region)
+        if fill == outline:
+            return
+        self._push_history("글자·외곽선 색상 교환")
+        fill_hex, outline_hex = _hex_from_qcolor(fill), _hex_from_qcolor(outline)
+        region["font_color"] = outline_hex
+        region["text_color_rgb"] = list(_rgb_from_hex(outline_hex))
+        region.setdefault("render", {})["outline_color_rgb"] = list(_rgb_from_hex(fill_hex))
+        self._mark_region_dirty(region)
+        self._set_color_button(self.font_color_button, outline_hex)
+        self._set_color_button(self.stroke_color_button, fill_hex)
         self.schedule_exact_preview()
 
     def wrap_translation_selection(self, marker: str) -> None:
@@ -9322,6 +9437,21 @@ class AdvancedEditorWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        if hasattr(self, "brush_shape_label_action"):
+            compact = self.width() < 1500
+            narrow = self.width() < 1320
+            style = (
+                Qt.ToolButtonStyle.ToolButtonIconOnly if compact
+                else Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+            )
+            for action in (self.undo_action, self.redo_action):
+                button = self.action_toolbar.widgetForAction(action)
+                if button is not None and button.toolButtonStyle() != style:
+                    button.setToolButtonStyle(style)
+            slider_width = 64 if narrow else 92 if compact else 120
+            if self.brush_slider.width() != slider_width:
+                self.brush_slider.setFixedWidth(slider_width)
+            self.brush_shape_label_action.setVisible(not narrow)
         if hasattr(self, "save_toast") and self.save_toast.isVisible():
             self._position_save_toast()
 
