@@ -71,7 +71,6 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
-    QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMenu,
@@ -99,6 +98,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from advanced_editor.ai_lettering_activity import AiLetteringActivity
 from advanced_editor.backend import (
     _build_translation_config,
     detect_and_recognize,
@@ -108,6 +108,7 @@ from advanced_editor.backend import (
 )
 from advanced_editor.job_picker import OpenEditorJobDialog
 from advanced_editor.font_picker import FontPicker
+from advanced_editor.page_list import EditorPageList
 from advanced_editor.standalone import (
     EDITOR_ICON,
     editor_application,
@@ -331,6 +332,26 @@ class ResizableTextEdit(QTextEdit):
         bottom = self.viewport().height() - 4
         for offset in (4, 8, 12):
             painter.drawLine(right - offset, bottom, right, bottom - offset)
+
+
+class MetricValueField(QFrame):
+    def __init__(self, spin: QAbstractSpinBox, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setObjectName("MetricValueField")
+        self.setToolTip("휠로 조절")
+        self.spin = spin
+
+    def wheelEvent(self, event) -> None:
+        if self.spin.isEnabled():
+            self.spin.wheelEvent(event)
+        else:
+            event.ignore()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.Wheel:
+            self.wheelEvent(event)
+            return event.isAccepted()
+        return super().eventFilter(watched, event)
 
 
 class TranslationRerollButton(QToolButton):
@@ -2165,12 +2186,8 @@ class AdvancedEditorWindow(QMainWindow):
         self.session_panel_action.triggered.connect(self._set_session_panel_visible)
         action_toolbar.addAction(self.session_panel_action)
 
-        toolbar_spacer = QWidget(self)
-        toolbar_spacer.setObjectName("TopBarSpacer")
-        toolbar_spacer.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-        action_toolbar.addWidget(toolbar_spacer)
+        self.ai_lettering_activity = AiLetteringActivity(self)
+        action_toolbar.addWidget(self.ai_lettering_activity)
 
         self.render_status_widget = QWidget(self)
         self.render_status_widget.setObjectName("RenderStatus")
@@ -2317,6 +2334,7 @@ class AdvancedEditorWindow(QMainWindow):
         self.ai_job_feedback.historyRequested.connect(self._show_lettering_history)
         self.ai_job_feedback.clearRequested.connect(self._ai_jobs.clear_finished)
         zoom_layout.addWidget(self.ai_job_feedback)
+        self.ai_lettering_activity.align_above(self.ai_job_feedback)
 
         canvas_layout.addWidget(zoom_bar)
         canvas_view = QWidget(canvas_panel)
@@ -2447,9 +2465,10 @@ class AdvancedEditorWindow(QMainWindow):
                 border: 0;
             }
             QToolBar#TopBar QWidget#RenderStatus {
-                background: transparent;
-                border: 0;
-                border-radius: 0;
+                background: #202e3a;
+                border: 1px solid #384957;
+                border-radius: 4px;
+                margin-right: 3px;
             }
             QToolBar#TopBar QLabel#RenderStatusLabel {
                 color: #cbd5e1;
@@ -2628,12 +2647,9 @@ class AdvancedEditorWindow(QMainWindow):
                 border-radius: 4px;
                 padding: 1px 6px;
             }
-            QWidget#MetricRow, QWidget#TextStyleControl {
+            QWidget#MetricField, QWidget#TextStyleControl {
                 background: #f1f4f8;
                 border-radius: 4px;
-            }
-            QWidget#MetricField[metricDivider="true"] {
-                border-right: 1px solid #d9e1e9;
             }
             QLabel#MetricGroupLabel {
                 color: #27364a;
@@ -2701,6 +2717,35 @@ class AdvancedEditorWindow(QMainWindow):
                 color: #1d4ed8;
                 font-weight: 700;
             }
+            QWidget#TextLayoutPage QPushButton[regionAction="true"] {
+                background: #f7f9fc;
+                border-color: #d3dde8;
+            }
+            QWidget#TextLayoutPage QPushButton[regionAction="true"]:hover {
+                background: #edf3f9;
+                border-color: #a5b8ce;
+            }
+            QWidget#TextLayoutPage QPushButton[regionAction="true"]:pressed {
+                background: #dce8f6;
+            }
+            QWidget#TextLayoutPage QPushButton[regionAction="true"]:focus {
+                border-color: #608dcc;
+            }
+            QWidget#TextLayoutPage QPushButton#DeleteRegionButton {
+                color: #88464e;
+                background: #fcf4f5;
+                border-color: #ead5d8;
+            }
+            QWidget#TextLayoutPage QPushButton#DeleteRegionButton:hover {
+                background: #faeef0;
+                border-color: #dfb8be;
+            }
+            QWidget#TextLayoutPage QPushButton#DeleteRegionButton:pressed {
+                background: #f3e2e5;
+            }
+            QWidget#TextLayoutPage QPushButton#DeleteRegionButton:focus {
+                border-color: #608dcc;
+            }
             QWidget#TextLayoutPage QComboBox,
             QWidget#TextLayoutPage QSpinBox,
             QWidget#TextLayoutPage QDoubleSpinBox {
@@ -2713,17 +2758,30 @@ class AdvancedEditorWindow(QMainWindow):
                 padding-left: 8px;
                 padding-right: 8px;
             }
-            QWidget#MetricField QSpinBox,
-            QWidget#MetricField QDoubleSpinBox {
+            QFrame#MetricValueField {
+                background: #ffffff;
+                border: 1px solid #d4dde8;
+                border-radius: 4px;
+            }
+            QFrame#MetricValueField:enabled:hover {
+                background: #e8f1fe;
+                border-color: #7094c3;
+            }
+            QFrame#MetricValueField:disabled {
+                background: #f4f7fa;
+                border-color: #e1e7ed;
+            }
+            QFrame#MetricValueField QSpinBox,
+            QFrame#MetricValueField QDoubleSpinBox {
                 background: transparent;
                 border: 0;
                 border-radius: 3px;
-                min-height: 20px;
-                padding: 2px 4px;
+                min-height: 18px;
+                padding: 0 3px;
             }
-            QWidget#MetricField QSpinBox:focus,
-            QWidget#MetricField QDoubleSpinBox:focus {
-                background: #dbeafe;
+            QFrame#MetricValueField QSpinBox:focus,
+            QFrame#MetricValueField QDoubleSpinBox:focus {
+                background: #e8f1fe;
             }
             QToolButton#MetricStepButton {
                 background: transparent;
@@ -3194,25 +3252,27 @@ class AdvancedEditorWindow(QMainWindow):
             QWidget#SessionPanel QPushButton:focus {
                 border-color: #608dcc;
             }
+            QToolButton#PageListMode {
+                background: #fbfdff;
+                border: 1px solid #d7e0e9;
+                border-radius: 4px;
+            }
+            QToolButton#PageListMode:hover {
+                background: #edf3f9;
+            }
+            QToolButton#PageListMode:checked {
+                background: #e1ecfa;
+                border-color: #88a7cc;
+            }
+            QToolButton#PageListMode:focus {
+                border-color: #608dcc;
+            }
             QWidget#SessionPanel QListWidget {
                 background: transparent;
                 border: 0;
                 border-top: 1px solid #dae2ea;
                 border-radius: 0;
                 padding: 3px 0;
-            }
-            QWidget#SessionPanel QListWidget::item {
-                min-height: 22px;
-                padding: 5px 8px;
-                border-radius: 4px;
-            }
-            QWidget#SessionPanel QListWidget::item:hover {
-                background: #e9eff6;
-            }
-            QWidget#SessionPanel QListWidget::item:selected {
-                background: #dce8f6;
-                color: #244e82;
-                font-weight: 700;
             }
             """
         )
@@ -3487,6 +3547,15 @@ class AdvancedEditorWindow(QMainWindow):
         self.session_refresh_button.setToolTip("편집 중인 페이지를 유지하고 완료된 이미지를 추가합니다.")
         self.session_refresh_button.clicked.connect(self._refresh_batch_pages)
         title_row.addWidget(self.session_refresh_button)
+        view_button = QToolButton(panel)
+        view_button.setObjectName("PageListMode")
+        view_button.setIcon(_editor_icon("images", "#405871"))
+        view_button.setIconSize(QSize(15, 15))
+        view_button.setFixedSize(28, 28)
+        view_button.setCheckable(True)
+        view_button.setAccessibleName("썸네일 보기")
+        view_button.setToolTip("썸네일 보기")
+        title_row.addWidget(view_button)
         layout.addLayout(title_row)
 
         self.session_selection_label = QLabel("")
@@ -3503,7 +3572,12 @@ class AdvancedEditorWindow(QMainWindow):
         selection_actions.addWidget(clear_selection_button)
         layout.addLayout(selection_actions)
 
-        self.session_list = QListWidget()
+        self.session_list = EditorPageList(_editor_icon("check", "#315f93"))
+        self.session_list.setAccessibleName("페이지 이미지 목록")
+        view_button.toggled.connect(self.session_list.set_thumbnails)
+        view_button.toggled.connect(
+            lambda checked: view_button.setToolTip("번호 목록 보기" if checked else "썸네일 보기")
+        )
         self.session_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.session_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.session_list.setSelectionMode(
@@ -3784,9 +3858,13 @@ class AdvancedEditorWindow(QMainWindow):
         add_button = QPushButton("추가")
         add_button.clicked.connect(self.add_text_region)
         delete_button = QPushButton("삭제")
+        delete_button.setObjectName("DeleteRegionButton")
+        delete_button.setProperty("preserveIcon", True)
+        delete_button.setIcon(_editor_icon("trash", "#88464e"))
+        delete_button.setIconSize(QSize(17, 17))
         delete_button.clicked.connect(self.delete_selected_region)
         for button in (add_button, delete_button):
-            button.setProperty("inspectorAction", True)
+            button.setProperty("regionAction", True)
         add_button.setFixedWidth(76)
         delete_button.setFixedWidth(76)
         region_selector_row.addWidget(add_button)
@@ -4004,6 +4082,7 @@ class AdvancedEditorWindow(QMainWindow):
                 ),
             ),
         )
+        self.metric_value_fields = []
         for group_label, group_hint, fields in metric_groups:
             group_widget = QWidget(region_page)
             group_widget.setToolTip(group_hint)
@@ -4031,27 +4110,31 @@ class AdvancedEditorWindow(QMainWindow):
             group_layout.addLayout(group_header)
 
             row_widget = QWidget(group_widget)
-            row_widget.setObjectName("MetricRow")
             row_widget.setFixedHeight(28)
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(0)
-            for index, (field_label, spin) in enumerate(fields):
+            row_layout.setSpacing(6)
+            for field_label, spin in fields:
                 field = QWidget(row_widget)
                 field.setObjectName("MetricField")
-                field.setProperty("metricDivider", index < len(fields) - 1)
                 field_layout = QHBoxLayout(field)
-                field_layout.setContentsMargins(8, 1, 3, 1)
-                field_layout.setSpacing(2)
+                field_layout.setContentsMargins(6, 2, 3, 2)
+                field_layout.setSpacing(7)
                 label = QLabel(field_label, field)
                 label.setObjectName("MetricFieldLabel")
                 field_layout.addWidget(label)
                 spin.setPrefix("")
                 spin.setAccessibleName(field_label)
-                spin.setToolTip(field_label)
-                field_layout.addWidget(spin, 1)
-                stepper = QWidget(field)
-                stepper.setFixedSize(15, 26)
+                spin.setToolTip(f"{field_label} · 휠로 조절")
+                value_field = MetricValueField(spin, field)
+                self.metric_value_fields.append(value_field)
+                value_layout = QHBoxLayout(value_field)
+                value_layout.setContentsMargins(1, 1, 2, 1)
+                value_layout.setSpacing(0)
+                value_layout.addWidget(spin, 1)
+                stepper = QWidget(value_field)
+                stepper.setFixedSize(14, 22)
+                stepper.installEventFilter(value_field)
                 stepper_layout = QVBoxLayout(stepper)
                 stepper_layout.setContentsMargins(0, 0, 0, 0)
                 stepper_layout.setSpacing(0)
@@ -4065,13 +4148,15 @@ class AdvancedEditorWindow(QMainWindow):
                 ):
                     button = QToolButton(stepper)
                     button.setObjectName("MetricStepButton")
-                    button.setFixedSize(15, 13)
+                    button.setFixedSize(14, 11)
                     button.setIcon(_editor_icon(icon_name, "#334155"))
                     button.setIconSize(QSize(10, 10))
                     button.setToolTip(tooltip)
+                    button.installEventFilter(value_field)
                     button.clicked.connect(callback)
                     stepper_layout.addWidget(button)
-                field_layout.addWidget(stepper)
+                value_layout.addWidget(stepper)
+                field_layout.addWidget(value_field, 1)
                 row_layout.addWidget(field, 1)
             group_layout.addWidget(row_widget)
             metrics_layout.addWidget(group_widget)
@@ -6570,6 +6655,10 @@ class AdvancedEditorWindow(QMainWindow):
         elif not pending:
             self._ai_sfx_timer.stop()
         if hasattr(self, "ai_job_feedback"):
+            self.ai_lettering_activity.set_active(any(
+                job["kind"] == "sfx" and job["state"] == "running"
+                for job in self._ai_jobs.jobs.values()
+            ))
             ready = image_region or self._selected_ai_draft("sfx") or self._selected_ai_draft("translation")
             self.ai_job_feedback.set_jobs(self._ai_jobs.jobs, self._ai_jobs.concurrency, ready=bool(ready))
 
@@ -6931,20 +7020,8 @@ class AdvancedEditorWindow(QMainWindow):
                 self.source_edit,
                 self.enabled_checkbox,
                 self.vertical_checkbox,
-                self.x_spin,
-                self.y_spin,
-                self.w_spin,
-                self.h_spin,
-                self.font_size_spin,
-                self.rotation_spin,
-                self.transform_scale_x_spin,
-                self.transform_scale_y_spin,
-                self.transform_skew_spin,
-                self.transform_perspective_spin,
+                *self.metric_value_fields,
                 self.transform_reset_button,
-                self.line_spacing_spin,
-                self.padding_spin,
-                self.stroke_width_spin,
                 self.swap_text_colors_button,
                 self.font_color_button,
                 self.stroke_color_button,

@@ -89,9 +89,11 @@ class AiJobFeedbackTest(unittest.TestCase):
         self.assertFalse(self.widget.result_button.isVisible())
         self.assertEqual(
             [badge.text() for _, badge in self.widget.summary_badges if badge.isVisible()],
-            ["진행 1", "대기 1", "결과 1"],
+            ["진행 1", "결과 1"],
         )
         self.assertIn("결과 1", self.widget.summary_button.accessibleName())
+        self.assertNotIn("대기", self.widget.summary_button.toolTip())
+        self.assertIn("대기 1", self.widget.counts_label.text())
         self.widget.resize(80, 30)
         self.pump()
         self.assertTrue(self.widget.summary_title.isVisible())

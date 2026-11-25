@@ -77,6 +77,7 @@ def page_image(page, bounds):
                 "translated_image_path",
                 "base_image_path",
                 "original_snapshot_path",
+                "source_image_path",
             )
         ]
     except (OSError, ValueError):
@@ -89,6 +90,10 @@ def page_image(page, bounds):
             except (OSError, ValueError):
                 continue
     return None
+
+
+def request_page_image(page, bounds):
+    return _pool.submit(page_image, page, bounds)
 
 
 class ImagePane(QLabel):
@@ -209,8 +214,8 @@ class SessionPages(QWidget):
 
     def _request(self, index, large):
         version = self.version
-        future = _pool.submit(
-            page_image, Path(self.paths[index]), (1050, 1400) if large else (108, 138)
+        future = request_page_image(
+            Path(self.paths[index]), (1050, 1400) if large else (108, 138)
         )
         self.pending[large] = future
 

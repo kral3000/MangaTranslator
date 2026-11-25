@@ -128,7 +128,7 @@ class AiJobFeedback(QWidget):
         stats_layout.setContentsMargins(0, 0, 0, 0)
         stats_layout.setSpacing(2)
         self.summary_badges = []
-        for status, name in (("running", "진행"), ("queued", "대기"), ("ready", "결과")):
+        for status, name in (("running", "진행"), ("ready", "결과")):
             badge = QLabel(f"{name} 0")
             badge.setObjectName("AiJobSummaryBadge")
             badge.setProperty("status", status)
@@ -229,9 +229,6 @@ class AiJobFeedback(QWidget):
             QLabel#AiJobSummaryBadge[active="true"][status="running"] {
                 background: #203e62; color: #bfdbfe;
             }
-            QLabel#AiJobSummaryBadge[active="true"][status="queued"] {
-                background: #4c3d23; color: #fde68a;
-            }
             QLabel#AiJobSummaryBadge[active="true"][status="ready"] {
                 background: #23463d; color: #bbf7d0;
             }
@@ -259,7 +256,7 @@ class AiJobFeedback(QWidget):
         running = sum(job["state"] == "running" for job in jobs.values())
         queued = sum(job["state"] == "queued" for job in jobs.values())
         completed = sum(job["state"] in {"ready", "stale"} for job in jobs.values())
-        for (name, badge), count in zip(self.summary_badges, (running, queued, completed)):
+        for (name, badge), count in zip(self.summary_badges, (running, completed)):
             text = f"{name} {count}"
             if badge.text() != text:
                 badge.setText(text)
@@ -278,7 +275,7 @@ class AiJobFeedback(QWidget):
             )
         )
         self.result_button.setEnabled(ready)
-        summary = f"AI 작업 · 진행 {running} · 대기 {queued} · 결과 {completed}"
+        summary = f"AI 작업 · 진행 {running} · 결과 {completed}"
         self.summary_button.setToolTip(summary)
         self.summary_button.setAccessibleName(f"{summary} · 상세 열기")
         self.selection_result_button.setEnabled(ready)

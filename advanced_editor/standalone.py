@@ -36,6 +36,16 @@ def register_editor_ui_font():
             QFontDatabase.addApplicationFont(str(font_path))
 
 
+def allow_loading_animation():
+    if sys.platform == "win32":
+        import ctypes
+
+        enabled = ctypes.c_int()
+        if ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(enabled), 0):
+            return bool(enabled.value)
+    return True
+
+
 def startup_dialog(message="고급 편집기 시작 중…", parent=None):
     register_editor_ui_font()
     dialog = QDialog(parent, Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
