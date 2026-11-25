@@ -819,15 +819,17 @@ def create_layout(
                                 allow_custom_value=True,
                             )
                     with gr.Column(scale=1):
-                        with gr.Group(visible=False, elem_classes=["translation-wait"]) as single_wait_group:
-                            single_wait_motion = gr.HTML(MOTION_HTML, padding=False)
-                            single_wait_count = gr.HTML(padding=False)
-                        output_image = gr.Image(
-                            type="pil",
-                            label="Translated Image",
-                            interactive=False,
-                            elem_id="translator_output_image",
-                        )
+                        with gr.Column(scale=0, elem_classes=["translation-result-slot"]):
+                            output_image = gr.Image(
+                                type="pil",
+                                label="Translated Image",
+                                interactive=False,
+                                elem_id="translator_output_image",
+                                elem_classes=["translation-result-view"],
+                            )
+                            with gr.Column(visible=False, elem_classes=["translation-wait"]) as single_wait_group:
+                                gr.HTML(MOTION_HTML, padding=False)
+                                single_wait_count = gr.HTML(padding=False)
                         status_message = gr.Textbox(
                             label="Status",
                             interactive=False,
@@ -1109,17 +1111,19 @@ def create_layout(
                             ),
                         )
                     with gr.Column(scale=1):
-                        with gr.Group(visible=False, elem_classes=["translation-wait"]) as batch_wait_group:
-                            batch_wait_motion = gr.HTML(MOTION_HTML, padding=False)
-                            batch_wait_count = gr.HTML(padding=False)
-                        batch_output_gallery = gr.Gallery(
-                            label="Translated Images",
-                            show_label=True,
-                            columns=4,
-                            rows=2,
-                            height="auto",
-                            object_fit="contain",
-                        )
+                        with gr.Column(scale=0, elem_classes=["translation-result-slot"]):
+                            batch_output_gallery = gr.Gallery(
+                                label="Translated Images",
+                                show_label=True,
+                                columns=4,
+                                rows=2,
+                                height="auto",
+                                object_fit="contain",
+                                elem_classes=["translation-result-view"],
+                            )
+                            with gr.Column(visible=False, elem_classes=["translation-wait"]) as batch_wait_group:
+                                gr.HTML(MOTION_HTML, padding=False)
+                                batch_wait_count = gr.HTML(padding=False)
                         batch_status_message = gr.Textbox(
                             label="Status",
                             interactive=False,
@@ -4791,27 +4795,25 @@ def create_layout(
             wait = TranslationWait(batch=batch)
             return (
                 *process_buttons(True, batch), wait, gr.update(active=batch),
-                gr.update(visible=True), gr.update(visible=True), wait.render(),
+                gr.update(visible=True), wait.render(),
             )
 
         def end_translation(wait, *, batch=False):
             wait.finish("failed")
             return (
                 *process_buttons(False, batch), gr.update(active=False),
-                gr.update(visible=False), wait.render(),
+                gr.update(visible=False),
             )
 
         def cancel_translation(wait):
             if wait is None:
                 callbacks.cancel_process()
-                return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
+                return gr.skip(), gr.skip(), gr.skip()
             wait.cancellation.cancel()
             wait.finish("cancelled")
             return (
                 gr.update(active=False),
                 gr.update(visible=False), gr.update(visible=False),
-                gr.skip() if wait.batch else wait.render(),
-                wait.render() if wait.batch else gr.skip(),
             )
 
         def update_batch_readout(wait):
@@ -4836,8 +4838,7 @@ def create_layout(
             )
 
         cancel_wait_outputs = [
-            translation_wait_timer, single_wait_motion, batch_wait_motion,
-            single_wait_count, batch_wait_count,
+            translation_wait_timer, single_wait_group, batch_wait_group,
         ]
         translate_event = translate_button.click(
             fn=begin_translation,
@@ -4852,7 +4853,6 @@ def create_layout(
                 translation_wait,
                 translation_wait_timer,
                 single_wait_group,
-                single_wait_motion,
                 single_wait_count,
             ],
             queue=False,
@@ -4882,8 +4882,7 @@ def create_layout(
                 batch_cancel_button,
                 translation_busy,
                 translation_wait_timer,
-                single_wait_motion,
-                single_wait_count,
+                single_wait_group,
             ],
             queue=False,
             show_progress="hidden",
@@ -4912,7 +4911,6 @@ def create_layout(
                 translation_wait,
                 translation_wait_timer,
                 batch_wait_group,
-                batch_wait_motion,
                 batch_wait_count,
             ],
             queue=False,
@@ -4956,8 +4954,7 @@ def create_layout(
                 cancel_button,
                 translation_busy,
                 translation_wait_timer,
-                batch_wait_motion,
-                batch_wait_count,
+                batch_wait_group,
             ],
             queue=False,
             show_progress="hidden",
