@@ -98,16 +98,16 @@ class AiJobFeedback(QWidget):
     clearRequested = pyqtSignal()
     resultRequested = pyqtSignal()
 
-    def __init__(self, parent=None, *, chevron_icon=None):
+    def __init__(self, parent=None, *, chevron_icon=None, result_icon=None):
         super().__init__(parent)
         self.setObjectName("AiJobFeedback")
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.setMinimumWidth(80)
-        self.setMaximumWidth(346)
+        self.setMaximumWidth(205)
         self.setFixedHeight(30)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(5)
         self.summary_button = QPushButton()
         self.summary_button.setObjectName("AiJobSummary")
         self.summary_button.setProperty("noAutoIcon", True)
@@ -117,12 +117,11 @@ class AiJobFeedback(QWidget):
         layout.addWidget(self.summary_button, 1)
         summary_layout = QHBoxLayout(self.summary_button)
         summary_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
-        summary_layout.setContentsMargins(8, 0, 7, 0)
-        summary_layout.setSpacing(5)
+        summary_layout.setContentsMargins(7, 0, 6, 0)
+        summary_layout.setSpacing(4)
         self.summary_title = QLabel("AI 작업")
         self.summary_title.setObjectName("AiJobSummaryTitle")
         summary_layout.addWidget(self.summary_title)
-        summary_layout.addStretch()
         self.summary_stats = QWidget()
         stats_layout = QHBoxLayout(self.summary_stats)
         stats_layout.setContentsMargins(0, 0, 0, 0)
@@ -135,7 +134,6 @@ class AiJobFeedback(QWidget):
             self.summary_badges.append((name, badge))
             stats_layout.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
         summary_layout.addWidget(self.summary_stats)
-        summary_layout.addStretch(0)
         chevron = QLabel()
         chevron.setFixedWidth(12)
         if chevron_icon is None:
@@ -144,9 +142,15 @@ class AiJobFeedback(QWidget):
         summary_layout.addWidget(chevron)
         for child in (self.summary_title, self.summary_stats, chevron):
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.result_button = QPushButton("결과 보기")
-        self.result_button.setProperty("noAutoIcon", True)
-        self.result_button.setFixedSize(84, 30)
+        if result_icon is None:
+            result_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
+        self.result_button = QPushButton()
+        self.result_button.setIcon(result_icon)
+        self.result_button.setIconSize(QSize(16, 16))
+        self.result_button.setAccessibleName("결과 보기")
+        self.result_button.setToolTip("결과 보기")
+        self.result_button.setProperty("preserveIcon", True)
+        self.result_button.setFixedSize(30, 30)
         self.result_button.clicked.connect(self.resultRequested)
         layout.addWidget(self.result_button)
         self.popup = QFrame(self, Qt.WindowType.Popup)
@@ -295,7 +299,7 @@ class AiJobFeedback(QWidget):
         badges_width = self.summary_stats.sizeHint().width()
         summary_layout = self.summary_button.layout()
         margins = summary_layout.contentsMargins()
-        summary_insets = margins.left() + margins.right() + 12 + 2 * summary_layout.spacing()
+        summary_insets = margins.left() + margins.right() + 12 + summary_layout.spacing()
         toolbar_gap = self.layout().spacing()
         result_width = self.result_button.width() + toolbar_gap
         title_width = self.summary_title.sizeHint().width() + summary_layout.spacing()
@@ -307,7 +311,6 @@ class AiJobFeedback(QWidget):
         show_title = available >= summary_width
         self.summary_stats.setVisible(show_stats)
         self.summary_title.setVisible(show_title or not show_stats)
-        summary_layout.setStretch(3, int(show_stats and not show_title))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

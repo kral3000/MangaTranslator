@@ -55,6 +55,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
     QApplication,
+    QBoxLayout,
     QButtonGroup,
     QCheckBox,
     QColorDialog,
@@ -70,6 +71,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLayout,
     QLineEdit,
     QListWidgetItem,
     QMainWindow,
@@ -354,8 +356,42 @@ class MetricValueField(QFrame):
         return super().eventFilter(watched, event)
 
 
+class CanvasToolbar(QWidget):
+    def __init__(self, zoom_controls, ai_controls, parent):
+        super().__init__(parent)
+        self.setObjectName("ZoomBar")
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.bar_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self.bar_layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self.bar_layout.setContentsMargins(9, 5, 10, 5)
+        self.bar_layout.setSpacing(5)
+        self.bar_layout.addWidget(zoom_controls, 1)
+        self.bar_layout.addWidget(ai_controls, 0, Qt.AlignmentFlag.AlignRight)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        layout = self.bar_layout
+        margins = layout.contentsMargins()
+        available = event.size().width() - margins.left() - margins.right()
+        row_minimum = (
+            layout.itemAt(0).minimumSize().width()
+            + layout.spacing()
+            + layout.itemAt(1).minimumSize().width()
+        )
+        layout.setDirection(
+            QBoxLayout.Direction.LeftToRight if available >= row_minimum
+            else QBoxLayout.Direction.TopToBottom
+        )
+
+    def minimumSizeHint(self) -> QSize:
+        layout = self.bar_layout
+        margins = layout.contentsMargins()
+        width = max(layout.itemAt(index).minimumSize().width() for index in (0, 1))
+        return QSize(width + margins.left() + margins.right(), layout.minimumSize().height())
+
+
 class TranslationRerollButton(QToolButton):
-    """Keep native split-button behavior, with the inspector's drawn chevron."""
+    """Keep native split-button behavior with the canvas toolbar styling."""
 
     def paintEvent(self, event) -> None:
         del event
@@ -367,22 +403,22 @@ class TranslationRerollButton(QToolButton):
         opened = bool(self.menu() and self.menu().isVisible())
         enabled = self.isEnabled()
         hovered = self.underMouse() and enabled
-        border = "#2563eb" if enabled and (opened or self.hasFocus()) else "#93c5fd" if hovered else "#cdd2d1"
-        background = "#dbeafe" if self.isDown() and enabled else "#eff6ff" if hovered else "#ffffff" if enabled else "#edf1f6"
-        ink = "#334155" if enabled else "#94a3b8"
+        border = "#a3cbf6" if enabled and (opened or self.hasFocus()) else "#587994" if hovered else "#415363"
+        background = "#3b5670" if self.isDown() and enabled else "#324657" if hovered else "#273745" if enabled else "#25323e"
+        ink = "#e4ebf1" if enabled else "#9aabbb"
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         outer = QRectF(self.rect()).adjusted(.5, .5, -.5, -.5)
         path = QPainterPath()
-        path.addRoundedRect(outer, 6, 6)
+        path.addRoundedRect(outer, 4, 4)
         painter.fillPath(path, QColor(background))
         painter.save()
         painter.setClipPath(path)
-        painter.fillRect(menu_rect, QColor("#dbeafe" if opened or hovered else "#edf2f7" if enabled else "#e2e8f0"))
+        painter.fillRect(menu_rect, QColor("#3b5670" if opened else background))
         painter.restore()
         painter.setPen(QPen(QColor(border), 1))
         painter.drawPath(path)
-        painter.setPen(QPen(QColor("#d9ddda"), 1))
+        painter.setPen(QPen(QColor("#415363"), 1))
         painter.drawLine(QPointF(menu_rect.left(), 1), QPointF(menu_rect.left(), self.height() - 2))
         painter.setPen(QColor(ink))
         painter.drawText(QRectF(1, 0, menu_rect.left() - 2, self.height()), Qt.AlignmentFlag.AlignCenter, self.text())
@@ -2270,10 +2306,11 @@ class AdvancedEditorWindow(QMainWindow):
         canvas_layout = QVBoxLayout(canvas_panel)
         canvas_layout.setContentsMargins(0, 0, 0, 0)
         canvas_layout.setSpacing(0)
-        zoom_bar = QWidget(canvas_panel)
-        zoom_bar.setObjectName("ZoomBar")
-        zoom_layout = QHBoxLayout(zoom_bar)
-        zoom_layout.setContentsMargins(9, 5, 10, 5)
+        zoom_controls = QWidget(canvas_panel)
+        zoom_controls.setObjectName("ZoomControls")
+        zoom_controls.setFixedHeight(30)
+        zoom_layout = QHBoxLayout(zoom_controls)
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
         zoom_layout.setSpacing(5)
 
         self.pan_tool_button = QPushButton("화면 이동")
@@ -2295,7 +2332,7 @@ class AdvancedEditorWindow(QMainWindow):
         zoom_layout.addWidget(zoom_out_button)
 
         self.zoom_label = QLabel("100%")
-        self.zoom_label.setMinimumWidth(58)
+        self.zoom_label.setMinimumWidth(46)
         self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.zoom_label.setToolTip(
             "현재 표시 배율입니다. 휠로 확대/축소하고 화면 이동 도구 또는 스크롤바로 이동합니다."
@@ -2324,8 +2361,16 @@ class AdvancedEditorWindow(QMainWindow):
         zoom_layout.addStretch(1)
         from advanced_editor.ai_job_feedback import AiJobFeedback
 
+        ai_controls = QWidget(canvas_panel)
+        ai_controls.setFixedHeight(30)
+        ai_layout = QHBoxLayout(ai_controls)
+        ai_layout.setContentsMargins(0, 0, 0, 0)
+        ai_layout.setSpacing(5)
+        ai_layout.addWidget(self._build_ai_sfx_actions(ai_controls))
         self.ai_job_feedback = AiJobFeedback(
-            zoom_bar, chevron_icon=_editor_icon("chevron_down", "#cbd5e1")
+            ai_controls,
+            chevron_icon=_editor_icon("chevron_down", "#cbd5e1"),
+            result_icon=_editor_icon("render_region", "#e4ebf1"),
         )
         self.ai_job_feedback.jobStopRequested.connect(self._ai_jobs.cancel)
         self.ai_job_feedback.jobResultRequested.connect(self._open_ai_job_result)
@@ -2333,10 +2378,10 @@ class AdvancedEditorWindow(QMainWindow):
         self.ai_job_feedback.concurrencyChanged.connect(self._set_ai_concurrency)
         self.ai_job_feedback.historyRequested.connect(self._show_lettering_history)
         self.ai_job_feedback.clearRequested.connect(self._ai_jobs.clear_finished)
-        zoom_layout.addWidget(self.ai_job_feedback)
-        self.ai_lettering_activity.align_above(self.ai_job_feedback)
+        ai_layout.addWidget(self.ai_job_feedback)
+        self.ai_lettering_activity.align_above(ai_controls)
 
-        canvas_layout.addWidget(zoom_bar)
+        canvas_layout.addWidget(CanvasToolbar(zoom_controls, ai_controls, canvas_panel))
         canvas_view = QWidget(canvas_panel)
         canvas_grid = QGridLayout(canvas_view)
         canvas_grid.setContentsMargins(0, 0, 0, 0)
@@ -2862,6 +2907,7 @@ class AdvancedEditorWindow(QMainWindow):
                 border-radius: 4px;
                 padding: 4px 8px;
             }
+            QWidget#ZoomControls QPushButton { padding-left: 5px; padding-right: 5px; }
             QWidget#ZoomBar QPushButton:hover {
                 background: #324657;
                 border-color: transparent;
@@ -2967,9 +3013,22 @@ class AdvancedEditorWindow(QMainWindow):
             }
             QWidget#AiSfxActions QPushButton {
                 min-height: 0;
-                padding: 3px 4px;
+                padding: 0 4px;
+                background: #273745;
+                border: 1px solid #415363;
                 font-weight: 500;
             }
+            QWidget#AiSfxActions QPushButton:hover {
+                background: #324657;
+                border-color: #587994;
+            }
+            QWidget#AiSfxActions QPushButton:pressed { background: #3b5670; }
+            QWidget#AiSfxActions QPushButton:disabled {
+                background: #25323e;
+                border-color: #415363;
+                color: #9aabbb;
+            }
+            QWidget#AiSfxActions QPushButton:focus { border-color: #a3cbf6; }
             QDialog#BulkFormatDialog QPushButton[dialogRole="primary"] {
                 color: #ffffff;
                 background: #2563eb;
@@ -3370,7 +3429,7 @@ class AdvancedEditorWindow(QMainWindow):
             color = (
                 "#f8fafc"
                 if button.parentWidget()
-                and button.parentWidget().objectName() == "ZoomBar"
+                and button.parentWidget().objectName() == "ZoomControls"
                 else "#172033"
             )
             button.setIcon(_editor_icon(self._button_icon_name(button.text()), color))
@@ -4253,7 +4312,6 @@ class AdvancedEditorWindow(QMainWindow):
         self.settings_tabs.addTab(self._build_editor_settings_tab(), "편집기 설정")
         settings_layout.addWidget(self.settings_tabs)
         self.inspector_sections.addTab(settings_page, "도구 설정")
-        self.inspector_sections.setCornerWidget(self._build_ai_sfx_actions(), Qt.Corner.TopRightCorner)
         self.inspector_sections.currentChanged.connect(self._sync_inspector_page_size)
         layout.addWidget(self.inspector_sections, 1)
         self._sync_inspector_page_size(0)
@@ -4284,13 +4342,14 @@ class AdvancedEditorWindow(QMainWindow):
         self._apply_help_visibility()
         return shell
 
-    def _build_ai_sfx_actions(self) -> QWidget:
-        actions = QWidget(self.inspector_sections)
+    def _build_ai_sfx_actions(self, parent: QWidget) -> QWidget:
+        actions = QWidget(parent)
         actions.setObjectName("AiSfxActions")
+        actions.setFixedHeight(30)
         layout = QHBoxLayout(actions)
-        layout.setContentsMargins(0, 3, 3, 3)
-        layout.setSpacing(4)
-        self.ai_sfx_button = QPushButton(_editor_icon("inpaint_brush", "#334155"), "AI 식자")
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(5)
+        self.ai_sfx_button = QPushButton(_editor_icon("inpaint_brush", "#e4ebf1"), "AI 식자")
         self.ai_sfx_button.setAccessibleName("선택 영역 AI 효과음 식자 생성")
         self.ai_sfx_button.setToolTip(
             "편집할 텍스트를 식자합니다. 맨 앞에 [AI: 연출 지시]를 넣을 수 있고, "
@@ -4320,14 +4379,14 @@ class AdvancedEditorWindow(QMainWindow):
         reroll_menu.addAction("요청해서 재번역…", self.request_translation_reroll)
         self.translation_reroll_button.setMenu(reroll_menu)
         self.translation_reroll_button.clicked.connect(self.open_translation_reroll)
-        self.translation_reroll_button.setFixedSize(80, 26)
+        self.translation_reroll_button.setFixedSize(80, 30)
         self.translation_reroll_button.setStyleSheet("""
             QToolButton { border: 0; padding: 0; font-weight: 500; }
             QToolButton::menu-button { width: 16px; border: 0; }
         """)
         self.ai_sfx_button.setProperty("preserveIcon", True)
         self.ai_sfx_button.setIconSize(QSize(13, 13))
-        self.ai_sfx_button.setFixedSize(74, 26)
+        self.ai_sfx_button.setFixedSize(74, 30)
         layout.addWidget(self.ai_sfx_button)
         layout.addWidget(self.translation_reroll_button)
         return actions

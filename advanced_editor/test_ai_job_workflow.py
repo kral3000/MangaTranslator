@@ -109,6 +109,29 @@ class AiJobWorkflowTest(unittest.TestCase):
         self.addCleanup(maximized.close)
         self.assertTrue(maximized._start_maximized)
 
+    def test_ai_toolbar_controls_fit_with_image_list_open(self):
+        window = self.window
+        window.session_panel.show()
+        sfx, reroll = window.ai_sfx_button, window.translation_reroll_button
+        summary = window.ai_job_feedback.summary_button
+        toolbar = window.ai_job_feedback.parentWidget().parentWidget()
+        self.assertIsNone(window.inspector_sections.cornerWidget())
+
+        for width, separate_row in ((1450, False), (1120, True)):
+            with self.subTest(width=width):
+                window.resize(width, 900)
+                self.app.processEvents()
+                positions = [button.mapTo(toolbar, QPoint()) for button in (sfx, reroll, summary)]
+                for button, position in zip((sfx, reroll, summary), positions):
+                    self.assertTrue(button.isVisible())
+                    self.assertEqual(button.height(), 30)
+                    self.assertTrue(button.parentWidget().rect().contains(button.geometry()))
+                    self.assertTrue(toolbar.rect().contains(button.rect().translated(position)))
+                self.assertLessEqual(positions[0].x() + sfx.width(), positions[1].x())
+                self.assertLessEqual(positions[1].x() + reroll.width(), positions[2].x())
+                zoom_y = window.pan_tool_button.mapTo(toolbar, QPoint()).y()
+                self.assertEqual(positions[0].y() > zoom_y, separate_row)
+
     def remove_test_fonts(self):
         for font_id in self.loaded_fonts:
             QFontDatabase.removeApplicationFont(font_id)
